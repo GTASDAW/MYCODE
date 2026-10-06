@@ -1,0 +1,38 @@
+server:
+  port: ${PORT:8080}
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
+spring:
+  application:
+    name: gather-api
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/activity_platform?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true&characterEncoding=UTF-8}
+    username: ${DB_USERNAME:activity}
+    password: ${DB_PASSWORD:activity_dev_password}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 10000
+  flyway:
+    enabled: true
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true
+    arg-name-based-constructor-auto-mapping: true
+management:
+  endpoints:
+    web:
+      base-path: /api
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+app:
+  demo-seed-enabled: ${DEMO_SEED_ENABLED:true}
+  demo-admin-password: ${DEMO_ADMIN_PASSWORD:Admin123!}
+  demo-user-password: ${DEMO_USER_PASSWORD:Demo123!}

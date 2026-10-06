@@ -1,0 +1,12 @@
+.tools/
+.runtime/
+.env
+frontend/node_modules/
+frontend/dist/
+backend/target/
+node_modules/
+playwright-report/
+test-results/
+*.log
+.idea/
+.vscode/
