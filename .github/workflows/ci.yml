@@ -1,0 +1,178 @@
+name: Build, test and verify Compose
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gather-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install, test and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci
+          npm ci --prefix frontend 2>&1 | tee .runtime/ci/frontend-install.log
+          npm test --prefix frontend 2>&1 | tee .runtime/ci/frontend-tests.log
+          npm run build --prefix frontend 2>&1 | tee .runtime/ci/frontend-build.log
+      - name: Preserve frontend diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-diagnostics
+          path: .runtime/ci/frontend-*.log
+          retention-days: 7
+
+  backend:
+    name: Backend tests on MySQL 8.4
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.4.11@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_DATABASE: activity_platform_test
+          MYSQL_USER: activity
+          MYSQL_PASSWORD: activity_ci_password
+          MYSQL_ROOT_PASSWORD: ci_mysql_root_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="MYSQL_PWD=activity_ci_password mysql -h 127.0.0.1 -u activity activity_platform_test -e 'SELECT 1'"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      TEST_DB_URL: jdbc:mysql://127.0.0.1:3306/activity_platform_test?characterEncoding=UTF-8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
+      TEST_DB_USERNAME: activity
+      TEST_DB_PASSWORD: activity_ci_password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Build and run real database regressions
+        working-directory: backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../.runtime/ci
+          sh ./mvnw -B verify 2>&1 | tee ../.runtime/ci/backend-verify.log
+      - name: Preserve backend diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-diagnostics
+          path: |
+            .runtime/ci/backend-verify.log
+            backend/target/surefire-reports/
+          retention-days: 7
+
+  compose-e2e:
+    name: Compose, restart and browser verification
+    needs: [frontend, backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: gather-ci
+      MYSQL_DATABASE: activity_platform_e2e
+      MYSQL_USER: activity
+      MYSQL_PASSWORD: activity_ci_password
+      MYSQL_ROOT_PASSWORD: ci_mysql_root_password
+      APP_PORT: '18088'
+      SESSION_COOKIE_SECURE: 'false'
+      DEMO_ADMIN_PASSWORD: Admin123!
+      DEMO_USER_PASSWORD: Demo123!
+      E2E_BASE_URL: http://127.0.0.1:18088
+      E2E_DB_HOST: 127.0.0.1
+      E2E_DB_PORT: '33306'
+      E2E_DB_NAME: activity_platform_e2e
+      E2E_DB_USERNAME: activity
+      E2E_DB_PASSWORD: activity_ci_password
+      SMOKE_RESTART_BACKEND: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install browser checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci
+          npm ci 2>&1 | tee .runtime/ci/e2e-install.log
+          npm run test:cleanup 2>&1 | tee .runtime/ci/cleanup-safety-tests.log
+          npx playwright install --with-deps chromium 2>&1 | tee .runtime/ci/browser-install.log
+      - name: Build and start isolated stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f .github/compose.ci.yaml config --quiet
+          docker compose -f compose.yaml -f .github/compose.ci.yaml up --build -d --wait --wait-timeout 180 2>&1 | tee .runtime/ci/compose-start.log
+      - name: Verify migrations, deep links and backend restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/compose-smoke.mjs 2>&1 | tee .runtime/ci/compose-smoke.log
+      - name: Run real desktop and mobile flows
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:e2e 2>&1 | tee .runtime/ci/browser-tests.log
+      - name: Retry exact run cleanup if the browser step was interrupted
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for manifest in .runtime/e2e/*.json; do
+            node scripts/e2e-cleanup.mjs "$manifest" 2>&1 | tee -a .runtime/ci/e2e-cleanup.log
+          done
+      - name: Collect container diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .runtime/ci
+          docker compose -f compose.yaml -f .github/compose.ci.yaml ps --all > .runtime/ci/compose-status.log 2>&1
+          docker compose -f compose.yaml -f .github/compose.ci.yaml logs --no-color > .runtime/ci/compose-services.log 2>&1
+      - name: Preserve verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compose-browser-diagnostics
+          path: |
+            .runtime/ci/
+            .runtime/e2e/
+            playwright-report/
+            test-results/
+          include-hidden-files: true
+          retention-days: 7
+      - name: Remove only this isolated CI stack
+        if: always()
+        run: docker compose -f compose.yaml -f .github/compose.ci.yaml down --volumes --remove-orphans

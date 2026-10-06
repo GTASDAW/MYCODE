@@ -90,8 +90,13 @@ docker compose down
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\test-backend.ps1
-npm install
+npm ci
 npx playwright install chromium
+$env:E2E_DB_HOST = '127.0.0.1'
+$env:E2E_DB_PORT = '3307'
+$env:E2E_DB_NAME = 'activity_platform'
+$env:E2E_DB_USERNAME = 'activity'
+$env:E2E_DB_PASSWORD = 'activity_dev_password'
 npm run test:e2e
 ```
 
@@ -104,7 +109,9 @@ $env:PLAYWRIGHT_CHANNEL = 'chrome'
 npm run test:e2e
 ```
 
-浏览器测试会在本地演示数据库创建以“浏览器验证”开头的临时活动，认证失效、迟到响应和候补递补回归也使用这些临时活动，不修改已有样例活动的报名状态；完成后按明确的测试活动 ID 清理。前端 CSRF 回归测试在 `frontend` 目录运行 `npm test`。实际执行结果见 [验证记录](docs/verification.md)。
+浏览器测试只在回环地址的开发/测试库创建临时活动，认证失效、迟到响应和候补递补回归也使用这些活动，不修改已有样例活动的报名。五个 `E2E_DB_*` 参数必须显式提供，上述值是本机默认样例；如果更换数据库配置，需同步填写。测试结束时，无论断言成功或失败，都核对本次 manifest 的数据库身份和准确活动身份后，在事务内精确清理；清理失败会使检查失败。
+
+manifest 保存在忽略目录 `.runtime/e2e`，不包含凭据。需要重试时，使用同一组数据库环境变量执行 `npm run cleanup:e2e -- .runtime/e2e/<run-uuid>.json`。前端 CSRF 回归测试在 `frontend` 目录运行 `npm test`；清理边界回归在根目录运行 `npm run test:cleanup`。实际执行结果见 [验证记录](docs/verification.md)。
 
 前端生产构建：
 
@@ -113,6 +120,12 @@ Set-Location frontend
 npm ci
 npm run build
 ```
+
+## 自动检查与交付
+
+GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试，以及隔离 Compose 环境的迁移、重启和桌面/手机浏览器检查。构建和检查不会发布网站。
+
+查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器测试使用独立 `activity_platform_e2e` 数据库，不使用本机演示库；具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
 ## 从代码中学习
 
@@ -124,6 +137,8 @@ npm run build
 - [四阶段学习指南](docs/learning-guide.md)
 - [架构与接口说明](docs/architecture.md)
 - [并发报名复盘](docs/concurrency-review.md)
+- [五分钟演示与面试讲解](docs/demo-guide.md)
+- [自动检查与可复现交付](docs/delivery-guide.md)
 - [验证记录与当前部署边界](docs/verification.md)
 
 Redis 留待出现缓存、共享 Session 或接口限流需求后再引入。当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。

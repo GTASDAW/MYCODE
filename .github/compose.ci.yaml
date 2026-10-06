@@ -1,0 +1,5 @@
+# Only for an isolated CI project. The application still uses the real Compose stack.
+services:
+  mysql:
+    ports:
+      - "127.0.0.1:33306:3306"
