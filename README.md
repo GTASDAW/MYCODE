@@ -1,5 +1,7 @@
 # 集会 Gather · 活动报名平台
 
+[![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
+
 一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布活动和查看报名名单，用户报名、进入候补、取消和查看记录。前端的数据来自 Java 接口和 MySQL，报名名额与候补递补由数据库事务保证。
 
 ## 技术栈

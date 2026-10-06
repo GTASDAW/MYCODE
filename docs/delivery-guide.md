@@ -77,6 +77,8 @@ npm run cleanup:e2e -- .runtime/e2e/<run-uuid>.json
 
 服务器 UUID、连接目标或活动准确身份不一致时拒绝清理；全部身份验证通过后才执行删除，异常会回滚整个清理事务。删除前先把核对过的 ID 写入 manifest，数据库已经提交但进程尚未写入完成结果时，仍可安全恢复。已完成 manifest 保留清理数量供审阅，同一 manifest 重试幂等。
 
+Windows 文件观察程序短暂占用 manifest 时，原子替换仅对 `EPERM`、`EACCES` 作有界重试，总等待最多 800 ms；永久拒绝仍报告失败，保留临时文件，不先删除目标文件。Linux 和其他错误不会借此静默重试。
+
 ## 首次迁移、重启与失败排查
 
 容器冒烟会等待 `/api/health` 成功，再验证 Flyway V1、V2 已执行，静态首页和 `/activities/{id}` 刷新直达可用，真实认证 API 能完成报名与候补。
