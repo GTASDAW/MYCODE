@@ -1,6 +1,5 @@
 package com.example.gather;
 
-import com.example.gather.api.ApiException;
 import com.example.gather.api.ApiModels.CreateActivityRequest;
 import com.example.gather.config.DemoDataInitializer;
 import com.example.gather.mapper.UserMapper;
@@ -164,17 +163,66 @@ class RegistrationIntegrationTest {
     }
 
     @Test
-    void fullActivityReturns409AndCancellationFreesSeat() {
+    void fullActivityQueuesWaitingAndCancellationPromotesOne() {
         long id = createActivity(1);
         long first = users.findByUsername("demo").id();
         long second = createUser();
         registrations.register(id, first);
-        assertThatThrownBy(() -> registrations.register(id, second)).isInstanceOfSatisfying(ApiException.class,
-            error -> assertThat(error.code()).isEqualTo("ACTIVITY_FULL"));
-        assertThat(countRows(id)).isEqualTo(1);
+        assertThat(registrations.register(id, second).registrationStatus()).isEqualTo("WAITING");
+        assertThat(registrations.register(id, second).registrationStatus()).isEqualTo("WAITING");
+        assertThat(activities.get(id, null).registeredCount()).isEqualTo(1);
+        assertThat(activities.get(id, null).waitingCount()).isEqualTo(1);
+        assertThat(countRows(id)).isEqualTo(2);
         registrations.cancel(id, first);
-        registrations.register(id, second);
+        assertThat(activities.get(id, second).registrationStatus()).isEqualTo("ACTIVE");
         assertThat(activities.get(id, second).registeredCount()).isEqualTo(1);
+        assertThat(activities.get(id, null).waitingCount()).isZero();
+    }
+
+    @Test
+    void waitingQueuePromotesOldestUpdatedAtThenId() {
+        long id = createActivity(1);
+        long first = users.findByUsername("demo").id();
+        long second = createUser();
+        long third = createUser();
+        registrations.register(id, first);
+        registrations.register(id, second);
+        registrations.register(id, third);
+        LocalDateTime base = LocalDateTime.now(ZoneOffset.UTC).minusMinutes(5);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", base.plusSeconds(20), id, second);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", base.plusSeconds(30), id, third);
+        registrations.cancel(id, first);
+        assertThat(activities.get(id, second).registrationStatus()).isEqualTo("ACTIVE");
+        assertThat(activities.get(id, third).registrationStatus()).isEqualTo("WAITING");
+        assertThat(activities.get(id, null).registeredCount()).isEqualTo(1);
+        assertThat(activities.get(id, null).waitingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void cancellingWaitingDoesNotPromoteOrChangeCounter() {
+        long id = createActivity(1);
+        long first = users.findByUsername("demo").id();
+        long second = createUser();
+        registrations.register(id, first);
+        registrations.register(id, second);
+        assertThat(registrations.cancel(id, second).registrationStatus()).isEqualTo("CANCELLED");
+        assertThat(activities.get(id, null).registeredCount()).isEqualTo(1);
+        assertThat(activities.get(id, null).waitingCount()).isZero();
+        assertThat(activities.get(id, first).registrationStatus()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void cancelledUserRejoinsQueueWhenActivityIsFull() {
+        long id = createActivity(1);
+        long first = users.findByUsername("demo").id();
+        long second = createUser();
+        registrations.register(id, first);
+        registrations.register(id, second);
+        registrations.cancel(id, second);
+        assertThat(registrations.register(id, second).registrationStatus()).isEqualTo("WAITING");
+        assertThat(activities.get(id, null).registeredCount()).isEqualTo(1);
+        assertThat(activities.get(id, null).waitingCount()).isEqualTo(1);
+        assertThat(countRows(id)).isEqualTo(2);
     }
 
     @Test
@@ -206,29 +254,29 @@ class RegistrationIntegrationTest {
         List<Long> participants = new ArrayList<>();
         for (int i = 0; i < 100; i++) participants.add(createUser());
         CountDownLatch start = new CountDownLatch(1);
-        List<Future<Boolean>> attempts = new ArrayList<>();
+        List<Future<String>> attempts = new ArrayList<>();
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             for (long userId : participants) {
                 attempts.add(executor.submit(() -> {
                     start.await();
-                    try {
-                        registrations.register(id, userId);
-                        return true;
-                    } catch (ApiException exception) {
-                        if (!exception.code().equals("ACTIVITY_FULL")) throw exception;
-                        return false;
-                    }
+                    return registrations.register(id, userId).registrationStatus();
                 }));
             }
             start.countDown();
-            int successes = 0;
-            for (Future<Boolean> attempt : attempts) if (attempt.get(60, TimeUnit.SECONDS)) successes++;
-            assertThat(successes).isEqualTo(10);
+            int active = 0;
+            int waiting = 0;
+            for (Future<String> attempt : attempts) {
+                if (attempt.get(60, TimeUnit.SECONDS).equals("ACTIVE")) active++;
+                else waiting++;
+            }
+            assertThat(active).isEqualTo(10);
+            assertThat(waiting).isEqualTo(90);
         }
         assertThat(activities.get(id, null).registeredCount()).isEqualTo(10);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM registrations WHERE activity_id=? AND status='ACTIVE'", Integer.class, id)).isEqualTo(10);
-        assertThat(countRows(id)).isEqualTo(10);
-        System.out.println("MYSQL CONCURRENCY VERIFIED: 100 distinct users / 10 capacity / 10 successes / 90 full / 10 active rows.");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM registrations WHERE activity_id=? AND status='WAITING'", Integer.class, id)).isEqualTo(90);
+        assertThat(countRows(id)).isEqualTo(100);
+        System.out.println("MYSQL CONCURRENCY VERIFIED: 100 distinct users / 10 capacity / 10 active / 90 waiting / exact counter.");
     }
 
     @Test

@@ -43,7 +43,21 @@ export function AdminDashboardPage() {
       suffix: "个",
       hint: "尚未开始活动的剩余名额",
     },
+    {
+      key: "waitingRegistrations" as const,
+      title: "候补报名数",
+      suffix: "人次",
+      hint: "全部活动当前候补记录",
+    },
   ];
+  const overviewData = overview.data;
+  const visibleIndicators = overviewData
+    ? indicators.filter(
+        (indicator) =>
+          indicator.key !== "waitingRegistrations" ||
+          "waitingRegistrations" in overviewData,
+      )
+    : indicators.filter((indicator) => indicator.key !== "waitingRegistrations");
   return (
     <div className="page-container">
       <PageHeading
@@ -62,7 +76,7 @@ export function AdminDashboardPage() {
         <ErrorState error={overview.error} retry={overview.retry} />
       ) : (
         <div className="overview-grid">
-          {indicators.map((indicator) => (
+          {visibleIndicators.map((indicator) => (
             <Card
               key={indicator.key}
               className="stat-card"

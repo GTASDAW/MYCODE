@@ -8,7 +8,8 @@ public final class AdminModels {
     private AdminModels() {}
 
     public record OverviewView(long totalActivities, long upcomingActivities, long startedActivities,
-                               long fullActivities, long activeRegistrations, long availableSeats) {}
+                               long fullActivities, long activeRegistrations, long waitingRegistrations,
+                               long availableSeats) {}
 
     public record ActivityPageView(List<ActivityView> items, long total, int page, int pageSize) {}
 

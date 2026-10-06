@@ -7,7 +7,8 @@ interface ActivityResponse {
   startsAt: string;
   capacity: number;
   registeredCount: number;
-  registrationStatus: 'ACTIVE' | 'CANCELLED' | null;
+  waitingCount: number;
+  registrationStatus: 'ACTIVE' | 'WAITING' | 'CANCELLED' | null;
   closed: boolean;
 }
 
@@ -209,6 +210,70 @@ test('错误密码会显示服务端错误，不会进入登录状态', async ({
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByText('用户名或密码不正确', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /账号菜单/ })).toHaveCount(0);
+});
+
+test('满员后进入候补，取消有效报名后按队列递补', async ({ page }) => {
+  await login(page, 'admin', 'Admin123!');
+  const activity = await createFixture(page.request, `浏览器验证 ${Date.now()} 候补递补`, 1);
+  try {
+    // The first session takes the only seat through the real detail page.
+    await logout(page);
+    await login(page, 'demo', 'Demo123!');
+    await page.goto(`/activities/${activity.id}`);
+    await page.getByRole('button', { name: '立即报名', exact: true }).click();
+    await expect(page.getByText('报名成功', { exact: true })).toBeVisible();
+
+    // The administrator is also a normal participant for this isolated fixture.
+    await logout(page);
+    await login(page, 'admin', 'Admin123!');
+    await page.goto(`/activities/${activity.id}`);
+    await page.getByRole('button', { name: '加入候补', exact: true }).click();
+    await expect(page.locator('#main-content').getByText('已进入候补', { exact: true })).toBeVisible();
+    await expect(page.getByText('你已进入候补', { exact: true })).toBeVisible();
+    let waiting = await (await page.request.get(`/api/activities/${activity.id}`)).json() as ActivityResponse;
+    expect(waiting.registeredCount).toBe(1);
+    expect(waiting.waitingCount).toBe(1);
+    expect(waiting.registrationStatus).toBe('WAITING');
+
+    // Repeating the same write remains idempotent and does not add another queue row.
+    const repeated = await writeApi(page.request, `/api/activities/${activity.id}/registration`, 'POST');
+    const repeatedView = await repeated.json() as ActivityResponse;
+    expect(repeatedView.registrationStatus).toBe('WAITING');
+    expect(repeatedView.waitingCount).toBe(1);
+    await page.getByRole('button', { name: '取消候补', exact: true }).click();
+    await page.getByRole('button', { name: '确认取消', exact: true }).click();
+    await expect(page.getByRole('button', { name: '加入候补', exact: true })).toBeVisible();
+    waiting = await (await page.request.get(`/api/activities/${activity.id}`)).json() as ActivityResponse;
+    expect(waiting.waitingCount).toBe(0);
+    expect(waiting.registeredCount).toBe(1);
+
+    // Rejoin the queue, then cancel the active participant and verify FIFO promotion.
+    await page.getByRole('button', { name: '加入候补', exact: true }).click();
+    await expect(page.locator('#main-content').getByText('已进入候补', { exact: true })).toBeVisible();
+    await logout(page);
+    await login(page, 'demo', 'Demo123!');
+    await page.goto(`/activities/${activity.id}`);
+    await page.getByRole('button', { name: '取消报名', exact: true }).click();
+    await page.getByRole('button', { name: '确认取消', exact: true }).click();
+    await expect(page.getByRole('button', { name: /加入候补|重新报名/ })).toBeVisible();
+    const released = await page.request.get(`/api/activities/${activity.id}`);
+    expect((await released.json() as ActivityResponse).registrationStatus).toBe('CANCELLED');
+    await logout(page);
+    await login(page, 'admin', 'Admin123!');
+    await page.reload();
+    await expect(page.getByText('已成功报名', { exact: true })).toBeVisible();
+    waiting = await (await page.request.get(`/api/activities/${activity.id}`)).json() as ActivityResponse;
+    expect(waiting.registeredCount).toBe(1);
+    expect(waiting.waitingCount).toBe(0);
+    expect(waiting.registrationStatus).toBe('ACTIVE');
+
+    await page.goto(`/admin/activities/${activity.id}/registrations`);
+    await selectOption(page, '报名状态', '已报名');
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: 'admin' })).toContainText('已报名');
+  } finally {
+    // Leave this fixture's registrations inactive; the activity itself is tagged for test cleanup.
+    try { await writeApi(page.request, `/api/activities/${activity.id}/registration`, 'DELETE'); } catch { /* best effort */ }
+  }
 });
 
 test('服务端 Session 失效后能回到登录并继续报名', async ({ page, request }, testInfo) => {

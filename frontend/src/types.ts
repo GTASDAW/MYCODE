@@ -13,13 +13,14 @@ export interface Activity {
   startsAt: string;
   capacity: number;
   registeredCount: number;
-  registrationStatus: "ACTIVE" | "CANCELLED" | null;
+  waitingCount: number;
+  registrationStatus: "ACTIVE" | "WAITING" | "CANCELLED" | null;
   closed: boolean;
 }
 
 export interface Registration {
   id: number;
-  status: "ACTIVE" | "CANCELLED";
+  status: "ACTIVE" | "WAITING" | "CANCELLED";
   activity: Activity;
 }
 
@@ -37,6 +38,7 @@ export interface AdminOverview {
   startedActivities: number;
   fullActivities: number;
   activeRegistrations: number;
+  waitingRegistrations: number;
   availableSeats: number;
 }
 
@@ -48,7 +50,7 @@ export interface PageResult<T> {
 }
 
 export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING";
-export type RegistrationFilter = "ALL" | "ACTIVE" | "CANCELLED";
+export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";
 
 export interface AdminActivityQuery {
   page: number;
@@ -68,7 +70,7 @@ export interface AdminRegistration {
   userId: number;
   username: string;
   displayName: string;
-  status: "ACTIVE" | "CANCELLED";
+  status: "ACTIVE" | "WAITING" | "CANCELLED";
   createdAt: string;
   updatedAt: string;
 }

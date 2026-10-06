@@ -28,8 +28,20 @@ const columns: TableColumnsType<AdminRegistration> = [
     key: "status",
     width: 110,
     render: (value: string) => (
-      <Tag color={value === "ACTIVE" ? "green" : "default"}>
-        {value === "ACTIVE" ? "已报名" : "已取消"}
+      <Tag
+        color={
+          value === "ACTIVE"
+            ? "green"
+            : value === "WAITING"
+              ? "orange"
+              : "default"
+        }
+      >
+        {value === "ACTIVE"
+          ? "已报名"
+          : value === "WAITING"
+            ? "候补中"
+            : "已取消"}
       </Tag>
     ),
   },
@@ -122,6 +134,11 @@ function AdminRegistrationsPage() {
                 children: `${activity.registeredCount} / ${activity.capacity} 人`,
               },
               {
+                key: "waiting",
+                label: "候补人数",
+                children: `${activity.waitingCount ?? 0} 人`,
+              },
+              {
                 key: "status",
                 label: "活动状态",
                 children: (
@@ -148,6 +165,7 @@ function AdminRegistrationsPage() {
               options={[
                 { value: "ALL", label: "全部记录" },
                 { value: "ACTIVE", label: "已报名" },
+                { value: "WAITING", label: "候补中" },
                 { value: "CANCELLED", label: "已取消" },
               ]}
             />

@@ -17,6 +17,7 @@ public interface AdminMapper {
                COALESCE(SUM(CASE WHEN starts_at <= #{now} THEN 1 ELSE 0 END), 0) AS started_activities,
                COALESCE(SUM(CASE WHEN starts_at > #{now} AND registered_count = capacity THEN 1 ELSE 0 END), 0) AS full_activities,
                (SELECT COUNT(*) FROM registrations WHERE status = 'ACTIVE') AS active_registrations,
+               (SELECT COUNT(*) FROM registrations WHERE status = 'WAITING') AS waiting_registrations,
                COALESCE(SUM(CASE WHEN starts_at > #{now} THEN capacity - registered_count ELSE 0 END), 0) AS available_seats
         FROM activities
         """)

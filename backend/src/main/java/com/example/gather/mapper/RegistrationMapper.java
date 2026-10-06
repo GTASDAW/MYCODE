@@ -14,8 +14,16 @@ public interface RegistrationMapper {
     @Insert("INSERT INTO registrations(activity_id, user_id, status) VALUES(#{activityId}, #{userId}, 'ACTIVE')")
     int insert(@Param("activityId") long activityId, @Param("userId") long userId);
 
+    @Insert("INSERT INTO registrations(activity_id, user_id, status) VALUES(#{activityId}, #{userId}, 'WAITING')")
+    int insertWaiting(@Param("activityId") long activityId, @Param("userId") long userId);
+
     @Update("UPDATE registrations SET status=#{status}, updated_at=UTC_TIMESTAMP(6) WHERE id=#{id}")
     int changeStatus(@Param("id") long id, @Param("status") String status);
+
+    @Select("SELECT id, activity_id, user_id, status FROM registrations "
+        + "WHERE activity_id=#{activityId} AND status='WAITING' "
+        + "ORDER BY updated_at ASC, id ASC LIMIT 1")
+    RegistrationRow findEarliestWaiting(@Param("activityId") long activityId);
 
     @Select("SELECT id, activity_id, user_id, status FROM registrations WHERE user_id=#{userId} ORDER BY updated_at DESC, id DESC")
     List<RegistrationRow> findByUser(long userId);

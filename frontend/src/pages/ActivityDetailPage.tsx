@@ -55,6 +55,7 @@ function ActivityDetailPage() {
 
   async function mutate(cancel: boolean) {
     if (!activity) return;
+    const wasWaiting = activity.registrationStatus === "WAITING";
     setBusy(true);
     setActionError(null);
     try {
@@ -63,7 +64,15 @@ function ActivityDetailPage() {
         : api.register(activity.id));
       if (!mounted.current) return;
       resource.setData(updated);
-      message.success(cancel ? "已取消报名" : "报名成功");
+      message.success(
+        cancel
+          ? wasWaiting
+            ? "已取消候补"
+            : "已取消报名"
+          : updated.registrationStatus === "WAITING"
+            ? "已进入候补"
+            : "报名成功",
+      );
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ApiError && error.status === 401) {
@@ -106,6 +115,7 @@ function ActivityDetailPage() {
     );
   if (!activity) return null;
   const registered = activity.registrationStatus === "ACTIVE";
+  const waiting = activity.registrationStatus === "WAITING";
   const cancelled = activity.registrationStatus === "CANCELLED";
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
   const closed = activity.closed || Date.parse(activity.startsAt) <= Date.now();
@@ -166,6 +176,8 @@ function ActivityDetailPage() {
           <h2>
             {registered
               ? "你的名额已确认"
+              : waiting
+                ? "你已进入候补"
               : closed
                 ? "活动已经开始"
                 : remaining === 0
@@ -176,6 +188,9 @@ function ActivityDetailPage() {
             <strong>{activity.registeredCount}</strong>
             <span>/ {activity.capacity} 人已报名</span>
           </div>
+          {(activity.waitingCount ?? 0) > 0 && (
+            <p className="remaining-text">当前候补 {activity.waitingCount} 人</p>
+          )}
           <Progress
             percent={Math.min(
               100,
@@ -191,7 +206,7 @@ function ActivityDetailPage() {
                 还有 <strong>{remaining}</strong> 个名额
               </>
             ) : (
-              "暂无可报名名额"
+              "暂无可报名名额，可加入候补"
             )}
           </p>
           {actionError && (
@@ -202,10 +217,10 @@ function ActivityDetailPage() {
               title={actionError}
             />
           )}
-          {registered && (
+          {(registered || waiting) && (
             <div className="registered-notice">
               <CheckCircleFilled aria-hidden="true" />
-              <span>已成功报名</span>
+              <span>{registered ? "已成功报名" : "已进入候补"}</span>
               {closed && <Tag>活动已开始</Tag>}
             </div>
           )}
@@ -225,32 +240,36 @@ function ActivityDetailPage() {
           ) : !auth.user ? (
             <Link to="/login" state={{ from: `/activities/${id}` }}>
               <Button block type="primary">
-                登录后报名 <ArrowRightOutlined aria-hidden="true" />
+                {remaining === 0 ? "登录后加入候补" : "登录后报名"}{" "}
+                <ArrowRightOutlined aria-hidden="true" />
               </Button>
             </Link>
-          ) : registered ? (
+          ) : registered || waiting ? (
             <Popconfirm
-              title="确认取消这场活动的报名？"
-              description="取消后名额将释放，重新报名需要还有空位。"
+              title={waiting ? "确认取消候补？" : "确认取消这场活动的报名？"}
+              description={
+                waiting
+                  ? "取消后将退出候补队列。"
+                  : "取消后名额将释放，重新报名需要还有空位。"
+              }
               okText="确认取消"
               cancelText="保留名额"
               onConfirm={() => mutate(true)}
               disabled={busy}
             >
               <Button block loading={busy}>
-                取消报名
+                {waiting ? "取消候补" : "取消报名"}
               </Button>
             </Popconfirm>
           ) : (
             <Button
               type="primary"
               block
-              disabled={remaining === 0}
               loading={busy}
               onClick={() => void mutate(false)}
             >
               {remaining === 0
-                ? "名额已满"
+                ? "加入候补"
                 : cancelled
                   ? "重新报名"
                   : "立即报名"}

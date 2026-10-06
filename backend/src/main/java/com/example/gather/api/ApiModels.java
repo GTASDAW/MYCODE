@@ -17,11 +17,11 @@ public final class ApiModels {
     }
 
     public record ActivityView(long id, String title, String description, String location, Instant startsAt,
-                               int capacity, int registeredCount, String registrationStatus, boolean closed) {
+                               int capacity, int registeredCount, int waitingCount, String registrationStatus, boolean closed) {
         public static ActivityView from(ActivityRow row, Instant now) {
             Instant start = row.startsAt().toInstant(ZoneOffset.UTC);
             return new ActivityView(row.id(), row.title(), row.description(), row.location(), start,
-                row.capacity(), row.registeredCount(), row.registrationStatus(), !start.isAfter(now));
+                row.capacity(), row.registeredCount(), row.waitingCount(), row.registrationStatus(), !start.isAfter(now));
         }
     }
 

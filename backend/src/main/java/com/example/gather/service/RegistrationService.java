@@ -32,14 +32,20 @@ public class RegistrationService {
     public ActivityView register(long activityId, long userId) {
         ActivityRow activity = lockOpenActivity(activityId);
         RegistrationRow existing = registrations.findByActivityAndUser(activityId, userId);
-        // Check existing state before capacity: retrying an existing success remains successful even when full.
-        if (existing != null && existing.status().equals("ACTIVE")) return activityService.get(activityId, userId);
-        if (activity.registeredCount() >= activity.capacity()) {
-            throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_FULL", "活动名额已满");
+        // Existing ACTIVE/WAITING requests are idempotent, even when the activity has since filled up.
+        if (existing != null && (existing.status().equals("ACTIVE") || existing.status().equals("WAITING"))) {
+            return activityService.get(activityId, userId);
         }
-        activities.changeRegisteredCount(activityId, 1);
-        if (existing == null) registrations.insert(activityId, userId);
-        else registrations.changeStatus(existing.id(), "ACTIVE");
+        if (activity.registeredCount() < activity.capacity()) {
+            activities.changeRegisteredCount(activityId, 1);
+            if (existing == null) registrations.insert(activityId, userId);
+            else registrations.changeStatus(existing.id(), "ACTIVE");
+        } else if (existing == null) {
+            registrations.insertWaiting(activityId, userId);
+        } else {
+            // Rejoining after cancellation while full appends the user to the queue by refreshing updated_at.
+            registrations.changeStatus(existing.id(), "WAITING");
+        }
         return activityService.get(activityId, userId);
     }
 
@@ -50,6 +56,13 @@ public class RegistrationService {
         if (existing != null && existing.status().equals("ACTIVE")) {
             registrations.changeStatus(existing.id(), "CANCELLED");
             activities.changeRegisteredCount(activityId, -1);
+            RegistrationRow waiting = registrations.findEarliestWaiting(activityId);
+            if (waiting != null) {
+                registrations.changeStatus(waiting.id(), "ACTIVE");
+                activities.changeRegisteredCount(activityId, 1);
+            }
+        } else if (existing != null && existing.status().equals("WAITING")) {
+            registrations.changeStatus(existing.id(), "CANCELLED");
         }
         return activityService.get(activityId, userId);
     }

@@ -7,7 +7,9 @@ import java.util.List;
 
 @Mapper
 public interface ActivityMapper {
-    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, r.status AS registration_status";
+    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, "
+        + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
+        + "r.status AS registration_status";
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} ORDER BY a.starts_at, a.id")
     List<ActivityRow> findAll(@Param("userId") Long userId);
@@ -17,7 +19,9 @@ public interface ActivityMapper {
 
     // Every registration mutation locks this row before reading registration state.
     // InnoDB serializes contenders for the same activity, keeping check + increment atomic.
-    @Select("SELECT id, title, description, location, starts_at, capacity, registered_count, NULL AS registration_status FROM activities WHERE id=#{id} FOR UPDATE")
+    @Select("SELECT id, title, description, location, starts_at, capacity, registered_count, "
+        + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=activities.id AND rw.status='WAITING') AS waiting_count, "
+        + "NULL AS registration_status FROM activities WHERE id=#{id} FOR UPDATE")
     ActivityRow lockById(long id);
 
     @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy})")

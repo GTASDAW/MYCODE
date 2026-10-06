@@ -18,6 +18,7 @@ export function MyRegistrationsPage() {
   const resource = useAuthenticatedResource(api.registrations, [user?.id]);
   const records = resource.data ?? [];
   const active = records.filter((row) => row.status === "ACTIVE").length;
+  const waiting = records.filter((row) => row.status === "WAITING").length;
   return (
     <div className="page-container">
       <PageHeading
@@ -40,7 +41,7 @@ export function MyRegistrationsPage() {
         />
       ) : (
         <Card
-          title={`已报名 ${active} 场活动`}
+          title={`已报名 ${active} 场活动${waiting ? ` · 候补 ${waiting} 场` : ""}`}
           extra={<span className="metadata">共 {records.length} 条记录</span>}
         >
           <div className="registration-list">
@@ -64,8 +65,20 @@ export function MyRegistrationsPage() {
                   </p>
                 </div>
                 <div className="registration-row-actions">
-                  <Tag color={status === "ACTIVE" ? "green" : "default"}>
-                    {status === "ACTIVE" ? "已报名" : "已取消"}
+                  <Tag
+                    color={
+                      status === "ACTIVE"
+                        ? "green"
+                        : status === "WAITING"
+                          ? "orange"
+                          : "default"
+                    }
+                  >
+                    {status === "ACTIVE"
+                      ? "已报名"
+                      : status === "WAITING"
+                        ? "候补中"
+                        : "已取消"}
                   </Tag>
                   {activity.closed && (
                     <span className="metadata">活动已开始</span>

@@ -143,6 +143,12 @@ export function ActivityStatus({
         已报名
       </Tag>
     );
+  if (personal && activity.registrationStatus === "WAITING")
+    return (
+      <Tag className="status-tag" color="orange">
+        候补中
+      </Tag>
+    );
   if (activity.registeredCount >= activity.capacity)
     return (
       <Tag className="status-tag" color="orange">
@@ -204,6 +210,9 @@ export function ActivityCard({ activity }: { activity: Activity }) {
           {activity.registeredCount} / {activity.capacity} 人
           {!activity.closed && remaining > 0 && (
             <small>余 {remaining} 席</small>
+          )}
+          {(activity.waitingCount ?? 0) > 0 && (
+            <small>候补 {activity.waitingCount} 人</small>
           )}
         </span>
         <Link
