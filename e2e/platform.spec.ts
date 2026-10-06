@@ -260,7 +260,7 @@ test('满员后进入候补，取消有效报名后按队列递补', async ({ pa
     expect((await released.json() as ActivityResponse).registrationStatus).toBe('CANCELLED');
     await logout(page);
     await login(page, 'admin', 'Admin123!');
-    await page.reload();
+    await page.goto(`/activities/${activity.id}`);
     await expect(page.getByText('已成功报名', { exact: true })).toBeVisible();
     waiting = await (await page.request.get(`/api/activities/${activity.id}`)).json() as ActivityResponse;
     expect(waiting.registeredCount).toBe(1);
