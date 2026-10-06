@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { databaseConfig, deleteOwnedFixtures, verifyDatabase } from './e2e-cleanup.mjs';
+import { databaseConfig, deleteOwnedFixtures, verifyDatabase, renameManifestWithRetry } from './e2e-cleanup.mjs';
 
 function fakeDatabase(activities, registrations = [], failDeleteId) {
   const state = { activities: structuredClone(activities), registrations: structuredClone(registrations), queries: [], rollbacks: 0, commits: 0 };
@@ -132,4 +132,52 @@ test('persisted verified IDs recover a committed cleanup when its final file wri
   assert.equal(result.deletedActivities, 0);
   assert.deepEqual(result.resolvedIds, [101]);
   assert.equal(connection.state.commits, 2);
+});
+
+test('Windows temporary permission failures retry atomic replacement and can succeed', () => {
+  const delays = [];
+  const replacements = [];
+  let attempts = 0;
+  renameManifestWithRetry('manifest.tmp', 'manifest.json', {
+    platform: 'win32', pause: delay => delays.push(delay),
+    rename: (source, destination) => {
+      attempts++;
+      if (attempts < 3) throw Object.assign(new Error('File temporarily locked'), { code: attempts === 1 ? 'EPERM' : 'EACCES' });
+      replacements.push({ source, destination });
+    },
+  });
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [20, 40]);
+  assert.deepEqual(replacements, [{ source: 'manifest.tmp', destination: 'manifest.json' }]);
+});
+
+test('permanent Windows rename denial remains bounded and prevents cleanup deletes', async () => {
+  const owned = fixture(101);
+  const connection = fakeDatabase([owned]);
+  const delays = [];
+  let attempts = 0;
+  await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {
+    renameManifestWithRetry('manifest.tmp', 'manifest.json', {
+      platform: 'win32', pause: delay => delays.push(delay),
+      rename: () => { attempts++; throw Object.assign(new Error('Permission permanently denied'), { code: 'EPERM' }); },
+    });
+  }), /Permission permanently denied/);
+  assert.equal(attempts, 7);
+  assert.ok(delays.reduce((sum, delay) => sum + delay, 0) <= 1000);
+  assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+  assert.deepEqual(connection.state.activities, [owned]);
+  assert.equal(connection.state.rollbacks, 1);
+});
+
+test('non-Windows or unrelated rename failures are never retried', () => {
+  for (const [platform, code] of [['linux', 'EPERM'], ['win32', 'ENOENT']]) {
+    let attempts = 0;
+    let pauses = 0;
+    assert.throws(() => renameManifestWithRetry('manifest.tmp', 'manifest.json', {
+      platform, pause: () => pauses++,
+      rename: () => { attempts++; throw Object.assign(new Error('Unretryable rename failure'), { code }); },
+    }), /Unretryable/);
+    assert.equal(attempts, 1);
+    assert.equal(pauses, 0);
+  }
 });

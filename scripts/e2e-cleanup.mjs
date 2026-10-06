@@ -7,6 +7,8 @@ import mysql from 'mysql2/promise';
 const runtimeDirectory = resolve('.runtime/e2e');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const allowedDatabases = new Set(['activity_platform', 'activity_platform_test', 'activity_platform_e2e']);
+const renameDelays = [20, 40, 80, 160, 250, 250];
+const pauseBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 export function databaseConfig(environment = process.env) {
   for (const key of ['E2E_DB_HOST', 'E2E_DB_PORT', 'E2E_DB_NAME', 'E2E_DB_USERNAME', 'E2E_DB_PASSWORD']) {
@@ -47,10 +49,26 @@ export async function verifyDatabase(connection, config, expected) {
   return { host: config.host, port: config.port, database: config.database, serverUuid: identity.serverUuid };
 }
 
+export function renameManifestWithRetry(source, destination, {
+  rename = renameSync, platform = process.platform,
+  pause = milliseconds => Atomics.wait(pauseBuffer, 0, 0, milliseconds),
+} = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { rename(source, destination); return; }
+    catch (error) {
+      // Windows file watchers/antivirus can briefly hold an existing manifest.
+      // Keep atomic replacement: never remove the destination to work around it.
+      if (platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code) || attempt >= renameDelays.length) throw error;
+      pause(renameDelays[attempt]);
+    }
+  }
+}
+
 function saveManifest(path, manifest) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  renameSync(temporary, path);
+  // A permanent refusal still throws and retains the temporary file for diagnosis.
+  renameManifestWithRetry(temporary, path);
 }
 
 function readManifest(path) {
