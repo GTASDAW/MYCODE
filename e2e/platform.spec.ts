@@ -1,4 +1,116 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
+
+interface ActivityResponse {
+  id: number;
+  title: string;
+  location: string;
+  startsAt: string;
+  capacity: number;
+  registeredCount: number;
+  registrationStatus: 'ACTIVE' | 'CANCELLED' | null;
+  closed: boolean;
+}
+
+interface RosterResponse {
+  activity: ActivityResponse;
+  items: { id: number; username: string; displayName: string; status: string; createdAt: string; updatedAt: string }[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+async function loginApi(request: APIRequestContext, username = 'admin', password = 'Admin123!') {
+  const tokenResponse = await request.get('/api/auth/csrf');
+  expect(tokenResponse.ok()).toBeTruthy();
+  const token = await tokenResponse.json();
+  const response = await request.post('/api/auth/login', {
+    headers: { [token.headerName]: token.token }, form: { username, password },
+  });
+  expect(response.status()).toBe(200);
+}
+
+async function writeApi(request: APIRequestContext, path: string, method: 'POST' | 'DELETE', data?: unknown) {
+  const tokenResponse = await request.get('/api/auth/csrf');
+  expect(tokenResponse.ok()).toBeTruthy();
+  const token = await tokenResponse.json();
+  const response = await request.fetch(path, { method, headers: { [token.headerName]: token.token }, data });
+  expect(response.ok()).toBeTruthy();
+  return response;
+}
+
+async function createFixture(request: APIRequestContext, title: string, capacity = 3, location = '浏览器测试临时场地') {
+  const response = await writeApi(request, '/api/admin/activities', 'POST', {
+    title, description: '仅用于本轮真实浏览器回归，验证后按活动 ID 清理。', location,
+    startsAt: new Date(Date.now() + 48 * 3600000).toISOString(), capacity,
+  });
+  expect(response.status()).toBe(201);
+  return await response.json() as ActivityResponse;
+}
+
+async function noDocumentOverflow(page: Page) {
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+}
+
+async function capture(page: Page, testInfo: TestInfo, name: string) {
+  const path = testInfo.outputPath(`${name}.png`);
+  // Input interaction may scroll the page; capture sticky headers from the top.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.screenshot({ path, fullPage: true });
+  await testInfo.attach(name, { path, contentType: 'image/png' });
+}
+
+async function selectOption(page: Page, label: string, option: string) {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option')
+    .filter({ has: page.getByText(option, { exact: true }) }).click();
+  await expect(page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden)')).toHaveCount(0);
+}
+
+function managementResponse(page: Page, keyword: string, status = 'ALL', currentPage = 1) {
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === '/api/admin/activities'
+      && url.searchParams.get('keyword') === keyword && url.searchParams.get('status') === status
+      && url.searchParams.get('page') === String(currentPage);
+  });
+}
+
+function rosterResponse(page: Page, activityId: string | number, status: string) {
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === `/api/admin/activities/${activityId}/registrations`
+      && url.searchParams.get('status') === status && url.searchParams.get('page') === '1';
+  });
+}
+
+async function emptyRosterFilter(page: Page, activityId: string | number, status: 'ACTIVE' | 'CANCELLED') {
+  const next = rosterResponse(page, activityId, status);
+  await selectOption(page, '报名状态', status === 'ACTIVE' ? '已报名' : '已取消');
+  const response = await next;
+  expect(response.ok()).toBeTruthy();
+  expect((await response.json()).total).toBe(0);
+  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(0);
+  await expect(page.getByText('暂无符合条件的报名记录', { exact: true })).toBeVisible();
+}
+
+async function assertRoster(page: Page, activityId: string | number, status: 'ACTIVE' | 'CANCELLED', testInfo: TestInfo) {
+  await page.goto(`/admin/activities/${activityId}/registrations`);
+  const response = await page.request.get(`/api/admin/activities/${activityId}/registrations?status=${status}&page=1&pageSize=10`);
+  expect(response.ok()).toBeTruthy();
+  const roster = await response.json() as RosterResponse;
+  expect(roster.total).toBe(1);
+  expect(roster.items[0].username).toBe('demo');
+  expect(roster.items[0].status).toBe(status);
+  expect(roster.items[0].createdAt).toMatch(/Z$/);
+  expect(roster.items[0].updatedAt).toMatch(/Z$/);
+  const filtered = rosterResponse(page, activityId, status);
+  await selectOption(page, '报名状态', status === 'ACTIVE' ? '已报名' : '已取消');
+  expect((await filtered).ok()).toBeTruthy();
+  await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: 'demo' })).toContainText(status === 'ACTIVE' ? '已报名' : '已取消');
+  await noDocumentOverflow(page);
+  await capture(page, testInfo, `admin-roster-${status}`);
+  return roster.items[0].id;
+}
 
 async function login(page: Page, username: string, password: string) {
   await page.goto('/login');
@@ -27,8 +139,7 @@ test('活动列表显示真实接口数据，详情可直接访问且没有横�
   await expect(page.getByRole('heading', { name: activities[0].title, exact: true })).toBeVisible();
   await expect(page.getByText(activities[0].location, { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /登录后报名|活动已开始/ })).toBeVisible();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
-  expect(overflow).toBeFalsy();
+  await noDocumentOverflow(page);
   expect(runtimeErrors).toEqual([]);
 });
 
@@ -44,6 +155,7 @@ test('管理员发布，参与者报名、取消、重新报名，记录与数�
   const beijingDate = new Date(Date.now() + 48 * 3600000 + 8 * 3600000).toISOString().slice(0, 16);
   await page.getByLabel('开始时间（北京时间）', { exact: true }).fill(beijingDate);
   await page.getByRole('spinbutton', { name: '报名名额' }).fill('1');
+  await capture(page, testInfo, 'admin-create');
   await page.getByRole('main').getByRole('button', { name: '发布活动', exact: true }).click();
   await expect(page).toHaveURL(/\/activities\/\d+$/);
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
@@ -62,6 +174,12 @@ test('管理员发布，参与者报名、取消、重新报名，记录与数�
   await page.goto('/my-registrations');
   const row = page.locator('.registration-row').filter({ hasText: title });
   await expect(row).toContainText('已取消');
+  await logout(page);
+  await login(page, 'admin', 'Admin123!');
+  const registrationId = await assertRoster(page, activityId!, 'CANCELLED', testInfo);
+  await emptyRosterFilter(page, activityId!, 'ACTIVE');
+  await logout(page);
+  await login(page, 'demo', 'Demo123!');
   await page.goto(`/activities/${activityId}`);
   await page.getByRole('button', { name: /重新报名/ }).click();
   await expect(page.getByText('已成功报名', { exact: true })).toBeVisible();
@@ -74,6 +192,10 @@ test('管理员发布，参与者报名、取消、重新报名，记录与数�
   await expect(page.locator('.registration-row').filter({ hasText: title })).toContainText('已报名');
   await page.goto('/admin/activities/new');
   await expect(page.getByText('此页面仅对活动组织者开放', { exact: true })).toBeVisible();
+  await logout(page);
+  await login(page, 'admin', 'Admin123!');
+  expect(await assertRoster(page, activityId!, 'ACTIVE', testInfo)).toBe(registrationId);
+  await emptyRosterFilter(page, activityId!, 'CANCELLED');
   await logout(page);
   await page.goto('/my-registrations');
   await expect(page).toHaveURL(/\/login$/);
@@ -89,12 +211,10 @@ test('错误密码会显示服务端错误，不会进入登录状态', async ({
   await expect(page.getByRole('button', { name: /账号菜单/ })).toHaveCount(0);
 });
 
-test('服务端 Session 失效后能回到登录并继续报名', async ({ page }) => {
+test('服务端 Session 失效后能回到登录并继续报名', async ({ page, request }, testInfo) => {
+  await loginApi(request);
+  const target = await createFixture(request, `浏览器验证 ${testInfo.project.name} ${Date.now()} Session`);
   await login(page, 'demo', 'Demo123!');
-  const all = await (await page.request.get('/api/activities')).json();
-  const target = all.find((activity: { closed: boolean; registeredCount: number; capacity: number; registrationStatus: string | null }) =>
-    !activity.closed && activity.registeredCount < activity.capacity && activity.registrationStatus !== 'ACTIVE');
-  expect(target).toBeTruthy();
   await page.goto(`/activities/${target.id}`);
   await expect(page.getByRole('button', { name: /立即报名|重新报名/ })).toBeVisible();
   // Invalidate the server Session without updating the SPA's cached identity/token.
@@ -112,20 +232,18 @@ test('服务端 Session 失效后能回到登录并继续报名', async ({ page 
   await expect(page).toHaveURL(new RegExp(`/activities/${target.id}$`));
   await page.getByRole('button', { name: /立即报名|重新报名/ }).click();
   await expect(page.getByText('已成功报名', { exact: true })).toBeVisible();
-  // Keep sample activities available for the next browser project/run.
+  // Release only this test's temporary activity; seed records are never changed.
   await page.getByRole('button', { name: '取消报名', exact: true }).click();
   await page.getByRole('button', { name: '确认取消', exact: true }).click();
   await expect(page.getByRole('button', { name: /重新报名/ })).toBeVisible();
 });
 
-test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({ page }) => {
+test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({ page, request }, testInfo) => {
+  await loginApi(request);
+  const prefix = `浏览器验证 ${testInfo.project.name} ${Date.now()} 迟到响应`;
+  const first = await createFixture(request, `${prefix} A`);
+  const second = await createFixture(request, `${prefix} B`);
   await login(page, 'demo', 'Demo123!');
-  const all = await (await page.request.get('/api/activities')).json();
-  const first = all.find((activity: { closed: boolean; registeredCount: number; capacity: number; registrationStatus: string | null }) =>
-    !activity.closed && activity.registeredCount < activity.capacity && activity.registrationStatus !== 'ACTIVE');
-  const second = all.find((activity: { id: number }) => activity.id !== first.id);
-  expect(first).toBeTruthy();
-  expect(second).toBeTruthy();
   let releaseResponse!: () => void;
   let requestArrived!: () => void;
   const held = new Promise<void>(resolve => { releaseResponse = resolve; });
@@ -152,5 +270,226 @@ test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({
     releaseResponse();
     const token = await (await page.request.get('/api/auth/csrf')).json();
     await page.request.delete(`/api/activities/${first.id}/registration`, { headers: { [token.headerName]: token.token } });
+  }
+});
+
+test('管理概览显示真实统计，桌面侧栏和手机抽屉导航可用，失败可重试', async ({ page }, testInfo) => {
+  const runtimeErrors: string[] = [];
+  page.on('pageerror', error => runtimeErrors.push(error.message));
+  await login(page, 'admin', 'Admin123!');
+  const loaded = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/overview' && response.ok());
+  await page.goto('/admin/dashboard');
+  const overview = await (await loaded).json();
+  const all = await (await page.request.get('/api/activities')).json() as ActivityResponse[];
+  expect(overview.totalActivities).toBe(all.length);
+  expect(overview.upcomingActivities).toBe(all.filter(activity => !activity.closed).length);
+  expect(overview.startedActivities).toBe(all.filter(activity => activity.closed).length);
+  expect(overview.fullActivities).toBe(all.filter(activity => !activity.closed && activity.registeredCount === activity.capacity).length);
+  expect(overview.activeRegistrations).toBe(all.reduce((count, activity) => count + activity.registeredCount, 0));
+  expect(overview.availableSeats).toBe(all.filter(activity => !activity.closed).reduce((count, activity) => count + activity.capacity - activity.registeredCount, 0));
+  for (const key of ['totalActivities', 'upcomingActivities', 'activeRegistrations', 'availableSeats']) {
+    const value = page.getByTestId(`overview-${key}`).locator('.ant-statistic-content-value');
+    await expect.poll(async () => (await value.innerText()).replace(/[\s,]/g, '')).toBe(String(overview[key]));
+  }
+  const upcoming = await (await page.request.get('/api/admin/activities?page=1&pageSize=5&keyword=&status=UPCOMING')).json();
+  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(upcoming.items.length);
+  for (const activity of upcoming.items) {
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: activity.title })).toBeVisible();
+  }
+  await noDocumentOverflow(page);
+  await capture(page, testInfo, 'admin-dashboard');
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: '打开导航', exact: true }).click();
+    const drawer = page.getByRole('dialog');
+    await expect(drawer.getByRole('link', { name: '概览', exact: true })).toBeVisible();
+    await drawer.getByRole('link', { name: '活动管理', exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/activities$/);
+    await expect(drawer).not.toBeVisible();
+  } else {
+    await page.getByRole('button', { name: '收起导航', exact: true }).click();
+    await expect(page.locator('.sidebar')).toHaveClass(/sidebar-collapsed/);
+    await page.getByRole('link', { name: '活动管理', exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/activities$/);
+    await page.getByRole('button', { name: '展开导航', exact: true }).click();
+  }
+  await expect(page.getByRole('heading', { name: '活动管理', exact: true })).toBeVisible();
+  await noDocumentOverflow(page);
+
+  // Control a failed transport, then retry the real server; no successful data is mocked.
+  await page.route('**/api/admin/overview', route => route.abort('failed'));
+  await page.goto('/admin/dashboard');
+  await expect(page.getByText('暂时无法连接服务，请检查网络后重试。', { exact: true })).toBeVisible();
+  await page.unroute('**/api/admin/overview');
+  const retried = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/overview' && response.ok());
+  await page.getByRole('button', { name: '重新加载', exact: true }).click();
+  const latest = await (await retried).json();
+  await expect.poll(async () => (await page.getByTestId('overview-totalActivities').locator('.ant-statistic-content-value').innerText()).replace(/[\s,]/g, '')).toBe(String(latest.totalActivities));
+  await noDocumentOverflow(page);
+  expect(runtimeErrors).toEqual([]);
+});
+
+test('活动管理使用真实字面搜索、状态和分页，筛选回到第一页', async ({ page, request }, testInfo) => {
+  await loginApi(request);
+  const prefix = `浏览器验证 ${testInfo.project.name} ${Date.now()} 查询%_`;
+  const location = `${prefix} 场地专搜`;
+  const fixtures: ActivityResponse[] = [];
+  for (let index = 0; index < 11; index++) {
+    fixtures.push(await createFixture(request, `${prefix} ${String(index).padStart(2, '0')}`, 1, index === 10 ? location : '临时普通场地'));
+  }
+  await writeApi(request, `/api/activities/${fixtures[0].id}/registration`, 'POST');
+  await login(page, 'admin', 'Admin123!');
+  await page.goto('/admin/activities');
+
+  async function search(keyword: string, status = 'ALL') {
+    const loaded = managementResponse(page, keyword, status);
+    await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(keyword);
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    const response = await loaded;
+    expect(response.ok()).toBeTruthy();
+    const result = await response.json();
+    expect(result.page).toBe(1);
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(result.items.length);
+    for (const activity of result.items) {
+      await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: activity.title })).toBeVisible();
+    }
+    return result;
+  }
+
+  const first = await search(prefix);
+  expect(first.total).toBe(11);
+  expect(first.items).toHaveLength(10);
+  await capture(page, testInfo, 'admin-activities');
+  const secondLoaded = managementResponse(page, prefix, 'ALL', 2);
+  await page.locator('.ant-pagination-item[title="2"]').click();
+  const second = await (await secondLoaded).json();
+  expect(second.page).toBe(2);
+  expect(second.items).toHaveLength(1);
+  expect(first.items.map((item: ActivityResponse) => item.id).includes(second.items[0].id)).toBeFalsy();
+  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(1);
+  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toContainText(second.items[0].title);
+
+  const filters = [
+    { status: 'FULL', label: '已满员', total: 1 },
+    { status: 'OPEN', label: '报名中', total: 10 },
+    { status: 'UPCOMING', label: '即将开始', total: 11 },
+    { status: 'STARTED', label: '已开始', total: 0 },
+    { status: 'ALL', label: '全部状态', total: 11 },
+  ];
+  for (const filter of filters) {
+    const loaded = managementResponse(page, prefix, filter.status);
+    await selectOption(page, '活动状态', filter.label);
+    const response = await loaded;
+    expect(response.ok()).toBeTruthy();
+    const result = await response.json();
+    expect(result.page).toBe(1);
+    expect(result.total).toBe(filter.total);
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(result.items.length);
+    if (filter.total === 0) await expect(page.getByText('暂无符合条件的活动', { exact: true })).toBeVisible();
+  }
+  const byLocation = await search(location);
+  expect(byLocation.total).toBe(1);
+  expect(byLocation.items[0].id).toBe(fixtures[10].id);
+  const empty = await search(`${prefix} 不存在`);
+  expect(empty.total).toBe(0);
+  await expect(page.getByText('暂无符合条件的活动', { exact: true })).toBeVisible();
+  await noDocumentOverflow(page);
+});
+
+test('普通用户的管理页面不查询数据，三个管理接口均由后端拒绝', async ({ page }) => {
+  await login(page, 'demo', 'Demo123!');
+  const all = await (await page.request.get('/api/activities')).json() as ActivityResponse[];
+  expect(all.length).toBeGreaterThan(0);
+  const managementReads: string[] = [];
+  page.on('request', request => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname.startsWith('/api/admin/')) managementReads.push(request.url());
+  });
+  for (const path of ['/admin/dashboard', '/admin/activities', `/admin/activities/${all[0].id}/registrations`, '/admin/activities/new']) {
+    await page.goto(path);
+    await expect(page.getByText('此页面仅对活动组织者开放', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: '活动管理', exact: true })).toHaveCount(0);
+    await noDocumentOverflow(page);
+  }
+  expect(managementReads).toEqual([]);
+  for (const path of ['/api/admin/overview', '/api/admin/activities', `/api/admin/activities/${all[0].id}/registrations`]) {
+    const response = await page.request.get(path);
+    expect(response.status()).toBe(403);
+    expect((await response.json()).code).toBe('FORBIDDEN');
+  }
+  await logout(page);
+  await page.goto('/admin/dashboard');
+  await expect(page).toHaveURL(/\/login$/);
+  expect(managementReads).toEqual([]);
+});
+
+test('相同条件查询刷新真实人数，结果减少时自动回到有效页码', async ({ page, request, playwright }, testInfo) => {
+  await loginApi(request);
+  const prefix = `浏览器验证 ${testInfo.project.name} ${Date.now()} 刷新与越界`;
+  const fixtures: ActivityResponse[] = [];
+  for (let index = 0; index < 11; index++) {
+    fixtures.push(await createFixture(request, `${prefix} ${String(index).padStart(2, '0')}`, 1));
+  }
+  await login(page, 'admin', 'Admin123!');
+  await page.goto('/admin/activities');
+  const participant = await playwright.request.newContext({ baseURL: new URL(page.url()).origin });
+  await loginApi(participant, 'demo', 'Demo123!');
+  try {
+    const initial = managementResponse(page, prefix);
+    await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(prefix);
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    expect((await (await initial).json()).total).toBe(11);
+    const firstRow = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: fixtures[0].title });
+    await expect(firstRow.getByRole('cell', { name: '0 / 1', exact: true })).toBeVisible();
+    await writeApi(participant, `/api/activities/${fixtures[0].id}/registration`, 'POST');
+    const joined = managementResponse(page, prefix);
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    const joinedResult = await (await joined).json();
+    expect(joinedResult.page).toBe(1);
+    expect(joinedResult.items.find((activity: ActivityResponse) => activity.id === fixtures[0].id).registeredCount).toBe(1);
+    await expect(firstRow.getByRole('cell', { name: '1 / 1', exact: true })).toBeVisible();
+    await writeApi(participant, `/api/activities/${fixtures[0].id}/registration`, 'DELETE');
+    const cancelled = managementResponse(page, prefix);
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    expect((await (await cancelled).json()).page).toBe(1);
+    await expect(firstRow.getByRole('cell', { name: '0 / 1', exact: true })).toBeVisible();
+
+    const open = managementResponse(page, prefix, 'OPEN');
+    await selectOption(page, '活动状态', '报名中');
+    expect((await (await open).json()).total).toBe(11);
+    const lastPage = managementResponse(page, prefix, 'OPEN', 2);
+    await page.locator('.ant-pagination-item[title="2"]').click();
+    const last = await (await lastPage).json();
+    expect(last.items).toHaveLength(1);
+    expect(last.items[0].id).toBe(fixtures[10].id);
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(1);
+
+    // Retain the real total=11 in the browser, then remove the last OPEN result
+    // through an isolated user's real API call before requesting the old page 2.
+    const back = managementResponse(page, prefix, 'OPEN', 1);
+    await page.locator('.ant-pagination-item[title="1"]').click();
+    expect((await (await back).json()).total).toBe(11);
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(10);
+    await writeApi(participant, `/api/activities/${fixtures[10].id}/registration`, 'POST');
+    const outsidePage = managementResponse(page, prefix, 'OPEN', 2);
+    const correctedPage = managementResponse(page, prefix, 'OPEN', 1);
+    await page.locator('.ant-pagination-item[title="2"]').click();
+    const outside = await (await outsidePage).json();
+    expect(outside.page).toBe(2);
+    expect(outside.total).toBe(10);
+    expect(outside.items).toEqual([]);
+    const corrected = await (await correctedPage).json();
+    expect(corrected.page).toBe(1);
+    expect(corrected.total).toBe(10);
+    expect(corrected.items).toHaveLength(10);
+    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(10);
+    await expect(page.locator('.ant-pagination-item-active')).toHaveAttribute('title', '1');
+    const browserUser = await (await page.request.get('/api/auth/me')).json();
+    expect(browserUser.role).toBe('ADMIN');
+    await noDocumentOverflow(page);
+    await capture(page, testInfo, 'admin-activities-corrected-page');
+  } finally {
+    try {
+      await writeApi(participant, `/api/activities/${fixtures[0].id}/registration`, 'DELETE');
+      await writeApi(participant, `/api/activities/${fixtures[10].id}/registration`, 'DELETE');
+    } finally { await participant.dispose(); }
   }
 });

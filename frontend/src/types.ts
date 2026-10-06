@@ -30,3 +30,49 @@ export interface NewActivity {
   startsAt: string;
   capacity: number;
 }
+
+export interface AdminOverview {
+  totalActivities: number;
+  upcomingActivities: number;
+  startedActivities: number;
+  fullActivities: number;
+  activeRegistrations: number;
+  availableSeats: number;
+}
+
+export interface PageResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING";
+export type RegistrationFilter = "ALL" | "ACTIVE" | "CANCELLED";
+
+export interface AdminActivityQuery {
+  page: number;
+  pageSize: number;
+  keyword: string;
+  status: ActivityFilter;
+}
+
+export interface AdminRegistrationQuery {
+  page: number;
+  pageSize: number;
+  status: RegistrationFilter;
+}
+
+export interface AdminRegistration {
+  id: number;
+  userId: number;
+  username: string;
+  displayName: string;
+  status: "ACTIVE" | "CANCELLED";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminRegistrationPage extends PageResult<AdminRegistration> {
+  activity: Activity;
+}

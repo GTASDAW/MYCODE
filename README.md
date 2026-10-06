@@ -1,6 +1,6 @@
 # 集会 Gather · 活动报名平台
 
-一个可以实际运行、演示和解释的全栈项目：管理员发布活动，用户报名、取消和查看记录。前端的数据来自 Java 接口和 MySQL，报名名额由数据库事务保证。
+一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布活动和查看报名名单，用户报名、取消和查看记录。前端的数据来自 Java 接口和 MySQL，报名名额由数据库事务保证。
 
 ## 技术栈
 
@@ -32,7 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 | 管理员 | `admin` | `Admin123!` |
 | 普通用户 | `demo` | `Demo123!` |
 
-管理员能够创建活动；普通用户能够报名、取消和查看个人报名记录。首次启动写入演示用户和未来活动，重启时保留已有数据。
+管理员可以使用概览、活动管理、发布活动和报名名单四类页面；普通用户能够报名、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
 
 ## Docker Compose 部署
 
@@ -63,6 +63,9 @@ docker compose down
 | `POST /api/auth/logout` | 退出 | 需要 CSRF |
 | `GET /api/auth/me` | 当前用户 | 登录 |
 | `GET /api/activities`、`GET /api/activities/{id}` | 活动列表、详情 | 公开 |
+| `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
+| `GET /api/admin/activities` | 搜索、状态筛选、分页管理列表 | 管理员 |
+| `GET /api/admin/activities/{id}/registrations` | 分页、按状态查看报名名单 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `POST /api/activities/{id}/registration` | 报名或重新报名 | 登录 |
 | `DELETE /api/activities/{id}/registration` | 取消报名 | 登录 |
@@ -77,6 +80,8 @@ docker compose down
 - 重复报名、重复取消在活动开放期间返回当前结果，不会重复改变人数。
 - 时间在接口中使用 UTC，在页面中按北京时间显示。
 
+管理活动列表支持标题或地点的字面子串搜索，以及全部、未开始、可报名、满员、已开始筛选；报名名单支持全部、已报名、已取消筛选。管理分页默认每页 10 条，接口最多每页 100 条。概览统计包含所有活动的有效报名数，剩余名额只统计尚未开始的活动，详细口径见 [架构与接口说明](docs/architecture.md)。
+
 ## 验证
 
 先启动本地服务和数据库，再运行：
@@ -88,7 +93,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
+后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。管理查询还验证统计、字面搜索、状态与分页。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
 
 如果已经安装 Chrome，可以用系统浏览器运行测试，无须下载 Chromium：
 
@@ -97,7 +102,7 @@ $env:PLAYWRIGHT_CHANNEL = 'chrome'
 npm run test:e2e
 ```
 
-浏览器测试会在本地演示数据库创建测试活动。前端 CSRF 回归测试在 `frontend` 目录运行 `npm test`。本次真实验证结果见 [验证记录](docs/verification.md)。
+浏览器测试会在本地演示数据库创建以“浏览器验证”开头的临时活动，认证失效和迟到响应回归也使用这些临时活动，不修改已有样例活动的报名状态；完成后按明确的测试活动 ID 清理。前端 CSRF 回归测试在 `frontend` 目录运行 `npm test`。实际执行结果见 [验证记录](docs/verification.md)。
 
 前端生产构建：
 

@@ -1,32 +1,86 @@
 import { useCallback, useEffect, useState } from "react";
-import type { DependencyList } from "react";
+import type { DependencyList, SetStateAction } from "react";
+
+interface ResourceState<T> {
+  dependencies: DependencyList;
+  revision: number;
+  data: T | null;
+  loading: boolean;
+  error: unknown;
+}
 
 export function useResource<T>(
   loader: (signal: AbortSignal) => Promise<T>,
   deps: DependencyList,
 ) {
-  const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<unknown>(null);
   const [revision, setRevision] = useState(0);
+  const [state, setState] = useState<ResourceState<T>>({
+    dependencies: [...deps],
+    revision: 0,
+    data: null,
+    loading: true,
+    error: null,
+  });
+  const matches = (value: ResourceState<T>) =>
+    value.revision === revision &&
+    value.dependencies.length === deps.length &&
+    value.dependencies.every((dependency, index) =>
+      Object.is(dependency, deps[index]),
+    );
+
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
+    const dependencies = [...deps];
+    setState({
+      dependencies,
+      revision,
+      data: null,
+      loading: true,
+      error: null,
+    });
     loader(controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted) setData(value);
+      .then((data) => {
+        if (!controller.signal.aborted)
+          setState({
+            dependencies,
+            revision,
+            data,
+            loading: false,
+            error: null,
+          });
       })
-      .catch((err) => {
-        if (!controller.signal.aborted) setError(err);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+      .catch((error) => {
+        if (!controller.signal.aborted)
+          setState({
+            dependencies,
+            revision,
+            data: null,
+            loading: false,
+            error,
+          });
       });
     return () => controller.abort();
-    // Dependencies are supplied by each caller to match the values captured by the loader.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Each page supplies all values captured by its loader as dependencies.
   }, [...deps, revision]);
+
   const retry = useCallback(() => setRevision((value) => value + 1), []);
-  return { data, setData, loading, error, retry };
+  const setData = (update: SetStateAction<T | null>) =>
+    setState((previous) => {
+      if (!matches(previous)) return previous;
+      return {
+        ...previous,
+        data:
+          typeof update === "function"
+            ? (update as (value: T | null) => T | null)(previous.data)
+            : update,
+      };
+    });
+  const current = matches(state);
+  return {
+    data: current ? state.data : null,
+    setData,
+    loading: !current || state.loading,
+    error: current ? state.error : null,
+    retry,
+  };
 }

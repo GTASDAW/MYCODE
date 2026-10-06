@@ -4,11 +4,8 @@ import com.example.gather.api.ApiModels.*;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
 import com.example.gather.service.RegistrationService;
-import jakarta.validation.Valid;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-import java.net.URI;
 import java.util.List;
 
 @RestController
@@ -30,13 +27,6 @@ public class ActivityController {
     @GetMapping("/activities/{id}")
     ActivityView detail(@PathVariable long id, @AuthenticationPrincipal AppUserDetails principal) {
         return activities.get(id, principal == null ? null : principal.id());
-    }
-
-    @PostMapping("/admin/activities")
-    ResponseEntity<ActivityView> create(@Valid @RequestBody CreateActivityRequest request,
-                                       @AuthenticationPrincipal AppUserDetails principal) {
-        ActivityView activity = activities.create(request, principal.id());
-        return ResponseEntity.created(URI.create("/api/activities/" + activity.id())).body(activity);
     }
 
     @PostMapping("/activities/{id}/registration")

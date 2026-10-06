@@ -1,4 +1,14 @@
-import type { Activity, NewActivity, Registration, User } from "./types";
+import type {
+  Activity,
+  NewActivity,
+  Registration,
+  User,
+  AdminOverview,
+  AdminActivityQuery,
+  AdminRegistrationQuery,
+  AdminRegistrationPage,
+  PageResult,
+} from "./types";
 
 interface CsrfToken {
   token: string;
@@ -135,6 +145,33 @@ export const api = {
     request<Activity>(`/activities/${id}/registration`, { method: "DELETE" }),
   registrations: (signal?: AbortSignal) =>
     request<Registration[]>("/me/registrations", { signal }),
+  adminOverview: (signal?: AbortSignal) =>
+    request<AdminOverview>("/admin/overview", { signal }),
+  adminActivities: (query: AdminActivityQuery, signal?: AbortSignal) =>
+    request<PageResult<Activity>>(
+      `/admin/activities?${new URLSearchParams({
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+        keyword: query.keyword,
+        status: query.status,
+      })}`,
+      { signal },
+    ),
+  adminRegistrations: (
+    id: string,
+    query: AdminRegistrationQuery,
+    signal?: AbortSignal,
+  ) =>
+    request<AdminRegistrationPage>(
+      `/admin/activities/${encodeURIComponent(id)}/registrations?${new URLSearchParams(
+        {
+          page: String(query.page),
+          pageSize: String(query.pageSize),
+          status: query.status,
+        },
+      )}`,
+      { signal },
+    ),
   createActivity: (activity: NewActivity) =>
     request<Activity>("/admin/activities", {
       method: "POST",

@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import type { ReactNode } from "react";
@@ -25,35 +26,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
 
   const reload = useCallback(async () => {
+    const currentGeneration = ++generation.current;
     setLoading(true);
     setError(null);
     try {
       await api.refreshCsrf();
-      setUser(await api.me());
+      const current = await api.me();
+      if (generation.current === currentGeneration) setUser(current);
     } catch (err) {
+      if (generation.current !== currentGeneration) return;
       if (err instanceof ApiError && err.status === 401) setUser(null);
       else setError(errorMessage(err));
     } finally {
-      setLoading(false);
+      if (generation.current === currentGeneration) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void reload();
+    return () => {
+      generation.current++;
+    };
   }, [reload]);
 
   const login = async (username: string, password: string) => {
+    const currentGeneration = ++generation.current;
     const current = await api.login(username, password);
+    if (generation.current !== currentGeneration)
+      throw new ApiError(0, "登录操作已失效，请重试。", "AUTH_STATE_CHANGED");
     setUser(current);
     setError(null);
   };
   const logout = async () => {
+    const currentGeneration = ++generation.current;
     await api.logout();
+    if (generation.current !== currentGeneration)
+      throw new ApiError(
+        0,
+        "账号状态已改变，请重新检查登录状态。",
+        "AUTH_STATE_CHANGED",
+      );
     setUser(null);
     setError(null);
   };
+  const expire = useCallback(() => {
+    generation.current++;
+    setUser(null);
+  }, []);
 
   return (
     <AuthContext.Provider
@@ -64,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         reload,
         login,
         logout,
-        expire: () => setUser(null),
+        expire,
       }}
     >
       {children}

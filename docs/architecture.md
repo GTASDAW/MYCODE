@@ -43,12 +43,37 @@ flowchart LR
 | `GET /api/auth/csrf` | 获取后续写请求需要的 CSRF 信息 | 可匿名调用 |
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
+| `GET /api/admin/overview` | 管理概览的六项真实统计 | 管理员 |
+| `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
+| `GET /api/admin/activities/{id}/registrations` | 分页查看活动报名名单 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `POST /api/activities/{id}/registration` | 报名或重新报名 | 已登录用户 |
 | `DELETE /api/activities/{id}/registration` | 取消报名 | 已登录用户 |
 | `GET /api/me/registrations` | 查看当前用户的报名记录 | 已登录用户 |
 
 登录、退出和获取当前用户的接口由认证模块提供。前端根据身份显示入口，最终授权仍由后端执行：隐藏按钮不能阻止别人直接调用接口。
+
+## 管理查询与统计口径
+
+管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new` 和报名名单 `/admin/activities/{id}/registrations`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
+
+`GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）和 `status`（默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。
+
+| 活动筛选 | 口径 |
+| --- | --- |
+| `ALL` | 所有活动 |
+| `UPCOMING` | 开始时间晚于当前时间，包含满员活动 |
+| `OPEN` | 尚未开始且有剩余名额 |
+| `FULL` | 尚未开始且有效报名人数等于总名额 |
+| `STARTED` | 开始时间等于或早于当前时间 |
+
+概览的 `totalActivities` 是所有活动数；`upcomingActivities` 和 `startedActivities` 对应上述时间条件；`fullActivities` 只统计尚未开始的满员活动；`activeRegistrations` 包含所有活动的有效报名记录，包含已开始活动；`availableSeats` 只汇总尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
+
+`GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，以及 `ALL`、`ACTIVE`、`CANCELLED` 状态，返回 `{activity,items,total,page,pageSize}`。名单行包含报名 ID、用户 ID、账号、展示名、状态、创建时间和更新时间，时间使用 UTC；按更新时间降序、报名 ID 降序排列。不存在的活动返回 404。
+
+管理列表的总数和当前页查询在只读 `REPEATABLE_READ` 事务的同一快照内执行；概览用一条 SQL 取得六项统计，并单独统计报名表，避免关联多条报名记录后重复累计活动和名额。这些查询不改变报名业务的 `READ_COMMITTED` 事务与行锁设计。
+
+筛选条件或每页数量改变时，前端回到第一页。活动列表在第一页使用相同关键词再次点击查询，也会重新读取服务端数据；其他位置提交搜索回到第一页。报名变化让当前页超出总页数时，两个管理列表自动回到最后一个有效页，最少为第一页。读取请求在页面或账号切换时取消或忽略过期结果，页码校正也不能覆盖更新后的查询条件。
 
 ## 一次报名请求怎么走
 

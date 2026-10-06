@@ -1,5 +1,7 @@
-import { Alert, Button, Empty, Skeleton, Tag } from "antd";
+import type { ReactNode } from "react";
+import { Alert, Breadcrumb, Button, Empty, Skeleton, Tag } from "antd";
 import {
+  ArrowLeftOutlined,
   ArrowRightOutlined,
   CalendarOutlined,
   EnvironmentOutlined,
@@ -10,13 +12,9 @@ import { dateParts, formatDate, formatTime } from "./date";
 import { errorMessage } from "./api";
 import type { Activity } from "./types";
 
-export function Logo({ light = false }: { light?: boolean }) {
+export function Logo() {
   return (
-    <Link
-      to="/activities"
-      className={`brand ${light ? "brand-light" : ""}`}
-      aria-label="集会 Gather 首页"
-    >
+    <Link to="/activities" className="brand" aria-label="集会 Gather 首页">
       <span className="brand-mark" aria-hidden="true">
         <i />
         <i />
@@ -27,6 +25,45 @@ export function Logo({ light = false }: { light?: boolean }) {
         集会 <span>Gather</span>
       </span>
     </Link>
+  );
+}
+
+export function BackLink() {
+  return (
+    <Link className="back-link" to="/activities">
+      <ArrowLeftOutlined aria-hidden="true" /> 返回全部活动
+    </Link>
+  );
+}
+
+export function PageHeading({
+  title,
+  description,
+  section = "活动平台",
+  extra,
+}: {
+  title: string;
+  description?: string;
+  section?: string;
+  extra?: ReactNode;
+}) {
+  return (
+    <header className="page-heading">
+      <Breadcrumb
+        items={[
+          { title: <Link to="/activities">首页</Link> },
+          { title: section },
+          { title },
+        ]}
+      />
+      <div className="page-heading-row">
+        <div>
+          <h1>{title}</h1>
+          {description && <p>{description}</p>}
+        </div>
+        {extra && <div className="page-heading-extra">{extra}</div>}
+      </div>
+    </header>
   );
 }
 
@@ -73,7 +110,7 @@ export function EmptyState({
 }: {
   title: string;
   description: string;
-  action?: React.ReactNode;
+  action?: ReactNode;
 }) {
   return (
     <div className="empty-state">
@@ -92,14 +129,15 @@ export function EmptyState({
   );
 }
 
-export function ActivityStatus({ activity }: { activity: Activity }) {
-  if (activity.closed)
-    return (
-      <Tag className="status-tag" color="default">
-        已开始
-      </Tag>
-    );
-  if (activity.registrationStatus === "ACTIVE")
+export function ActivityStatus({
+  activity,
+  personal = true,
+}: {
+  activity: Activity;
+  personal?: boolean;
+}) {
+  if (activity.closed) return <Tag className="status-tag">已开始</Tag>;
+  if (personal && activity.registrationStatus === "ACTIVE")
     return (
       <Tag className="status-tag" color="green">
         已报名
@@ -112,7 +150,7 @@ export function ActivityStatus({ activity }: { activity: Activity }) {
       </Tag>
     );
   return (
-    <Tag className="status-tag" color="purple">
+    <Tag className="status-tag" color="blue">
       报名中
     </Tag>
   );
@@ -137,23 +175,10 @@ export function DateBadge({
   );
 }
 
-export function ActivityCard({
-  activity,
-  index,
-}: {
-  activity: Activity;
-  index: number;
-}) {
+export function ActivityCard({ activity }: { activity: Activity }) {
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
-  const ratio = Math.min(
-    100,
-    (activity.registeredCount / activity.capacity) * 100,
-  );
   return (
-    <article
-      className="activity-card"
-      style={{ animationDelay: `${Math.min(index, 5) * 60}ms` }}
-    >
+    <article className="activity-card">
       <div className="activity-card-top">
         <DateBadge startsAt={activity.startsAt} />
         <ActivityStatus activity={activity} />
@@ -173,16 +198,10 @@ export function ActivityCard({
           <span className="location-text">{activity.location}</span>
         </span>
       </div>
-      <div
-        className="seat-progress"
-        aria-label={`已报名 ${activity.registeredCount} 人，共 ${activity.capacity} 个名额`}
-      >
-        <span style={{ width: `${ratio}%` }} />
-      </div>
       <div className="card-bottom">
         <span>
           <TeamOutlined aria-hidden="true" />
-          <strong>{activity.registeredCount}</strong> / {activity.capacity} 人
+          {activity.registeredCount} / {activity.capacity} 人
           {!activity.closed && remaining > 0 && (
             <small>余 {remaining} 席</small>
           )}

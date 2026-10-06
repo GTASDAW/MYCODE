@@ -5,15 +5,15 @@ import zhCN from "antd/locale/zh_CN";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AuthProvider } from "./auth";
 import { Layout } from "./Layout";
-import {
-  ActivitiesPage,
-  ActivityDetailRoute,
-  CreateActivityPage,
-  LoginPage,
-  MyRegistrationsPage,
-  NotFoundPage,
-  ProtectedRoute,
-} from "./pages";
+import { ActivitiesPage } from "./pages/ActivitiesPage";
+import { ActivityDetailRoute } from "./pages/ActivityDetailPage";
+import { CreateActivityPage } from "./pages/CreateActivityPage";
+import { LoginPage } from "./pages/LoginPage";
+import { MyRegistrationsPage } from "./pages/MyRegistrationsPage";
+import { NotFoundPage, ProtectedRoute } from "./pages/AccessPages";
+import { AdminDashboardPage } from "./pages/AdminDashboardPage";
+import { AdminActivitiesPage } from "./pages/AdminActivitiesPage";
+import { AdminRegistrationsRoute } from "./pages/AdminRegistrationsPage";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -22,16 +22,16 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: "#6554d7",
-          colorText: "#202747",
-          colorTextSecondary: "#758096",
-          colorBorder: "#dfe2ec",
-          colorBgLayout: "#f7f8fb",
+          colorPrimary: "#1677ff",
+          colorText: "#1f1f1f",
+          colorTextSecondary: "#595959",
+          colorBorder: "#d9d9d9",
+          colorBgLayout: "#f0f2f5",
           fontFamily:
             "'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
-          borderRadius: 10,
-          controlHeight: 40,
-          controlHeightLG: 48,
+          borderRadius: 6,
+          controlHeight: 36,
+          controlHeightLG: 44,
           fontSize: 14,
         },
       }}
@@ -53,6 +53,30 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={
                     <ProtectedRoute>
                       <MyRegistrationsPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/dashboard"
+                  element={
+                    <ProtectedRoute admin>
+                      <AdminDashboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/activities"
+                  element={
+                    <ProtectedRoute admin>
+                      <AdminActivitiesPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/activities/:id/registrations"
+                  element={
+                    <ProtectedRoute admin>
+                      <AdminRegistrationsRoute />
                     </ProtectedRoute>
                   }
                 />
