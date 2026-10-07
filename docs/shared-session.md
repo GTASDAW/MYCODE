@@ -76,7 +76,7 @@ flowchart LR
 
 `redis-session` CI 使用真实 Redis、MySQL 和两个 Java 容器。验证脚本 `scripts/redis-session-check.mjs` 的目标是：
 
-- 用同一 Cookie 在 A 获取 CSRF，向 B 登录，再从 A/B 读取相同身份；旧 CSRF 被拒绝，新令牌可跨实例使用。
+- 在 A 获取 CSRF 并完成登录，再用同一 Cookie 从 A/B 读取相同身份；旧 CSRF 被 B 拒绝，A 取得的新令牌可向 B 提交业务请求。
 - 管理员与普通用户的权限跨实例保持一致，普通用户调用管理接口仍被拒绝。
 - 空库同时启动两个实例后，预置用户和三场演示活动只写入一次，活动和报名初始化不重复。
 - 报名、候补、取消递补经过不同实例，数据库中人数和状态仍一致。

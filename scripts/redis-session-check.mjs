@@ -159,6 +159,20 @@ async function healthy(url) {
 
 async function waitForStack(settings) { await Promise.all([settings.a, settings.b, settings.web].map(healthy)); }
 
+async function waitForDemoSeed(db) {
+  // Tomcat can answer health before ApplicationRunner commits initialization.
+  // Wait only for that known startup transition; duplicates remain an immediate failure.
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const [[counts]] = await db.query('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM activities) AS activities');
+    assert(Number(counts.users) <= 2 && Number(counts.activities) <= 3,
+      'Concurrent startup created duplicate demo data in the fresh isolated CI stack.');
+    if (Number(counts.users) === 2 && Number(counts.activities) === 3) return;
+    await delay(250);
+  }
+  throw new Error('Demo initialization did not commit exactly two users and three activities within 30 seconds.');
+}
+
 function recreateBackends(timeout) {
   compose(['up', '-d', '--no-deps', '--force-recreate', 'backend', 'backend2'], timeout);
   // Nginx resolves these service addresses on startup; recreated containers may have new IPs.
@@ -196,6 +210,7 @@ export async function runRedisSessionChecks() {
     verifyComposeSettings(settings);
     await waitForStack(settings);
     db = await mysql.createConnection({ ...settings.database, timezone: 'Z', dateStrings: true });
+    await waitForDemoSeed(db);
     await verifyDatabase(db, settings.database);
     const [[seedCounts]] = await db.query('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM activities) AS activities');
     assert(Number(seedCounts.users) === 2 && Number(seedCounts.activities) === 3,
