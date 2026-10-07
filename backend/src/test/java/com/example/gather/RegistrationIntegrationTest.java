@@ -11,10 +11,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.ApplicationContext;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.session.SessionRepository;
+import org.springframework.session.web.http.SessionRepositoryFilter;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -64,6 +69,7 @@ class RegistrationIntegrationTest {
     @Autowired RegistrationService registrations;
     @Autowired UserMapper users;
     @Autowired DemoDataInitializer demoData;
+    @Autowired ApplicationContext application;
     private final List<Long> activityIds = new ArrayList<>();
     private final List<Long> userIds = new ArrayList<>();
 
@@ -85,6 +91,8 @@ class RegistrationIntegrationTest {
             .andExpect(jsonPath("$.startsAt").value(org.hamcrest.Matchers.endsWith("Z")));
         mvc.perform(get("/api/activities")).andExpect(status().isOk()).andExpect(jsonPath("$[0].id").exists());
         mvc.perform(get("/api/health")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP"));
+        assertThat(application.getBeansOfType(SessionRepository.class)).isEmpty();
+        assertThat(application.getBeansOfType(SessionRepositoryFilter.class)).isEmpty();
         mvc.perform(get("/api/activities/9223372036854775807"))
             .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ACTIVITY_NOT_FOUND"));
     }
@@ -101,6 +109,10 @@ class RegistrationIntegrationTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.username").value("demo"))
             .andExpect(jsonPath("$.role").value("USER")).andExpect(jsonPath("$.passwordHash").doesNotExist());
         mvc.perform(get("/api/auth/me").session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.username").value("demo"));
+        var authentication = ((SecurityContext) session.getAttribute(
+            HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY)).getAuthentication();
+        assertThat(authentication.getCredentials()).isNull();
+        assertThat(((AppUserDetails) authentication.getPrincipal()).getPassword()).isNull();
         var next = mvc.perform(get("/api/auth/csrf").session(session)).andReturn();
         String afterLogin = json.readTree(next.getResponse().getContentAsString()).get("token").asString();
         assertThat(afterLogin).isNotEqualTo(beforeLogin);
@@ -312,16 +324,30 @@ class RegistrationIntegrationTest {
     }
 
     @Test
-    void restartingSeedDoesNotResetPasswordsTimesOrCounters() {
+    void concurrentRestartingSeedDoesNotResetPasswordsTimesOrCountersAndReleasesLock() throws Exception {
         var demo = users.findByUsername("demo");
         long id = createActivity(2);
         registrations.register(id, demo.id());
         var before = activities.get(id, demo.id());
         var allBefore = activities.list(demo.id());
-        demoData.run(null);
+        try (var executor = Executors.newFixedThreadPool(8)) {
+            var start = new CountDownLatch(1);
+            var attempts = new ArrayList<Future<?>>();
+            for (int attempt = 0; attempt < 8; attempt++) {
+                attempts.add(executor.submit(() -> {
+                    start.await();
+                    demoData.run(null);
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (var attempt : attempts) attempt.get(60, TimeUnit.SECONDS);
+        }
         assertThat(users.findByUsername("demo").passwordHash()).isEqualTo(demo.passwordHash());
         assertThat(activities.get(id, demo.id())).isEqualTo(before);
         assertThat(activities.list(demo.id())).isEqualTo(allBefore);
+        assertThat(jdbc.queryForObject("SELECT IS_FREE_LOCK(CONCAT('gather:demo-seed:', MD5(DATABASE())))", Integer.class))
+            .isEqualTo(1);
     }
 
     private long createActivity(int capacity) {

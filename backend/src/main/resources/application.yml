@@ -2,12 +2,18 @@ server:
   port: ${PORT:8080}
   servlet:
     session:
-      timeout: 30m
+      timeout: ${SESSION_TIMEOUT:30m}
       cookie:
+        name: JSESSIONID
+        path: /
         http-only: true
         same-site: lax
         secure: ${SESSION_COOKIE_SECURE:false}
 spring:
+  # Redis Session is an opt-in profile; the default servlet Session stays in memory.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.session.data.redis.autoconfigure.SessionDataRedisAutoConfiguration
   application:
     name: gather-api
   datasource:
@@ -24,6 +30,9 @@ mybatis:
     map-underscore-to-camel-case: true
     arg-name-based-constructor-auto-mapping: true
 management:
+  health:
+    redis:
+      enabled: false
   endpoints:
     web:
       base-path: /api

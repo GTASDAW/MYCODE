@@ -176,3 +176,94 @@ jobs:
       - name: Remove only this isolated CI stack
         if: always()
         run: docker compose -f compose.yaml -f .github/compose.ci.yaml down --volumes --remove-orphans
+
+  redis-session:
+    name: Redis shared Session on two backends
+    needs: [frontend, backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: gather-redis-ci
+      MYSQL_DATABASE: activity_platform_e2e
+      MYSQL_USER: activity
+      MYSQL_PASSWORD: activity_ci_password
+      MYSQL_ROOT_PASSWORD: ci_mysql_root_password
+      REDIS_PASSWORD: ci_redis_password
+      SESSION_NAMESPACE: gather:session
+      SESSION_TIMEOUT: 30m
+      APP_PORT: '19088'
+      SESSION_COOKIE_SECURE: 'false'
+      DEMO_ADMIN_PASSWORD: Admin123!
+      DEMO_USER_PASSWORD: Demo123!
+      E2E_BASE_URL: http://127.0.0.1:19088
+      E2E_DB_HOST: 127.0.0.1
+      E2E_DB_PORT: '33306'
+      E2E_DB_NAME: activity_platform_e2e
+      E2E_DB_USERNAME: activity
+      E2E_DB_PASSWORD: activity_ci_password
+      REDIS_TEST_BASE_URL: http://127.0.0.1:19088
+      REDIS_TEST_A_URL: http://127.0.0.1:19081
+      REDIS_TEST_B_URL: http://127.0.0.1:19082
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install verification tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci
+          npm ci 2>&1 | tee .runtime/ci/redis-install.log
+          npm run test:cleanup 2>&1 | tee .runtime/ci/redis-cleanup-safety.log
+          node --test scripts/redis-session-check.test.mjs 2>&1 | tee .runtime/ci/redis-lifecycle-safety.log
+          npx playwright install --with-deps chromium 2>&1 | tee .runtime/ci/redis-browser-install.log
+      - name: Build and start two shared-session replicas
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml config --quiet
+          docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml up --build -d --wait --wait-timeout 180 2>&1 | tee .runtime/ci/redis-compose-start.log
+      - name: Verify shared identity, CSRF, restart, logout and real idle expiration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/redis-session-check.mjs 2>&1 | tee .runtime/ci/redis-session-check.log
+      - name: Run real browser flows through both replicas
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:e2e 2>&1 | tee .runtime/ci/redis-browser-tests.log
+      - name: Retry only owned browser fixture cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for manifest in .runtime/e2e/*.json; do
+            node scripts/e2e-cleanup.mjs "$manifest" 2>&1 | tee -a .runtime/ci/redis-e2e-cleanup.log
+          done
+      - name: Collect shared-session container diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .runtime/ci
+          docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml ps --all > .runtime/ci/redis-compose-status.log 2>&1
+          docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml logs --no-color > .runtime/ci/redis-compose-services.log 2>&1
+      - name: Preserve shared-session verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: redis-session-diagnostics
+          path: |
+            .runtime/ci/
+            .runtime/e2e/
+            playwright-report/
+            test-results/
+          include-hidden-files: true
+          retention-days: 7
+      - name: Remove only the isolated shared-session CI stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml down --volumes --remove-orphans

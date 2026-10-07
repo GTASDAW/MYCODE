@@ -4,6 +4,7 @@ import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.UserRow;
 import jakarta.validation.constraints.*;
 import java.io.Serializable;
+import java.io.Serial;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
@@ -11,6 +12,9 @@ public final class ApiModels {
     private ApiModels() {}
 
     public record UserView(long id, String username, String displayName, String role) implements Serializable {
+        @Serial
+        private static final long serialVersionUID = 1L;
+
         public static UserView from(UserRow user) {
             return new UserView(user.id(), user.username(), user.displayName(), user.role());
         }

@@ -1,0 +1,16 @@
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 2s
+      timeout: 2s
+  session:
+    data:
+      redis:
+        namespace: ${SESSION_NAMESPACE:gather:session}
+management:
+  health:
+    redis:
+      enabled: true

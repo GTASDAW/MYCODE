@@ -1,0 +1,8 @@
+# Direct replica ports are only enabled on an isolated CI runner, bound to loopback.
+services:
+  backend:
+    ports:
+      - '127.0.0.1:19081:8080'
+  backend2:
+    ports:
+      - '127.0.0.1:19082:8080'

@@ -9,6 +9,7 @@
 | 页面 | React、TypeScript、Vite、Ant Design、React Router | 页面路由、表单、加载状态、错误反馈 |
 | HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON |
 | 身份与权限 | Spring Security、Cookie Session、CSRF | 登录、识别当前用户、校验管理员权限 |
+| 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
 | 业务与事务 | Java 服务层、Spring 事务 | 报名规则、取消规则、事务边界 |
 | 数据访问 | MyBatis Spring Boot Starter 4.0.0 | 执行明确的 SQL，包括行锁查询 |
 | 数据存储 | MySQL 8.4、InnoDB | 用户、活动、报名记录以及约束 |
@@ -23,7 +24,7 @@ flowchart LR
     C --> V[Service：业务规则与事务]
     V --> M[MyBatis：SQL]
     M --> D[(MySQL / InnoDB)]
-    S <--> H[Java 服务内存中的 Session]
+    S <--> H[Session：默认 Java 内存 / 可选共享 Redis]
 ```
 
 开发时，统一入口是 Vite：页面发出相对路径的 `/api` 请求，由 Vite 代理到 Java 服务。部署时，统一入口是 Nginx：它提供前端静态文件，并把 `/api` 请求转发给后端。两种方式都让浏览器通过同一个来源访问页面和接口。
@@ -91,12 +92,16 @@ flowchart LR
 
 ## Cookie Session 与 CSRF
 
-Session Cookie 是浏览器与服务端之间的身份凭据。用户资料和身份状态保存在 Java 服务内存中，浏览器只保存 Session 标识。登录成功后会话身份发生变化，前端应重新取得 CSRF 信息；退出后清空页面中的用户状态。
+Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保存 `JSESSIONID`，默认模式把身份和 CSRF 状态保存在当前 Java 进程内存；`redis` profile 把这些会话属性存到共享 Redis。两种模式的默认闲置时限都是 30 分钟。登录成功后会话身份发生变化，前端应重新取得 CSRF 信息；退出后清空页面中的用户状态，并使服务端会话失效。
 
 浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。登录、退出、创建活动、报名、进入候补、取消和退出候补都属于写请求。读取活动列表不改变业务状态。
 
+可选 Compose overlay 使用 Nginx 轮询两个相同后端，共用 MySQL、Redis、会话命名空间和时限。请求从 A 切换到 B 时，B 仍通过 Cookie 在 Redis 找到同一身份与 CSRF；不需要客户端指定后端，也不依赖粘滞会话。会话有效且 Redis 可用时，重启一个 Java 实例不会清空共享登录；Redis 失效、会话过期或退出后不能继续使用原身份。
+
+默认 Redis Session 自动配置被明确关闭，仅 `redis` profile 手动启用 Spring Session；默认健康检查不连接 Redis，Redis 模式纳入 Redis 连接检查。连接、命名空间、Cookie 和实际验证方式见 [共享 Session 指南](shared-session.md)。
+
 ## 当前边界与后续演进
 
-第一版运行单个 Java 服务和单个 MySQL 数据库。Java 服务重启后内存 Session 丢失，用户需要重新登录；启动多个 Java 实例之前，需要设计共享会话或其他身份方案。
+默认本机和基础 Compose 运行单个 Java 服务和单个 MySQL 数据库；Java 重启后内存 Session 丢失，需要重新登录。可选 Redis 方案提供两个后端的共享会话演示，默认闲置时限为 30 分钟；Redis AOF 和数据卷不等于故障期间零会话丢失，也不提供高可用保证。
 
-同一个活动的报名、取消和候补递补通过行锁串行处理，不同活动可以并发处理。热门活动可能产生锁等待；可以根据真实的响应时间和负载，进一步增加限流、监测和容量优化。第一版不引入 Redis，先把数据库一致性和用户流程验证清楚。
+同一个活动的报名、取消和候补递补通过 MySQL 行锁串行处理，不同活动可以并发处理。Redis 只保存 Session，不代替数据库约束、事务或候补排序。热门活动可能产生锁等待；限流、监测和容量优化需要根据真实响应时间和负载另行评估。

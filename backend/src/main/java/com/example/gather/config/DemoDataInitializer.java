@@ -9,7 +9,11 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -23,8 +27,11 @@ public class DemoDataInitializer implements ApplicationRunner {
     private final Clock clock;
     private final String adminPassword;
     private final String userPassword;
+    private final DataSource dataSource;
+    private final TransactionTemplate transaction;
 
     public DemoDataInitializer(UserMapper users, ActivityMapper activities, PasswordEncoder encoder, Clock clock,
+                               DataSource dataSource, PlatformTransactionManager transactionManager,
                                @Value("${app.demo-admin-password}") String adminPassword,
                                @Value("${app.demo-user-password}") String userPassword) {
         this.users = users;
@@ -33,11 +40,36 @@ public class DemoDataInitializer implements ApplicationRunner {
         this.clock = clock;
         this.adminPassword = adminPassword;
         this.userPassword = userPassword;
+        this.dataSource = dataSource;
+        this.transaction = new TransactionTemplate(transactionManager);
     }
 
     @Override
-    @Transactional
     public void run(ApplicationArguments args) {
+        // Two fresh instances can start together. A database-specific advisory lock serializes only demo seeding.
+        // It lives on a dedicated connection OUTSIDE the transaction, so commit completes before release.
+        try (Connection connection = dataSource.getConnection()) {
+            requireLockSuccess(connection, "SELECT GET_LOCK(CONCAT('gather:demo-seed:', MD5(DATABASE())), 30)");
+            try {
+                transaction.executeWithoutResult(status -> seedMissingData());
+            } finally {
+                // Pooling does not release MySQL named locks: release explicitly on the SAME connection.
+                requireLockSuccess(connection, "SELECT RELEASE_LOCK(CONCAT('gather:demo-seed:', MD5(DATABASE())))");
+            }
+        } catch (SQLException error) {
+            throw new IllegalStateException("Cannot safely initialize local demo data", error);
+        }
+    }
+
+    private static void requireLockSuccess(Connection connection, String sql) throws SQLException {
+        try (var statement = connection.createStatement(); var result = statement.executeQuery(sql)) {
+            if (!result.next() || result.getInt(1) != 1 || result.wasNull()) {
+                throw new IllegalStateException("Could not acquire or release the local demo initialization lock");
+            }
+        }
+    }
+
+    private void seedMissingData() {
         // Insert only missing accounts: restarting must never reset credentials or live counters.
         if (users.findByUsername("admin") == null) users.insert("admin", encoder.encode(adminPassword), "活动组织者", "ADMIN");
         if (users.findByUsername("demo") == null) users.insert("demo", encoder.encode(userPassword), "体验用户", "USER");

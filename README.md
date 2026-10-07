@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-React + TypeScript + Vite + Ant Design + React Router；Java 21 + Spring Boot 4.1.1 + Spring Security；MyBatis Spring Boot Starter 4.0.0（这是 Starter 的版本，不是 MyBatis 核心版本）；MySQL 8.4、Flyway、Maven Wrapper、Docker Compose。
+React + TypeScript + Vite + Ant Design + React Router；Java 21 + Spring Boot 4.1.1 + Spring Security；MyBatis Spring Boot Starter 4.0.0（这是 Starter 的版本，不是 MyBatis 核心版本）；MySQL 8.4、Flyway、Maven Wrapper、Docker Compose。可选的 `redis` profile 使用 Spring Session Redis 提供共享登录。
 
 ## 本地启动（Windows）
 
@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。后端 Session 保存在内存中，重启 Java 服务后需要重新登录。
+脚本不会删除数据库。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis。
 
 ## 演示账号
 
@@ -55,6 +55,18 @@ docker compose down
 ```
 
 `docker compose down` 保留数据卷。项目尚未配置云账号或公网域名，当前演示地址为本机地址。
+
+## 可选：Redis 共享登录演示
+
+基础 Compose 仍是单个 Java 实例和内存 Session。需要演示两个后端共享登录时，使用附加配置：
+
+```powershell
+docker compose -f compose.yaml -f compose.redis.yaml up --build -d
+```
+
+同样访问 [http://127.0.0.1:8088](http://127.0.0.1:8088)。Nginx 轮询两个后端，Session 身份和 CSRF 存入共享 Redis；会话未过期且 Redis 可用时，重启一个后端仍能继续登录。默认闲置时限为 30 分钟，退出会使共享会话失效。
+
+Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保证。Redis 密码样例、模式切换、停止命令和验证边界见 [共享 Session 指南](docs/shared-session.md)。网站仍只作本机演示。
 
 ## 接口与业务规则
 
@@ -125,7 +137,7 @@ npm run build
 
 ## 自动检查与交付
 
-GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试，以及隔离 Compose 环境的迁移、重启和桌面/手机浏览器检查。构建和检查不会发布网站。
+GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试、默认 Compose 环境的迁移与重启检查，以及 Redis 双实例共享登录和桌面/手机浏览器检查。两种 Session 模式分别验证，构建和检查不会发布网站。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器测试使用独立 `activity_platform_e2e` 数据库，不使用本机演示库；具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -141,6 +153,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
+- [Redis 共享 Session 与双实例演示](docs/shared-session.md)
 - [验证记录与当前部署边界](docs/verification.md)
 
-Redis 留待出现缓存、共享 Session 或接口限流需求后再引入。当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。
+当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。Redis 可选方案用于共享 Session，默认本机启动保持简单；限流、名额缓存和 Redis 高可用未在本轮加入。

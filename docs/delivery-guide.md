@@ -6,13 +6,14 @@
 
 配置提供自动检查入口；已执行、未执行和首次远程运行结论分别记录在验证记录，不能用配置存在代替执行通过。
 
-`.github/workflows/ci.yml` 使用 Ubuntu runner，分为三个检查：
+`.github/workflows/ci.yml` 使用 Ubuntu runner，默认模式和 Redis 模式分别检查：
 
 | 检查 | 验证内容 | 数据环境 |
 | --- | --- | --- |
 | `frontend` | 从 lockfile 安装，运行前端 API/CSRF 回归、TypeScript 检查和生产构建 | 不写数据库 |
 | `backend` | Java 21、Maven Wrapper，运行现有权限、查询、事务、并发和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
 | `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
+| `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
 
 工作流在推送 `main`、针对 `main` 的 Pull Request 和手工触发时运行；仅修改 `docs/`、`README.md`、`AGENTS.md` 时跳过，避免重复已经通过的业务检查。容器检查等待前端和后端检查通过。Actions 使用固定提交 SHA，Node.js 使用 24.21.0，MySQL 使用 8.4.11 并固定镜像 digest。
 
@@ -60,6 +61,16 @@ docker compose -f compose.yaml -f .github/compose.ci.yaml down
 
 最后一条命令保留数据卷。GitHub 临时 runner 的收尾额外删除本次新建隔离卷；不要对已有本机演示环境执行带 `--volumes` 的清空命令。上面的密码仅是临时测试环境样例。
 
+## Redis 双实例交付
+
+基础 `compose.yaml` 与 Windows 脚本保持默认内存 Session。共享方案单独选择 `compose.redis.yaml`，启动、配置和演示步骤见 [共享 Session 指南](shared-session.md)。两个后端共用 MySQL、Redis、命名空间和闲置时限，Nginx 轮询请求，不使用粘滞会话。
+
+Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.yaml`，连接测试库 `activity_platform_e2e`，网页入口为 `http://127.0.0.1:19088`。分别核对后端的回环测试地址为 `http://127.0.0.1:19081`、`http://127.0.0.1:19082`；常规演示没有这些直连端口，也不暴露 Redis。
+
+`scripts/redis-session-check.mjs` 在明确的 `gather-redis-ci` 隔离项目中验证跨实例会话。默认闲置时限是 30 分钟；3 秒失效场景会重新配置该项目的两个后端，停止访问后验证失效，再恢复 30 分钟。恢复后从轮询入口执行完整桌面/手机浏览器回归。脚本保留报告并精确清理自己的数据库记录，CI 保存日志后只收尾本次隔离项目。
+
+两种重启断言都要保留：默认容器模式重启后原 Session 应失效；Redis 模式在会话有效且 Redis 可用时重启 A，原 Cookie 在 A/B 仍应识别同一身份。不能为了 Redis 的新行为删掉默认模式回归。新建空库的双实例启动还要验证管理员和普通用户各一条、演示活动正好三场，不能依赖启动失败后重试来掩盖初始化竞态。
+
 ## 测试数据清理
 
 - Java 测试只删除自己创建并记录的活动、报名和用户 ID；数据库连接必须是独立测试库，不能指定生产数据库。
@@ -83,7 +94,7 @@ Windows 文件观察程序短暂占用 manifest 时，原子替换仅对 `EPERM`
 
 容器冒烟会等待 `/api/health` 成功，再验证 Flyway V1、V2 已执行，静态首页和 `/activities/{id}` 刷新直达可用，真实认证 API 能完成报名与候补。
 
-重启后端后，同一活动和报名应仍在数据库中；旧登录 Session 应返回未登录，重新登录后恢复操作。这是现有内存 Session 的预期行为，不能把“数据保留”写成“登录保留”。
+默认模式重启后端后，同一活动和报名应仍在数据库中；旧登录 Session 应返回未登录，重新登录后恢复操作。Redis 模式另行验证共享会话保留。数据库保留与登录保留是两项不同检查，结论必须注明模式。
 
 | 失败位置 | 优先查看 |
 | --- | --- |
@@ -91,6 +102,7 @@ Windows 文件观察程序短暂占用 manifest 时，原子替换仅对 `EPERM`
 | 后端启动或测试连接 | MySQL 健康检查、`TEST_DB_URL`、账号权限、Surefire 报告 |
 | 容器构建 | backend / web 构建日志、Maven 下载、npm 安装；不能用跳过断言解决构建问题 |
 | 页面请求 502 或健康超时 | 后端启动日志和 Flyway 日志，确认数据库健康与后端就绪 |
+| Redis 模式健康失败或跨实例身份不一致 | Redis 健康日志、连接密码、两实例的 profile/命名空间/闲置时限、会话序列化错误；默认模式不应依赖 Redis |
 | 浏览器流程 | Playwright HTML、失败截图和 trace，按请求路径检查权限、CSRF、页面状态 |
 | 清理失败 | 精确活动 manifest、数据库身份和连接信息；保留记录并处理根因，不扩大删除范围 |
 

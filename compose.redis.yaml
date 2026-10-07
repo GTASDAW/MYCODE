@@ -1,0 +1,51 @@
+# Opt-in shared Session demonstration. Base compose.yaml stays a single memory-session backend.
+x-redis-backend: &redis-backend
+  build: ./backend
+  environment: &redis-environment
+    DB_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-activity_platform}?characterEncoding=UTF-8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true
+    DB_USERNAME: ${MYSQL_USER:-activity}
+    DB_PASSWORD: ${MYSQL_PASSWORD:-activity_dev_password}
+    DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-Admin123!}
+    DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-Demo123!}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    SPRING_PROFILES_ACTIVE: redis
+    REDIS_HOST: redis
+    REDIS_PORT: '6379'
+    REDIS_PASSWORD: ${REDIS_PASSWORD:-local_redis_password}
+    SESSION_NAMESPACE: ${SESSION_NAMESPACE:-gather:session}
+    SESSION_TIMEOUT: ${SESSION_TIMEOUT:-30m}
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-local_redis_password}
+    command: ['sh', '-c', 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  backend:
+    <<: *redis-backend
+  backend2:
+    <<: *redis-backend
+  web:
+    volumes:
+      - ./frontend/nginx.redis.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - backend2
+
+volumes:
+  redis-data:
