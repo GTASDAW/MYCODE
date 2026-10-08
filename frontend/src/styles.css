@@ -678,6 +678,27 @@ main:focus {
 .activity-summary {
   min-width: 0;
 }
+.monitoring-snapshot {
+  margin-bottom: 20px;
+}
+.monitoring-note {
+  margin-top: 12px;
+}
+.monitoring-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.monitoring-detail-card {
+  min-width: 0;
+}
+.monitoring-card-intro {
+  margin-bottom: 16px;
+}
+.monitoring-routes .ant-table-thead > tr > th {
+  font-size: 14px;
+}
 .activity-summary {
   margin-bottom: 20px;
 }
@@ -913,6 +934,15 @@ main:focus {
   }
 }
 @media (max-width: 767px) {
+  .monitoring-detail-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .monitoring-snapshot > .ant-card-body,
+  .monitoring-detail-card > .ant-card-body {
+    padding: 18px 16px;
+  }
   .site-header {
     height: 56px;
     padding: 0 16px;

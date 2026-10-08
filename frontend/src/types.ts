@@ -78,3 +78,37 @@ export interface AdminRegistration {
 export interface AdminRegistrationPage extends PageResult<AdminRegistration> {
   activity: Activity;
 }
+
+export interface DurationMetrics {
+  count: number;
+  averageDurationMs: number;
+  maxDurationMs: number | null;
+  p95DurationMs: number | null;
+}
+
+export interface RouteMetrics extends DurationMetrics {
+  method: string;
+  route: string;
+  status: number;
+}
+
+export interface AdminMonitoring {
+  instanceId: string;
+  startedAt: string;
+  sampledAt: string;
+  scope: string;
+  totalRequests: number;
+  clientErrors: number;
+  serverErrors: number;
+  serverErrorRate: number;
+  averageDurationMs: number;
+  latencyWindowSeconds: number;
+  routes: RouteMetrics[];
+  registrationLock: DurationMetrics;
+  databasePool: {
+    active: number | null;
+    idle: number | null;
+    pending: number | null;
+    max: number | null;
+  };
+}

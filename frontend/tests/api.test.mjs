@@ -9,8 +9,8 @@ async function freshApi() {
   return import(`../src/api.ts?test=${sequence++}`);
 }
 
-const response = (status, body) => new Response(JSON.stringify(body), {
-  status, headers: { 'Content-Type': 'application/json' },
+const response = (status, body, headers = {}) => new Response(JSON.stringify(body), {
+  status, headers: { 'Content-Type': 'application/json', ...headers },
 });
 
 test('an expired CSRF token is refreshed and the original write is replayed only once', async () => {
@@ -98,4 +98,51 @@ test('successful login rotates the token used by the next write; failed logout r
   assert.equal(writes[1].options.headers.get('X-CSRF-TOKEN'), 'token-2');
   await assert.rejects(api.logout(), error => error.message === '退出暂时失败');
   assert.equal(tokenFetches, 2);
+});
+
+test('server errors retain a UUID request ID and show it only in the incident message', async () => {
+  const { api, ApiError, errorMessage } = await freshApi();
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  globalThis.fetch = async () => response(500, { message: '暂时无法读取指标', code: 'INTERNAL_ERROR' }, { 'X-Request-Id': requestId });
+  await assert.rejects(api.adminMonitoring(), error => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.requestId, requestId);
+    assert.equal(error.message, '暂时无法读取指标');
+    assert.equal(errorMessage(error), `暂时无法读取指标（问题编号：${requestId}）`);
+    return true;
+  });
+  globalThis.fetch = async () => response(403, { message: '仅组织者可访问', code: 'FORBIDDEN' }, { 'X-Request-Id': requestId });
+  await assert.rejects(api.adminMonitoring(), error => {
+    assert.equal(error.requestId, requestId);
+    assert.equal(errorMessage(error), '仅组织者可访问');
+    return true;
+  });
+});
+
+test('arbitrary request ID headers and network errors never add incident IDs', async () => {
+  const { api, errorMessage } = await freshApi();
+  globalThis.fetch = async () => response(500, { message: '稍后重试' }, { 'X-Request-Id': '<script>untrusted-id</script>' });
+  await assert.rejects(api.adminMonitoring(), error => {
+    assert.equal(error.requestId, undefined);
+    assert.equal(errorMessage(error), '稍后重试');
+    return true;
+  });
+  globalThis.fetch = async () => { throw new TypeError('fetch failed'); };
+  await assert.rejects(api.adminMonitoring(), error => {
+    assert.equal(error.requestId, undefined);
+    assert.equal(error.code, 'NETWORK_ERROR');
+    return true;
+  });
+});
+
+test('an invalid JSON error response preserves its validated request ID', async () => {
+  const { api, errorMessage } = await freshApi();
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  globalThis.fetch = async () => new Response('invalid JSON', { status: 502, headers: { 'X-Request-Id': requestId } });
+  await assert.rejects(api.adminMonitoring(), error => {
+    assert.equal(error.code, 'INVALID_RESPONSE');
+    assert.equal(error.requestId, requestId);
+    assert.ok(errorMessage(error).includes(requestId));
+    return true;
+  });
 });

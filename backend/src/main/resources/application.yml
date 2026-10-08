@@ -42,6 +42,11 @@ management:
     health:
       show-details: never
 app:
+  instance-id: ${INSTANCE_ID:local}
   demo-seed-enabled: ${DEMO_SEED_ENABLED:true}
   demo-admin-password: ${DEMO_ADMIN_PASSWORD:Admin123!}
   demo-user-password: ${DEMO_USER_PASSWORD:Demo123!}
+logging:
+  structured:
+    format:
+      console: logstash

@@ -1,6 +1,8 @@
 package com.example.gather.security;
 
 import com.example.gather.api.ApiModels.ErrorView;
+import com.example.gather.monitoring.RequestObservationFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,15 +38,15 @@ public class SecurityConfiguration {
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(errors -> errors
-                .authenticationEntryPoint((request, response, exception) -> write(json, response, 401,
+                .authenticationEntryPoint((request, response, exception) -> writeFailure(json, request, response, exception, 401,
                     new ErrorView("UNAUTHENTICATED", "请先登录")))
-                .accessDeniedHandler((request, response, exception) -> write(json, response, 403,
+                .accessDeniedHandler((request, response, exception) -> writeFailure(json, request, response, exception, 403,
                     new ErrorView(exception instanceof CsrfException ? "CSRF_INVALID" : "FORBIDDEN",
                         exception instanceof CsrfException ? "安全凭证已失效，请刷新后重试" : "没有执行此操作的权限"))))
             .formLogin(login -> login.loginProcessingUrl("/api/auth/login")
                 .successHandler((request, response, authentication) -> write(json, response, 200,
                     ((AppUserDetails) authentication.getPrincipal()).view()))
-                .failureHandler((request, response, exception) -> write(json, response, 401,
+                .failureHandler((request, response, exception) -> writeFailure(json, request, response, exception, 401,
                     new ErrorView("INVALID_CREDENTIALS", "用户名或密码不正确"))))
             .logout(logout -> logout.logoutUrl("/api/auth/logout").invalidateHttpSession(true)
                 .deleteCookies("JSESSIONID")
@@ -57,5 +59,11 @@ public class SecurityConfiguration {
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         json.writeValue(response.getWriter(), value);
+    }
+
+    private static void writeFailure(ObjectMapper json, HttpServletRequest request, HttpServletResponse response,
+                                     Exception exception, int status, Object value) throws IOException {
+        request.setAttribute(RequestObservationFilter.EXCEPTION_ATTRIBUTE, exception.getClass().getName());
+        write(json, response, status, value);
     }
 }

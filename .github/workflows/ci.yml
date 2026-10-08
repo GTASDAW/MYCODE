@@ -267,3 +267,76 @@ jobs:
       - name: Remove only the isolated shared-session CI stack
         if: always()
         run: docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml down --volumes --remove-orphans
+
+  performance:
+    name: Signup HTTP performance baseline
+    needs: [frontend, backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: gather-perf-ci
+      MYSQL_DATABASE: activity_platform_perf
+      MYSQL_USER: activity
+      MYSQL_PASSWORD: activity_ci_password
+      MYSQL_ROOT_PASSWORD: ci_mysql_root_password
+      APP_PORT: '18098'
+      SESSION_COOKIE_SECURE: 'false'
+      DEMO_ADMIN_PASSWORD: Admin123!
+      DEMO_USER_PASSWORD: Demo123!
+      PERF_BASE_URL: http://127.0.0.1:18098
+      PERF_DB_HOST: 127.0.0.1
+      PERF_DB_PORT: '33306'
+      PERF_DB_NAME: activity_platform_perf
+      PERF_DB_USERNAME: activity
+      PERF_DB_PASSWORD: activity_ci_password
+      PERF_CPU_LIMIT: '2'
+      PERF_MEMORY_LIMIT: 1024m
+      PERF_APP_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install and verify measurement safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci
+          npm ci 2>&1 | tee .runtime/ci/performance-install.log
+          npm run test:performance-safety 2>&1 | tee .runtime/ci/performance-safety.log
+      - name: Build a separate stack with fixed resource limits
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml config --quiet
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml up --build -d --wait --wait-timeout 180 2>&1 | tee .runtime/ci/performance-compose-start.log
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml exec -T backend java -version > .runtime/ci/performance-java-version.log 2>&1
+      - name: Measure signup latency, throughput and database invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PERF_JAVA_VERSION="$(head -n 1 .runtime/ci/performance-java-version.log)"
+          npm run check:performance 2>&1 | tee .runtime/ci/performance-run.log
+          cat .runtime/ci/performance.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect isolated performance diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .runtime/ci
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml ps --all > .runtime/ci/performance-compose-status.log 2>&1
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml logs --no-color > .runtime/ci/performance-services.log 2>&1
+      - name: Preserve actual measurement and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signup-performance-baseline
+          path: |
+            .runtime/ci/performance*
+            .runtime/performance/
+          include-hidden-files: true
+          retention-days: 7
+      - name: Remove only the isolated performance CI stack
+        if: always()
+        run: docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml down --volumes --remove-orphans

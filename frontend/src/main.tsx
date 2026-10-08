@@ -14,6 +14,7 @@ import { NotFoundPage, ProtectedRoute } from "./pages/AccessPages";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AdminActivitiesPage } from "./pages/AdminActivitiesPage";
 import { AdminRegistrationsRoute } from "./pages/AdminRegistrationsPage";
+import { AdminMonitoringPage } from "./pages/AdminMonitoringPage";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -61,6 +62,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={
                     <ProtectedRoute admin>
                       <AdminDashboardPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/monitoring"
+                  element={
+                    <ProtectedRoute admin>
+                      <AdminMonitoringPage />
                     </ProtectedRoute>
                   }
                 />

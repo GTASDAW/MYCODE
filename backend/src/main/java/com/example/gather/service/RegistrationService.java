@@ -6,6 +6,7 @@ import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.RegistrationRow;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.RegistrationMapper;
+import com.example.gather.monitoring.MonitoringService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,12 +21,14 @@ public class RegistrationService {
     private final RegistrationMapper registrations;
     private final ActivityService activityService;
     private final Clock clock;
+    private final MonitoringService monitoring;
 
-    public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService, Clock clock) {
+    public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService, Clock clock, MonitoringService monitoring) {
         this.activities = activities;
         this.registrations = registrations;
         this.activityService = activityService;
         this.clock = clock;
+        this.monitoring = monitoring;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -74,7 +77,7 @@ public class RegistrationService {
     }
 
     private ActivityRow lockOpenActivity(long activityId) {
-        ActivityRow activity = activities.lockById(activityId);
+        ActivityRow activity = monitoring.measureRegistrationLock(() -> activities.lockById(activityId));
         if (activity == null) throw new ApiException(HttpStatus.NOT_FOUND, "ACTIVITY_NOT_FOUND", "活动不存在");
         // Check after acquiring the lock: a request waiting for a seat may cross the start time.
         if (!activity.startsAt().toInstant(ZoneOffset.UTC).isAfter(clock.instant())) {

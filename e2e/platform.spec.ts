@@ -468,7 +468,7 @@ test('活动管理使用真实字面搜索、状态和分页，筛选回到第�
   await noDocumentOverflow(page);
 });
 
-test('普通用户的管理页面不查询数据，三个管理接口均由后端拒绝', async ({ page }) => {
+test('普通用户的管理页面不查询数据，管理接口均由后端拒绝', async ({ page }) => {
   await login(page, 'demo', 'Demo123!');
   const all = await (await page.request.get('/api/activities')).json() as ActivityResponse[];
   expect(all.length).toBeGreaterThan(0);
@@ -476,22 +476,69 @@ test('普通用户的管理页面不查询数据，三个管理接口均由后�
   page.on('request', request => {
     if (request.method() === 'GET' && new URL(request.url()).pathname.startsWith('/api/admin/')) managementReads.push(request.url());
   });
-  for (const path of ['/admin/dashboard', '/admin/activities', `/admin/activities/${all[0].id}/registrations`, '/admin/activities/new']) {
+  for (const path of ['/admin/dashboard', '/admin/monitoring', '/admin/activities', `/admin/activities/${all[0].id}/registrations`, '/admin/activities/new']) {
     await page.goto(path);
     await expect(page.getByText('此页面仅对活动组织者开放', { exact: true })).toBeVisible();
     await expect(page.getByRole('link', { name: '活动管理', exact: true })).toHaveCount(0);
     await noDocumentOverflow(page);
   }
   expect(managementReads).toEqual([]);
-  for (const path of ['/api/admin/overview', '/api/admin/activities', `/api/admin/activities/${all[0].id}/registrations`]) {
+  for (const path of ['/api/admin/overview', '/api/admin/monitoring', '/api/admin/activities', `/api/admin/activities/${all[0].id}/registrations`]) {
     const response = await page.request.get(path);
     expect(response.status()).toBe(403);
     expect((await response.json()).code).toBe('FORBIDDEN');
+    expect(response.headers()['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
   }
   await logout(page);
-  await page.goto('/admin/dashboard');
+  await page.goto('/admin/monitoring');
   await expect(page).toHaveURL(/\/login$/);
   expect(managementReads).toEqual([]);
+});
+
+test('运行指标来自真实实例，刷新直达、请求编号和错误重试可用', async ({ page }, testInfo) => {
+  const runtimeErrors: string[] = [];
+  page.on('pageerror', error => runtimeErrors.push(error.message));
+  await login(page, 'admin', 'Admin123!');
+  const loaded = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/monitoring' && response.ok());
+  await page.goto('/admin/monitoring');
+  const response = await loaded;
+  expect(response.headers()['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+  const metrics = await response.json();
+  expect(metrics.totalRequests).toBeGreaterThan(0);
+  expect(metrics.latencyWindowSeconds).toBe(300);
+  expect(metrics.serverErrorRate).toBeGreaterThanOrEqual(0);
+  expect(metrics.serverErrorRate).toBeLessThanOrEqual(1);
+  expect(Date.parse(metrics.sampledAt)).toBeGreaterThanOrEqual(Date.parse(metrics.startedAt));
+  expect(metrics.databasePool.max).toBe(20);
+  expect(metrics.routes.some((row: { count: number }) => row.count > 0)).toBeTruthy();
+  expect(metrics.routes.some((row: { route: string }) => row.route === '/api/admin/monitoring' || row.route === '/api/health')).toBeFalsy();
+  await expect(page.getByRole('heading', { name: '运行指标', exact: true })).toBeVisible();
+  await expect(page.getByTestId('monitoring-instance')).toHaveText(metrics.instanceId);
+  await expect(page.getByText('统计仅来自当前实例', { exact: false })).toBeVisible();
+  await noDocumentOverflow(page);
+  await capture(page, testInfo, 'admin-monitoring');
+  const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/monitoring' && response.ok());
+  await page.getByRole('button', { name: '刷新指标', exact: true }).click();
+  const next = await (await refreshed).json();
+  await expect(page.getByTestId('monitoring-instance')).toHaveText(next.instanceId);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '运行指标', exact: true })).toBeVisible();
+  await expect(page.getByTestId('monitoring-instance')).toBeVisible();
+
+  // Only a controlled failure is injected; successful metric data always comes from the server.
+  const requestId = 'b45f3889-6fe5-4c32-8209-c380d0bdc644';
+  await page.route('**/api/admin/monitoring', route => route.fulfill({
+    status: 500, contentType: 'application/json', headers: { 'X-Request-Id': requestId },
+    body: JSON.stringify({ code: 'INTERNAL_ERROR', message: '服务暂时不可用，请稍后重试。' }),
+  }));
+  await page.getByRole('button', { name: '刷新指标', exact: true }).click();
+  await expect(page.getByText(`服务暂时不可用，请稍后重试。（问题编号：${requestId}）`, { exact: true })).toBeVisible();
+  await page.unroute('**/api/admin/monitoring');
+  const recovered = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/monitoring' && response.ok());
+  await page.getByRole('button', { name: '重新加载', exact: true }).click();
+  await expect(page.getByTestId('monitoring-instance')).toHaveText((await (await recovered).json()).instanceId);
+  await noDocumentOverflow(page);
+  expect(runtimeErrors).toEqual([]);
 });
 
 test('相同条件查询刷新真实人数，结果减少时自动回到有效页码', async ({ page, request, playwright }, testInfo) => {

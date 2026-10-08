@@ -10,6 +10,7 @@ import {
 } from "antd";
 import {
   CalendarOutlined,
+  AreaChartOutlined,
   DashboardOutlined,
   DownOutlined,
   FileAddOutlined,
@@ -55,6 +56,11 @@ export function Layout() {
             to: "/admin/activities/new",
             label: "发布活动",
             icon: <FileAddOutlined aria-hidden="true" />,
+          },
+          {
+            to: "/admin/monitoring",
+            label: "运行指标",
+            icon: <AreaChartOutlined aria-hidden="true" />,
           },
         ]
       : []),

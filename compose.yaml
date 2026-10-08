@@ -23,6 +23,7 @@ services:
       DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-Admin123!}
       DEMO_USER_PASSWORD: ${DEMO_USER_PASSWORD:-Demo123!}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      INSTANCE_ID: ${INSTANCE_ID:-local}
     depends_on:
       mysql:
         condition: service_healthy

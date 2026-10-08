@@ -6,7 +6,9 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:cleanup": "node --test scripts/e2e-cleanup.test.mjs",
-    "cleanup:e2e": "node scripts/e2e-cleanup.mjs"
+    "cleanup:e2e": "node scripts/e2e-cleanup.mjs",
+    "test:performance-safety": "node --test scripts/performance-check.test.mjs",
+    "check:performance": "node scripts/performance-check.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

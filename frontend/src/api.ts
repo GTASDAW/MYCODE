@@ -4,6 +4,7 @@ import type {
   Registration,
   User,
   AdminOverview,
+  AdminMonitoring,
   AdminActivityQuery,
   AdminRegistrationQuery,
   AdminRegistrationPage,
@@ -18,12 +19,25 @@ interface CsrfToken {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly requestId?: string;
 
-  constructor(status: number, message: string, code = "REQUEST_FAILED") {
+  constructor(
+    status: number,
+    message: string,
+    code = "REQUEST_FAILED",
+    requestId?: string,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    if (
+      requestId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        requestId,
+      )
+    )
+      this.requestId = requestId;
   }
 }
 
@@ -61,6 +75,7 @@ async function request<T>(
   }
 
   let body: unknown;
+  const requestId = response.headers.get("X-Request-Id") ?? undefined;
   if (response.status !== 204) {
     try {
       body = await response.json();
@@ -69,6 +84,7 @@ async function request<T>(
         response.status,
         "服务暂时不可用，请稍后重试。",
         "INVALID_RESPONSE",
+        requestId,
       );
     }
   }
@@ -94,6 +110,7 @@ async function request<T>(
       response.status,
       details?.message || fallback,
       details?.code,
+      requestId,
     );
   }
   return body as T;
@@ -147,6 +164,8 @@ export const api = {
     request<Registration[]>("/me/registrations", { signal }),
   adminOverview: (signal?: AbortSignal) =>
     request<AdminOverview>("/admin/overview", { signal }),
+  adminMonitoring: (signal?: AbortSignal) =>
+    request<AdminMonitoring>("/admin/monitoring", { signal }),
   adminActivities: (query: AdminActivityQuery, signal?: AbortSignal) =>
     request<PageResult<Activity>>(
       `/admin/activities?${new URLSearchParams({
@@ -181,5 +200,7 @@ export const api = {
 };
 
 export function errorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status >= 500 && error.requestId)
+    return `${error.message}（问题编号：${error.requestId}）`;
   return error instanceof Error ? error.message : "操作未完成，请稍后重试。";
 }
