@@ -34,7 +34,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 | 管理员 | `admin` | `Admin123!` |
 | 普通用户 | `demo` | `Demo123!` |
 
-管理员可以使用概览、活动管理、发布活动和报名名单四类页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
+管理员可以使用概览、活动管理、发布活动、报名名单和运行指标页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
 
 ## Docker Compose 部署
 
@@ -78,6 +78,7 @@ Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保�
 | `GET /api/auth/me` | 当前用户 | 登录 |
 | `GET /api/activities`、`GET /api/activities/{id}` | 活动列表、详情 | 公开 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
+| `GET /api/admin/monitoring` | 当前实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/activities` | 搜索、状态筛选、分页管理列表 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 分页、按状态查看报名名单 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
@@ -97,6 +98,12 @@ Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保�
 - 时间在接口中使用 UTC，在页面中按北京时间显示。
 
 管理活动列表支持标题或地点的字面子串搜索，以及全部、未开始、可报名、满员、已开始筛选；报名名单支持全部、已报名、候补中、已取消筛选。管理分页默认每页 10 条，接口最多每页 100 条。概览统计包含所有活动的有效报名数和候补记录数，剩余名额只统计尚未开始的活动，详细口径见 [架构与接口说明](docs/architecture.md)。
+
+## 请求追踪与运行指标
+
+进入 Java 的 API 请求返回服务端生成的 `X-Request-Id`，用来关联安全 JSON 日志；5xx 页面提示显示可复制的问题编号。管理员在 `/admin/monitoring` 手动读取当前实例的请求总数、累计平均耗时、5xx 错误率、4xx 数量、按路由统计及数据库连接池快照。
+
+统计只属于当前 Java 进程，重启后重置。路由 P95/最大值是近 5 分钟旋转窗口，健康和监控读取不计入 HTTP Timer；活动记录获取耗时包含 SQL 与行锁等待，不是数据库纯锁等待。范围和排查方式见 [请求追踪与指标说明](docs/observability.md)。
 
 ## 验证
 
@@ -139,7 +146,9 @@ npm run build
 
 GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试、默认 Compose 环境的迁移与重启检查，以及 Redis 双实例共享登录和桌面/手机浏览器检查。两种 Session 模式分别验证，构建和检查不会发布网站。
 
-查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器测试使用独立 `activity_platform_e2e` 数据库，不使用本机演示库；具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
+独立的 `performance` 任务在 `gather-perf-ci`、`activity_platform_perf` 和固定容器资源下执行两种报名场景，共 18 轮；记录客户端原始延迟、吞吐量、错误及真实数据库一致性，精确清理本轮数据。方法、复现与实际报告见 [性能评测](docs/performance-report.md)。
+
+查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
 ## 从代码中学习
 
@@ -154,6 +163,8 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
 - [Redis 共享 Session 与双实例演示](docs/shared-session.md)
+- [请求追踪与运行指标](docs/observability.md)
+- [可复现报名性能评测](docs/performance-report.md)
 - [验证记录与当前部署边界](docs/verification.md)
 
 当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。Redis 可选方案用于共享 Session，默认本机启动保持简单；限流、名额缓存和 Redis 高可用未在本轮加入。

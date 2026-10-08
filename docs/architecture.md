@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | 页面 | React、TypeScript、Vite、Ant Design、React Router | 页面路由、表单、加载状态、错误反馈 |
 | HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON |
+| 请求追踪与指标 | 请求观察 Filter、MDC、结构化日志、Micrometer Timer | 关联请求与安全错误日志，记录当前实例耗时与连接池快照 |
 | 身份与权限 | Spring Security、Cookie Session、CSRF | 登录、识别当前用户、校验管理员权限 |
 | 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
 | 业务与事务 | Java 服务层、Spring 事务 | 报名规则、取消规则、事务边界 |
@@ -19,7 +20,8 @@
 flowchart LR
     B[浏览器 / React 页面] --> P[统一入口]
     P -->|静态文件| F[React 构建产物]
-    P -->|/api 请求| S[Spring Security]
+    P -->|/api 请求| O[请求观察 Filter：UUID / 日志 / 计时]
+    O --> S[Spring Security]
     S --> C[Controller：参数与响应]
     C --> V[Service：业务规则与事务]
     V --> M[MyBatis：SQL]
@@ -45,6 +47,7 @@ flowchart LR
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的七项真实统计（含候补记录数） | 管理员 |
+| `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 分页查看活动报名名单 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
@@ -56,7 +59,7 @@ flowchart LR
 
 ## 管理查询与统计口径
 
-管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new` 和报名名单 `/admin/activities/{id}/registrations`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
+管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、报名名单 `/admin/activities/{id}/registrations` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
 
 `GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）和 `status`（默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。
 
@@ -76,10 +79,12 @@ flowchart LR
 
 筛选条件或每页数量改变时，前端回到第一页。活动列表在第一页使用相同关键词再次点击查询，也会重新读取服务端数据；其他位置提交搜索回到第一页。报名变化让当前页超出总页数时，两个管理列表自动回到最后一个有效页，最少为第一页。读取请求在页面或账号切换时取消或忽略过期结果，页码校正也不能覆盖更新后的查询条件。
 
+运行指标返回 `scope=CURRENT_JVM`、实例编号及启动/采样时间，页面仅手动刷新。请求数、平均耗时和错误率是本进程累计值；按路由/状态的 P95 与最大值来自 300 秒 Micrometer 旋转窗口，属于近似统计，不能跨路由或实例平均为全局 P95。健康与监控读取不计入自定义 HTTP Timer；活动记录获取耗时包含 SQL 执行与行锁等待。请求标识、日志边界和详细口径见 [请求追踪与运行指标](observability.md)。
+
 ## 一次报名请求怎么走
 
 1. 用户在活动详情页点击报名。前端携带 Session Cookie，以及从认证模块取得的 CSRF 请求头。
-2. Spring Security 验证 CSRF 和登录身份。没有登录的请求不会进入报名业务。
+2. 请求观察 Filter 先生成 `X-Request-Id`，在 Session 和 Spring Security 处理期间保留 MDC；Spring Security 验证 CSRF 和登录身份。没有登录的请求不会进入报名业务。
 3. Controller 接收活动 ID，服务层从可信的登录身份取得用户 ID。
 4. 服务层开启 `READ_COMMITTED` 隔离级别的事务，先用 `SELECT ... FOR UPDATE` 锁定活动记录。
 5. 取得锁后检查活动是否已经开始，再用普通 `SELECT` 读取该用户的报名记录并检查名额。
@@ -104,4 +109,4 @@ Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保�
 
 默认本机和基础 Compose 运行单个 Java 服务和单个 MySQL 数据库；Java 重启后内存 Session 丢失，需要重新登录。可选 Redis 方案提供两个后端的共享会话演示，默认闲置时限为 30 分钟；Redis AOF 和数据卷不等于故障期间零会话丢失，也不提供高可用保证。
 
-同一个活动的报名、取消和候补递补通过 MySQL 行锁串行处理，不同活动可以并发处理。Redis 只保存 Session，不代替数据库约束、事务或候补排序。热门活动可能产生锁等待；限流、监测和容量优化需要根据真实响应时间和负载另行评估。
+同一个活动的报名、取消和候补递补通过 MySQL 行锁串行处理，不同活动可以并发处理。Redis 只保存 Session，不代替数据库约束、事务或候补排序。热门活动可能产生锁等待；当前请求指标和 [固定负载评测](performance-report.md) 用于收集证据，限流和容量优化根据实测另行评估。

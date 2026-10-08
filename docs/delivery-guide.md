@@ -14,6 +14,7 @@
 | `backend` | Java 21、Maven Wrapper，运行现有权限、查询、事务、并发和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
 | `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
 | `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
+| `performance` | 固定资源下的两种报名场景、客户端原始延迟、18 轮一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
 
 工作流在推送 `main`、针对 `main` 的 Pull Request 和手工触发时运行；仅修改 `docs/`、`README.md`、`AGENTS.md` 时跳过，避免重复已经通过的业务检查。容器检查等待前端和后端检查通过。Actions 使用固定提交 SHA，Node.js 使用 24.21.0，MySQL 使用 8.4.11 并固定镜像 digest。
 
@@ -70,6 +71,14 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 `scripts/redis-session-check.mjs` 在明确的 `gather-redis-ci` 隔离项目中验证跨实例会话。默认闲置时限是 30 分钟；3 秒失效场景会重新配置该项目的两个后端，停止访问后验证失效，再恢复 30 分钟。恢复后从轮询入口执行完整桌面/手机浏览器回归。脚本保留报告并精确清理自己的数据库记录，CI 保存日志后只收尾本次隔离项目。
 
 两种重启断言都要保留：默认容器模式重启后原 Session 应失效；Redis 模式在会话有效且 Redis 可用时重启 A，原 Cookie 在 A/B 仍应识别同一身份。不能为了 Redis 的新行为删掉默认模式回归。新建空库的双实例启动还要验证管理员和普通用户各一条、演示活动正好三场，不能依赖启动失败后重试来掩盖初始化竞态。
+
+## 性能基线交付
+
+第五个任务 `performance` 使用默认内存 Session 和单个后端，叠加 `.github/compose.perf-ci.yaml`，Java 与 MySQL 容器各限定 2 CPU、1024 MiB。它使用独立库 `activity_platform_perf`、网页回环端口 18098，与浏览器/Redis 任务的 `activity_platform_e2e` 和数据卷分开，不操作本机演示库。
+
+容器启动后，性能脚本先核对实际 Docker 身份与配额，再最多等待 120 秒，确认 `/api/health` 返回 HTTP 200 且状态 `UP`；单次请求最多 2 秒，循环间隔 1 秒。之后另有最多 30 秒的种子提交等待，避免健康已可用但初始化事务尚未完成。就绪与准备不进入报名计时。环境边界与统计回归使用 `npm run test:performance-safety`，实际测量使用 `npm run check:performance`。
+
+任务保存 `.runtime/ci/performance.json`、`performance.md`、准确临时记录 manifest、Java 版本与容器日志，附件名为 `signup-performance-baseline`。每轮清理自己的活动/报名并恢复相同准备基线，最后清理合成用户与绑定探测；实际结果以报告为准，不提前宣称性能提升。完整参数、计时定义、采样限制和复现命令见 [性能评测](performance-report.md)，不把 CI 构建或测量当作公网发布。
 
 ## 测试数据清理
 
