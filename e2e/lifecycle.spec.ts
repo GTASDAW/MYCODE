@@ -84,6 +84,15 @@ function responseFor(page: Page, path: string, method: string) {
   return page.waitForResponse(response => new URL(response.url()).pathname === path && response.request().method() === method);
 }
 
+function managementResponse(page: Page, keyword: string, status: 'ALL' | 'CANCELLED') {
+  return page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === '/api/admin/activities'
+      && url.searchParams.get('keyword') === keyword && url.searchParams.get('status') === status
+      && url.searchParams.get('page') === '1';
+  });
+}
+
 async function noOverflow(page: Page) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
 }
@@ -184,10 +193,10 @@ test('管理员发布编辑并取消活动，有效报名与候补成为保留�
     await expect(card).toContainText('活动已取消');
     await page.goto('/admin/activities');
     await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(edit.title);
-    const filtered = responseFor(page, '/api/admin/activities', 'GET');
+    const filtered = managementResponse(page, edit.title, 'ALL');
     await page.getByRole('button', { name: '查询', exact: true }).click();
     expect((await (await filtered).json()).total).toBe(1);
-    const onlyCancelled = responseFor(page, '/api/admin/activities', 'GET');
+    const onlyCancelled = managementResponse(page, edit.title, 'CANCELLED');
     await selectOption(page, '活动状态', '已取消');
     expect((await (await onlyCancelled).json()).items[0]).toMatchObject({ id: original.id, cancelled: true });
     const row = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: edit.title });
