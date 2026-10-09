@@ -18,6 +18,8 @@
 
 工作流在推送 `main`、针对 `main` 的 Pull Request 和手工触发时运行；仅修改 `docs/`、`README.md`、`AGENTS.md` 时跳过，避免重复已经通过的业务检查。容器检查等待前端和后端检查通过。Actions 使用固定提交 SHA，Node.js 使用 24.21.0，MySQL 使用 8.4.11 并固定镜像 digest。
 
+版本对照由独立的 `.github/workflows/query-comparison.yml` 提供，只接受 `workflow_dispatch` 手工触发。它不是常规 `ci.yml` 的第六个推送检查，避免后续功能修改不断对固定旧版本重新实验。
+
 后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；失败时保留测试截图、trace 和 HTML 报告。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
 
 ## 本地复现
@@ -78,7 +80,17 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 
 容器启动后，性能脚本先核对实际 Docker 身份与配额，再最多等待 120 秒，确认 `/api/health` 返回 HTTP 200 且状态 `UP`；单次请求最多 2 秒，循环间隔 1 秒。之后另有最多 30 秒的种子提交等待，避免健康已可用但初始化事务尚未完成。就绪与准备不进入报名计时。环境边界与统计回归使用 `npm run test:performance-safety`，实际测量使用 `npm run check:performance`。
 
-任务保存 `.runtime/ci/performance.json`、`performance.md`、准确临时记录 manifest、Java 版本与容器日志，附件名为 `signup-performance-baseline`。每轮清理自己的活动/报名并恢复相同准备基线，最后清理合成用户与绑定探测；实际结果以报告为准，不提前宣称性能提升。完整参数、计时定义、采样限制和复现命令见 [性能评测](performance-report.md)，不把 CI 构建或测量当作公网发布。
+当前脚本使用 `gather-signup-v2-write-warmup`：20 次活动列表读取后，再用同/不同活动、并发 1/50 各执行 100 次真实报名，共 400 次写预热，验证状态并逐批清理后开始 18 批正式测量。连接池采样计数明确包含批前、周期和批后。完整成功运行每段应精确清理 1112 场活动、2200 条报名和 100 个临时用户（909 场正式活动、202 场预热活动、1 场绑定探针）；实际删除数量仍以报告为准。
+
+任务保存 `.runtime/ci/performance.json`、`performance.md`、准确临时记录 manifest、Java 版本与容器日志，附件名为 `signup-performance-baseline`。每轮清理自己的活动/报名并恢复相同准备基线，最后清理合成用户与绑定探测；实际结果以报告为准，不提前宣称性能提升。[性能评测](performance-report.md) 保留 2026-10-08 v1 的读预热历史结果；当前 v2 方法与计时边界见 [查询优化复盘](query-optimization-review.md)。两者不混为同一套数字，不把 CI 构建或测量当作公网发布。
+
+## 锁定查询版本对照
+
+在 Actions 手工触发 `.github/workflows/query-comparison.yml` 的 `query-comparison` 任务，从固定旧提交和当前提交构建后端，在同一 runner 按 A1 → B1 → B2 → A2 执行 `scripts/compare-signup.sh`。MySQL 容器、数据卷和 Nginx 保持在同一隔离项目；每段重建目标 JVM 并重启 Nginx 刷新 DNS。镜像源码标签和实际 JAR 指纹核对真实版本，数据库身份、资源与唯一探针验证在各段继续执行。
+
+每段先用同/不同活动、并发 1/50 各 100 次执行 400 次写预热，再运行原有 18 批、1800 次正式报名。四段合计 1600 次独立预热、72 批和 7200 次正式请求；全部按归属清理，不让预热或前一轮改变后续固定数据基线。准备与预热排除正式计时，失败区块不能被分析脚本忽略。
+
+`scripts/performance-compare.mjs` 核对四段原始 JSON 后输出汇总。分段产物在 `.runtime/ci/comparison/{A1,B1,B2,A2}/performance.{json,md}`，汇总在 `.runtime/ci/comparison/comparison.{json,md}`；CI 附件名为 `signup-query-comparison`。参数以工作流该任务为准，代码事实、执行计划、统计口径与结论见 [查询优化复盘](query-optimization-review.md)。2026-10-08 历史基线仍单独保留，不与新任务不同主机的数字直接比较。
 
 ## 测试数据清理
 

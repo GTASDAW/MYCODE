@@ -146,7 +146,9 @@ npm run build
 
 GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试、默认 Compose 环境的迁移与重启检查，以及 Redis 双实例共享登录和桌面/手机浏览器检查。两种 Session 模式分别验证，构建和检查不会发布网站。
 
-独立的 `performance` 任务在 `gather-perf-ci`、`activity_platform_perf` 和固定容器资源下执行两种报名场景，共 18 轮；记录客户端原始延迟、吞吐量、错误及真实数据库一致性，精确清理本轮数据。方法、复现与实际报告见 [性能评测](docs/performance-report.md)。
+独立的 `performance` 任务在 `gather-perf-ci`、`activity_platform_perf` 和固定容器资源下执行两种报名场景，共 18 轮正式测量；当前 v2 脚本先执行 20 次读取和 400 次真实写预热，预热单独验证及清理。它记录客户端原始延迟、吞吐量、错误及真实数据库一致性；[性能评测](docs/performance-report.md) 保留首次 v1 历史结果，当前方法见 [查询优化复盘](docs/query-optimization-review.md)。
+
+单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -165,6 +167,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [Redis 共享 Session 与双实例演示](docs/shared-session.md)
 - [请求追踪与运行指标](docs/observability.md)
 - [可复现报名性能评测](docs/performance-report.md)
+- [报名锁定查询优化与版本对照](docs/query-optimization-review.md)
 - [验证记录与当前部署边界](docs/verification.md)
 
 当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。Redis 可选方案用于共享 Session，默认本机启动保持简单；限流、名额缓存和 Redis 高可用未在本轮加入。

@@ -2,6 +2,10 @@
 
 2026-10-08 已在隔离 CI 完成 18 轮、1800 次真实 HTTP 报名。全部返回 HTTP 200，人数、候补、服务端计数及精确清理断言通过。结果来自源码提交 `5285067bf76a11dddf8097beacc985c7f5f4c828` 的 [性能任务](https://github.com/GTASDAW/MYCODE/actions/runs/37737597986)，本报告记录测量基线与限制，没有宣称性能优化或生产容量。
 
+本页保留 2026-10-08 **v1** 的历史方法、数字和当时结论：只有 20 次读取预热，测量 1800 次报名，清理 910 场活动、1800 条报名和 100 个用户；当时的 `poolSamples` 计数未包含批后采样。当前脚本已采用 **v2 / `gather-signup-v2-write-warmup`**，增加 400 次独立真实写预热，采样计数包含批前/周期/批后，完整成功运行应清理 1112 场活动、2200 条报名和 100 个临时用户。下文历史表和结果不改写为 v2 数据。
+
+2026-10-09 的 [锁定查询优化对照](query-optimization-review.md) 在同一主机交错运行两个版本，并使用相同 v2 脚本；只在新实验内部作前后比较，不将本页 v1 数字与不同 CI 运行直接算成收益。
+
 ## 固定环境与负载
 
 `scripts/performance-check.mjs` 只接受隔离项目 `gather-perf-ci` 和独立库 `activity_platform_perf`，通过回环地址的 Nginx `http://127.0.0.1:18098` 访问真实 Java/MySQL。数据库仅向测试脚本暴露回环端口 33306。基线使用默认内存 Session、单个后端；Java 和 MySQL 容器各配置 2 CPU、1024 MiB，脚本通过 Docker inspect 核对实际配额与连接目标。
@@ -56,6 +60,8 @@ JSON 保留每轮 100 个原始延迟样本及错误/状态分布，Markdown 展
 ## 复现与实际结果
 
 隔离 CI 的第五个任务 `performance` 使用基础 Compose、`.github/compose.ci.yaml` 和 `.github/compose.perf-ci.yaml`，同时固定 Java 和 MySQL 配额。运行前应保持工作区干净，使完整提交 SHA 与实际构建代码一致；以下 Bash 命令只用于新建的临时隔离项目，密码是 CI 样例：
+
+以下命令在当前 HEAD 上调用 **v2** 脚本，不会复现本页 v1 数字。复现历史方法需固定本页注明的旧源码提交；执行当前方法时，应把新增写预热、采样计数和实际清理数量与 [新复盘](query-optimization-review.md) 对照。
 
 ```bash
 export COMPOSE_PROJECT_NAME=gather-perf-ci
