@@ -4,6 +4,10 @@
 
 本轮已完成真实 SQL 证据、38 项本机后端回归和同一 CI 主机的四段 HTTP 对照。7200 次正式报名与 1600 次独立写预热全部返回 200，一致性和精确清理均通过。同活动 50 并发的吞吐中位数提高 6.62%、批 P95 中位数降低 7.18%；这是本次固定条件下的观察，重复范围仍有重叠，不能宣称统计显著或生产环境稳定提升。
 
+本页以下方法和数字记录的是 2026-10-09 固定 V2 实验，不代表当前 V3 源码仍只有三个锁定字段。活动取消功能新增 `cancelled_at` 后，当前 `ActivityLockRow`/`lockById` 需要四列以判断关闭状态；COUNT 和展示字段仍不参与锁定投影。历史结果、计划和 7200/1600 样本数保持原样，不用新功能数据重写旧收益。
+
+复现这份历史对照需在独立干净 checkout 检出候选基准 `d781648d7d9036b653a80e3082b609358a59df35`，按该提交的工作流执行。当前 `scripts/compare-signup.sh` 会核对迁移目录、`ActivityMapper` 和 `RegistrationService` 是否与固定实验兼容，发现 V3 或业务变化就提前拒绝，不能在当前生命周期版本上混用旧应用得出前后提升。常规 `performance` 任务继续测当前单版本 18 批，最新业务合同见 [活动生命周期](activity-lifecycle.md)。
+
 ## 从调用路径找到冗余读取
 
 报名请求沿 `ActivityController` → `RegistrationService.register` → `lockOpenActivity` → `ActivityMapper.lockById` 执行。取消请求也进入 `lockOpenActivity`。这两个写流程在 `READ_COMMITTED` 事务内先锁活动主键行，再普通读取报名状态。

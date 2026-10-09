@@ -1,6 +1,6 @@
 # 活动报名平台：架构与请求流程
 
-这个项目展示一个完整的全栈流程：管理员发布活动，用户查看名额、报名或进入候补，系统在并发请求下维护正确的报名人数并按队列递补。
+这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，系统在并发请求下维护正确人数、递补队列并保留取消历史。
 
 ## 技术分工
 
@@ -34,7 +34,7 @@ flowchart LR
 ## 三张业务表
 
 - **用户**：保存唯一登录名、密码哈希、展示名和角色。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名和昵称修改请求不能自行指定操作人。
-- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。创建后不提供修改名额的接口。
+- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
 - **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。
 
 需要始终满足：活动的当前人数等于该活动的 `ACTIVE` 报名记录数，并且在 `0` 到总名额之间；`WAITING` 记录不占用名额。唯一约束保证同一个用户不会有两条报名记录；事务和行锁保证并发操作下人数正确，候补记录按排队顺序递补。
@@ -49,11 +49,13 @@ flowchart LR
 | `PATCH /api/me/profile` | 只修改当前用户昵称 | 已登录用户，需 CSRF |
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
-| `GET /api/admin/overview` | 管理概览的七项真实统计（含候补记录数） | 管理员 |
+| `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 分页查看活动报名名单 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
+| `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍和地点 | 管理员，需 CSRF |
+| `POST /api/admin/activities/{id}/cancel` | 取消活动，保存首次原因、时间和报名历史 | 管理员，需 CSRF |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补；满员时返回 `WAITING` 状态 | 已登录用户 |
 | `DELETE /api/activities/{id}/registration` | 取消有效报名或退出候补 | 已登录用户 |
 | `GET /api/me/registrations` | 查看当前用户的报名记录 | 已登录用户 |
@@ -66,23 +68,24 @@ flowchart LR
 
 ## 管理查询与统计口径
 
-管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、报名名单 `/admin/activities/{id}/registrations` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
+管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
 
 `GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）和 `status`（默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。
 
 | 活动筛选 | 口径 |
 | --- | --- |
 | `ALL` | 所有活动 |
-| `UPCOMING` | 开始时间晚于当前时间，包含满员活动 |
-| `OPEN` | 尚未开始且有剩余名额 |
-| `FULL` | 尚未开始且有效报名人数等于总名额 |
-| `STARTED` | 开始时间等于或早于当前时间 |
+| `UPCOMING` | 未取消且开始时间晚于当前时间，包含满员活动 |
+| `OPEN` | 未取消、尚未开始且有剩余名额 |
+| `FULL` | 未取消、尚未开始且有效报名人数等于总名额 |
+| `STARTED` | 未取消且开始时间等于或早于当前时间 |
+| `CANCELLED` | 取消时间非空，不依赖原开始时间 |
 
-概览的 `totalActivities` 是所有活动数；`upcomingActivities` 和 `startedActivities` 对应上述时间条件；`fullActivities` 只统计尚未开始的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
+概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的时间条件；`fullActivities` 只统计未取消且尚未开始的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消且尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
 
 `GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，以及 `ALL`、`ACTIVE`、`WAITING`、`CANCELLED` 状态，返回 `{activity,items,total,page,pageSize}`。名单行包含报名 ID、用户 ID、账号、展示名、状态、创建时间和更新时间，时间使用 UTC；按更新时间降序、报名 ID 降序排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
 
-管理列表的总数和当前页查询在只读 `REPEATABLE_READ` 事务的同一快照内执行；概览用一条 SQL 取得七项统计，并单独统计报名表，避免关联多条报名记录后重复累计活动和名额。这些查询不改变报名业务的 `READ_COMMITTED` 事务与行锁设计。
+管理列表的总数和当前页查询在只读 `REPEATABLE_READ` 事务的同一快照内执行；概览用一条 SQL 取得八项统计，并单独统计报名表，避免关联多条报名记录后重复累计活动和名额。这些查询不改变报名业务的 `READ_COMMITTED` 事务与行锁设计。
 
 筛选条件或每页数量改变时，前端回到第一页。活动列表在第一页使用相同关键词再次点击查询，也会重新读取服务端数据；其他位置提交搜索回到第一页。报名变化让当前页超出总页数时，两个管理列表自动回到最后一个有效页，最少为第一页。读取请求在页面或账号切换时取消或忽略过期结果，页码校正也不能覆盖更新后的查询条件。
 
@@ -94,7 +97,7 @@ flowchart LR
 2. 请求观察 Filter 先生成 `X-Request-Id`，在 Session 和 Spring Security 处理期间保留 MDC；Spring Security 验证 CSRF 和登录身份。没有登录的请求不会进入报名业务。
 3. Controller 接收活动 ID，服务层从可信的登录身份取得用户 ID。
 4. 服务层开启 `READ_COMMITTED` 隔离级别的事务，先用 `SELECT ... FOR UPDATE` 锁定活动记录。
-5. 取得锁后检查活动是否已经开始，再用普通 `SELECT` 读取该用户的报名记录并检查名额。
+5. 取得锁后先检查活动是否取消，再检查是否已经开始，然后用普通 `SELECT` 读取该用户的报名记录并检查名额。
 6. 已有效报名或已在候补时直接返回当前结果；有空位时首次报名创建 `ACTIVE` 记录，或把已取消记录恢复为 `ACTIVE`，并增加一次活动人数。满员时首次报名创建 `WAITING` 记录，或把已取消记录重新排到候补队列，不增加活动人数。
 7. 事务提交后释放锁，接口返回最新结果，前端刷新活动信息和报名状态。
 
@@ -102,13 +105,19 @@ flowchart LR
 
 报名记录查询不额外加 `FOR UPDATE`：所有报名状态变更（包括候补递补）已经被所属活动的行锁保护，`READ_COMMITTED` 下的普通查询能读取等待前一事务提交后的状态。这避免查询空报名键时引入间隙锁，影响其他活动的首次报名。验证既包括单个活动争名额、候补递补，也包括不同活动同时首次报名。
 
-内部 `ActivityMapper.lockById` 映射为 `ActivityLockRow`，只读取开始时间、总名额和当前有效人数；公开展示的 `ActivityRow` 仍包含标题、介绍、地点及实时候补人数。返回前的 `ActivityService.get` 在同一事务内重新读取完整详情，因此收窄锁定投影不会改变公开响应。锁定阶段移除的候补 COUNT 是同一条 SQL 中的子查询，版本对照和实际收益边界见 [查询优化复盘](query-optimization-review.md)。
+内部 `ActivityMapper.lockById` 映射为 `ActivityLockRow`，只读取开始时间、总名额、当前有效人数和取消时间四个业务字段；公开展示的 `ActivityRow` 仍包含标题、介绍、地点、取消原因及实时候补人数。返回前的 `ActivityService.get` 在同一事务内重新读取完整详情，因此收窄锁定投影不会改变公开响应。锁定阶段移除的候补 COUNT 是同一条 SQL 中的子查询，版本对照和实际收益边界见 [查询优化复盘](query-optimization-review.md)。
+
+## 组织者编辑与取消
+
+编辑与整场取消也在 `READ_COMMITTED` 事务中先锁活动主键行。编辑只改三个展示字段；取消把该活动的 `ACTIVE`/`WAITING` 报名变为 `CANCELLED`，人数置 0，并同时保存首次原因、UTC 微秒时间和管理员 ID。已有取消报名的 ID 与更新时间保留，取消整场活动不递补候补。并发报名、用户取消或编辑无论先后顺序，都受同一活动行锁保护；失败全部回滚。
+
+已取消活动返回 `cancelled=true`、原因、时间及 `closed=true`。有效的重复组织者取消保留首次结果，越过原开始时间仍幂等；报名、用户取消和编辑返回 409 `ACTIVITY_CANCELLED`。未取消活动开始后拒绝首次编辑或组织者取消，检查时间发生在取得锁后。V3 的外键和 CHECK 保证取消元数据完整与人数为 0，跨表状态不变量还依赖事务。详细 API、迁移、页面认证代次保护和真实验证路径见 [活动生命周期](activity-lifecycle.md)。
 
 ## Cookie Session 与 CSRF
 
 Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保存 `JSESSIONID`，默认模式把身份和 CSRF 状态保存在当前 Java 进程内存；`redis` profile 把这些会话属性存到共享 Redis。两种模式的默认闲置时限都是 30 分钟。登录成功后会话身份发生变化，前端应重新取得 CSRF 信息；退出后清空页面中的用户状态，并使服务端会话失效。
 
-浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。注册、登录、退出、修改昵称、创建活动、报名、进入候补、取消和退出候补都属于写请求。读取活动列表不改变业务状态。
+浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。注册、登录、退出、修改昵称、创建或编辑活动、取消整场活动、报名、进入候补、取消报名和退出候补都属于写请求。读取活动列表不改变业务状态。
 
 可选 Compose overlay 使用 Nginx 轮询两个相同后端，共用 MySQL、Redis、会话命名空间和时限。请求从 A 切换到 B 时，B 仍通过 Cookie 在 Redis 找到同一身份与 CSRF；不需要客户端指定后端，也不依赖粘滞会话。会话有效且 Redis 可用时，重启一个 Java 实例不会清空共享登录；Redis 失效、会话过期或退出后不能继续使用原身份。
 

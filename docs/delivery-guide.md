@@ -11,7 +11,7 @@
 | 检查 | 验证内容 | 数据环境 |
 | --- | --- | --- |
 | `frontend` | 从 lockfile 安装，运行 API/CSRF、账户校验与认证请求顺序回归、TypeScript 检查和生产构建 | 不写数据库 |
-| `backend` | Java 21、Maven Wrapper，运行账户注册/资料与现有权限、查询、事务、并发和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
+| `backend` | Java 21、Maven Wrapper，运行账户注册/资料、活动编辑与取消、权限、查询、真实并发锁顺序/回滚和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
 | `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
 | `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、独立会话最新昵称、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
 | `performance` | 固定资源下的两种报名场景、客户端原始延迟、18 轮一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
@@ -20,7 +20,7 @@
 
 版本对照由独立的 `.github/workflows/query-comparison.yml` 提供，只接受 `workflow_dispatch` 手工触发。它不是常规 `ci.yml` 的第六个推送检查，避免后续功能修改不断对固定旧版本重新实验。
 
-后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户场景关闭 trace，避免保存请求体、Cookie 或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
+后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户和活动生命周期场景关闭 trace，避免保存请求体、Cookie 或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
 
 ## 本地复现
 
@@ -74,6 +74,8 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 
 账户流程另外验证 A 的匿名 CSRF 能向 B 注册、注册不自动登录、两独立 Session 在 A/B 读取修改后的昵称、伪造他人身份无效，以及实例重启、只注销当前会话和重新登录。完整浏览器回归包含注册 → 登录 → 报名 → 修改昵称 → 重登，并覆盖表单/接口失败与账号切换后的迟到读取、保存响应；实际完成数量以 [验证记录](verification.md) 为准。
 
+活动生命周期另有跨 A/B 的报名与组织者取消竞态：不同实例仍竞争同一 MySQL 活动行锁，完成后核对取消原因、人数 0、全部报名已取消及重复取消首次信息不变。完整浏览器流程覆盖发布、编辑、有效报名/候补、取消和历史展示；脚本提供这些验证，实际是否通过仍看 [验证记录](verification.md)。
+
 两种重启断言都要保留：默认容器模式重启后原 Session 应失效；Redis 模式在会话有效且 Redis 可用时重启 A，原 Cookie 在 A/B 仍应识别同一身份。不能为了 Redis 的新行为删掉默认模式回归。新建空库的双实例启动还要验证管理员和普通用户各一条、演示活动正好三场，不能依赖启动失败后重试来掩盖初始化竞态。
 
 ## 性能基线交付
@@ -88,7 +90,9 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 
 ## 锁定查询版本对照
 
-在 Actions 手工触发 `.github/workflows/query-comparison.yml` 的 `query-comparison` 任务，从固定旧提交和当前提交构建后端，在同一 runner 按 A1 → B1 → B2 → A2 执行 `scripts/compare-signup.sh`。MySQL 容器、数据卷和 Nginx 保持在同一隔离项目；每段重建目标 JVM 并重启 Nginx 刷新 DNS。镜像源码标签和实际 JAR 指纹核对真实版本，数据库身份、资源与唯一探针验证在各段继续执行。
+在 Actions 手工触发 `.github/workflows/query-comparison.yml` 的 `query-comparison` 任务，在历史 V2 合同兼容的源码中，从固定旧提交和候选提交构建后端，在同一 runner 按 A1 → B1 → B2 → A2 执行 `scripts/compare-signup.sh`。MySQL 容器、数据卷和 Nginx 保持在同一隔离项目；每段重建目标 JVM 并重启 Nginx 刷新 DNS。镜像源码标签和实际 JAR 指纹核对真实版本，数据库身份、资源与唯一探针验证在各段继续执行。
+
+这份历史实验的候选基准为 `d781648d7d9036b653a80e3082b609358a59df35`。`compare-signup.sh` 对迁移目录、`ActivityMapper` 与 `RegistrationService` 检查差异；当前 V3 或后续业务变化不符合历史三列投影时会在启动实验前拒绝。需要复现历史结果时在独立干净 checkout 检出该提交，并按该提交的工作流与依赖执行；新业务的对照需要另建实验合同。常规 CI 性能任务继续测当前 V3 单版本 18 批，不与旧版本混跑。
 
 每段先用同/不同活动、并发 1/50 各 100 次执行 400 次写预热，再运行原有 18 批、1800 次正式报名。四段合计 1600 次独立预热、72 批和 7200 次正式请求；全部按归属清理，不让预热或前一轮改变后续固定数据基线。准备与预热排除正式计时，失败区块不能被分析脚本忽略。
 
@@ -98,9 +102,9 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 
 - Java 测试只删除自己创建并记录的活动、报名和用户 ID；数据库连接必须是独立测试库，不能指定生产数据库。
 - 浏览器回归记录本次运行创建的活动和账户，结束时先核对全部归属及外部引用，再在同一事务内按“报名 → 活动 → 用户”清理。成功和失败的测试都进入清理，清理失败会导致检查失败，不用空 `catch` 隐藏。
-- 浏览器清理通过五个必填变量 `E2E_DB_HOST`、`E2E_DB_PORT`、`E2E_DB_NAME`、`E2E_DB_USERNAME`、`E2E_DB_PASSWORD` 取得连接，无静默默认值；只接受回环地址和已知开发/测试库。先核对数据库名、服务器 UUID、Flyway V1/V2 和演示身份，再用带唯一标记的探测活动确认 API 与配置的数据库是同一环境。
-- manifest 保存在忽略目录 `.runtime/e2e/<run-uuid>.json`，记录数据库身份和本次活动 ID、准确标题、唯一 description 标记，不记录密码、Cookie 或 Token。创建响应的断言失败时，清理可以凭预先记录的准确标题和唯一标记定位本次记录，不按前缀或 ID 范围删除。
-- 新 `accounts` 字段在注册请求之前保存准确用户名、完整随机标记、固定 `USER` 角色和允许的昵称列表，成功后补充 ID。活动归属、账号当前昵称与角色及账号引用全部核对通过才开始删除；发现用户关联本轮外活动/报名或昵称超出白名单时整个事务回滚。响应丢失时按准确用户名找回并重新核对完整证明；没有 `accounts` 的旧 manifest 仍按原活动清理规则工作。
+- 浏览器清理通过五个必填变量 `E2E_DB_HOST`、`E2E_DB_PORT`、`E2E_DB_NAME`、`E2E_DB_USERNAME`、`E2E_DB_PASSWORD` 取得连接，无静默默认值；只接受回环地址和已知开发/测试库。先核对数据库名、服务器 UUID、Flyway V1/V2/V3、取消列和演示身份，再用带唯一标记的探测活动确认 API 与配置的数据库是同一环境。
+- manifest 保存在忽略目录 `.runtime/e2e/<run-uuid>.json`，记录数据库身份和本次活动 ID、准确标题、唯一 description 标记，不记录密码、Cookie 或 Token。创建响应的断言失败时，清理可以凭预先记录的准确标题和唯一标记定位本次记录，不按前缀或 ID 范围删除。编辑请求前通过 `recordFixtureEditIntent` 持久化准确的允许标题/介绍版本，各版本保留完整的本轮 UUID 标记；响应丢失也只按这些精确版本恢复。未声明修改或多个版本匹配不同活动会拒绝删除，未编辑的旧 manifest 仍接受原证明。
+- 新 `accounts` 字段在注册请求之前保存准确用户名、完整随机标记、固定 `USER` 角色和允许的昵称列表，成功后补充 ID。活动归属、账号当前昵称与角色及账号引用全部核对通过才开始删除；发现用户关联本轮外活动/报名、被本轮外活动记录为 `cancelled_by` 或昵称超出白名单时整个事务回滚。响应丢失时按准确用户名找回并重新核对完整证明；没有 `accounts` 的旧 manifest 仍按原活动清理规则工作。
 - 容器冒烟创建唯一命名活动，核对首次迁移和重启后的记录，随后精确删除自己的临时记录，不删除预置演示活动。
 - CI 在结束阶段保存需要的诊断材料并关闭自己启动的 Compose 项目；只有 CI 本次新建的隔离卷可以销毁。手工运行的常规演示库不适用 CI 清空操作。
 
@@ -116,7 +120,7 @@ Windows 文件观察程序短暂占用 manifest 时，原子替换仅对 `EPERM`
 
 ## 首次迁移、重启与失败排查
 
-容器冒烟会等待 `/api/health` 成功，再验证 Flyway V1、V2 已执行，静态首页和 `/activities/{id}` 刷新直达可用，真实认证 API 能完成报名与候补。
+容器冒烟只接受 `gather-ci`、`activity_platform_e2e`、网页回环端口 18088 和数据库回环端口 33306。先核对实际 Docker 标签、配置与端口，等待 `/api/health`、Flyway V1/V2/V3 和种子事务提交，再用 UUID SQL 探针经公共详情绑定 API 与数据库；探针精确清理完成后才登录和执行业务写入。静态首页、详情直达、报名、编辑、活动取消和重启持久化分别验证。
 
 默认模式重启后端后，同一活动和报名应仍在数据库中；旧登录 Session 应返回未登录，重新登录后恢复操作。Redis 模式另行验证共享会话保留。数据库保留与登录保留是两项不同检查，结论必须注明模式。
 
