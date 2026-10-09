@@ -2,6 +2,7 @@ package com.example.gather;
 
 import com.example.gather.api.ApiModels.CreateActivityRequest;
 import com.example.gather.config.DemoDataInitializer;
+import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.UserMapper;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
@@ -23,6 +24,8 @@ import org.springframework.session.web.http.SessionRepositoryFilter;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -66,6 +69,8 @@ class RegistrationIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ObjectMapper json;
     @Autowired ActivityService activities;
+    @Autowired ActivityMapper activityMapper;
+    @Autowired PlatformTransactionManager transactions;
     @Autowired RegistrationService registrations;
     @Autowired UserMapper users;
     @Autowired DemoDataInitializer demoData;
@@ -189,6 +194,33 @@ class RegistrationIntegrationTest {
         assertThat(activities.get(id, second).registrationStatus()).isEqualTo("ACTIVE");
         assertThat(activities.get(id, second).registeredCount()).isEqualTo(1);
         assertThat(activities.get(id, null).waitingCount()).isZero();
+    }
+
+    @Test
+    void lockProjectionMapsRequiredFieldsAndPreservesLiveCandidateDetails() {
+        long id = createActivity(1);
+        var before = activities.get(id, null);
+        var locked = new TransactionTemplate(transactions).execute(status -> activityMapper.lockById(id));
+        assertThat(locked).isNotNull();
+        assertThat(locked.startsAt().toInstant(ZoneOffset.UTC)).isEqualTo(before.startsAt());
+        assertThat(locked.capacity()).isEqualTo(1);
+        assertThat(locked.registeredCount()).isZero();
+
+        long active = users.findByUsername("demo").id();
+        long firstWaiting = createUser();
+        long secondWaiting = createUser();
+        registrations.register(id, active);
+        registrations.register(id, firstWaiting);
+        var joined = registrations.register(id, secondWaiting);
+        assertThat(joined.registrationStatus()).isEqualTo("WAITING");
+        assertThat(joined.waitingCount()).isEqualTo(2);
+        assertThat(activities.get(id, null).waitingCount()).isEqualTo(2);
+
+        var cancelled = registrations.cancel(id, active);
+        assertThat(cancelled.registeredCount()).isEqualTo(1);
+        assertThat(cancelled.waitingCount()).isEqualTo(1);
+        assertThat(activities.get(id, firstWaiting).registrationStatus()).isEqualTo("ACTIVE");
+        assertThat(activities.get(id, secondWaiting).registrationStatus()).isEqualTo("WAITING");
     }
 
     @Test

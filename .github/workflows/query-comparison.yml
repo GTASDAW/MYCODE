@@ -1,0 +1,77 @@
+name: Query optimization comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gather-query-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  query-comparison:
+    name: Paired signup query comparison on one host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: gather-perf-ci
+      MYSQL_DATABASE: activity_platform_perf
+      MYSQL_USER: activity
+      MYSQL_PASSWORD: activity_ci_password
+      MYSQL_ROOT_PASSWORD: ci_mysql_root_password
+      APP_PORT: '18098'
+      SESSION_COOKIE_SECURE: 'false'
+      DEMO_ADMIN_PASSWORD: Admin123!
+      DEMO_USER_PASSWORD: Demo123!
+      PERF_BASE_URL: http://127.0.0.1:18098
+      PERF_DB_HOST: 127.0.0.1
+      PERF_DB_PORT: '33306'
+      PERF_DB_NAME: activity_platform_perf
+      PERF_DB_USERNAME: activity
+      PERF_DB_PASSWORD: activity_ci_password
+      PERF_CPU_LIMIT: '2'
+      PERF_MEMORY_LIMIT: 1024m
+      PERF_CANDIDATE_SHA: ${{ github.sha }}
+      PERF_EXPERIMENT_ID: query-${{ github.run_id }}-${{ github.run_attempt }}
+      PERF_BACKEND_IMAGE: gather-query-baseline:ccfb35f04432d9b9d54996b84be3832ac55773f9
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install and verify experiment safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci/comparison
+          npm ci 2>&1 | tee .runtime/ci/comparison/install.log
+          npm run test:performance-safety 2>&1 | tee .runtime/ci/comparison/safety.log
+      - name: Build both revisions and measure A1 B1 B2 A2
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/compare-signup.sh 2>&1 | tee .runtime/ci/comparison/experiment.log
+      - name: Collect comparison container diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p .runtime/ci/comparison
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml -f .github/compose.comparison-ci.yaml ps --all > .runtime/ci/comparison/compose-status.log 2>&1
+          docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml -f .github/compose.comparison-ci.yaml logs --no-color > .runtime/ci/comparison/compose-services.log 2>&1
+      - name: Preserve every phase and comparison evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signup-query-comparison
+          path: .runtime/ci/comparison/
+          include-hidden-files: true
+          retention-days: 7
+      - name: Remove only the newly owned experiment resources
+        if: always()
+        run: bash scripts/compare-signup.sh cleanup

@@ -1,0 +1,14 @@
+# Only for a fresh isolated A/B experiment; identifies its images and resources.
+x-experiment-labels: &experiment-labels
+  io.gather.query-experiment: ${PERF_EXPERIMENT_ID:?Set the experiment identity}
+services:
+  mysql:
+    labels: *experiment-labels
+  backend:
+    image: ${PERF_BACKEND_IMAGE:?Set the measured backend image}
+    labels: *experiment-labels
+  web:
+    labels: *experiment-labels
+volumes:
+  mysql-data:
+    labels: *experiment-labels

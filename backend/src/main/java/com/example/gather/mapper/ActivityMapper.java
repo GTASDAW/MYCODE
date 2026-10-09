@@ -1,5 +1,6 @@
 package com.example.gather.mapper;
 
+import com.example.gather.domain.ActivityLockRow;
 import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.NewActivity;
 import org.apache.ibatis.annotations.*;
@@ -19,10 +20,8 @@ public interface ActivityMapper {
 
     // Every registration mutation locks this row before reading registration state.
     // InnoDB serializes contenders for the same activity, keeping check + increment atomic.
-    @Select("SELECT id, title, description, location, starts_at, capacity, registered_count, "
-        + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=activities.id AND rw.status='WAITING') AS waiting_count, "
-        + "NULL AS registration_status FROM activities WHERE id=#{id} FOR UPDATE")
-    ActivityRow lockById(long id);
+    @Select("SELECT starts_at, capacity, registered_count FROM activities WHERE id=#{id} FOR UPDATE")
+    ActivityLockRow lockById(long id);
 
     @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy})")
     @Options(useGeneratedKeys = true, keyProperty = "id")

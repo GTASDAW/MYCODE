@@ -2,7 +2,7 @@ package com.example.gather.service;
 
 import com.example.gather.api.ApiException;
 import com.example.gather.api.ApiModels.*;
-import com.example.gather.domain.ActivityRow;
+import com.example.gather.domain.ActivityLockRow;
 import com.example.gather.domain.RegistrationRow;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.RegistrationMapper;
@@ -33,7 +33,7 @@ public class RegistrationService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ActivityView register(long activityId, long userId) {
-        ActivityRow activity = lockOpenActivity(activityId);
+        ActivityLockRow activity = lockOpenActivity(activityId);
         RegistrationRow existing = registrations.findByActivityAndUser(activityId, userId);
         // Existing ACTIVE/WAITING requests are idempotent, even when the activity has since filled up.
         if (existing != null && (existing.status().equals("ACTIVE") || existing.status().equals("WAITING"))) {
@@ -76,8 +76,8 @@ public class RegistrationService {
             .map(row -> new RegistrationView(row.id(), row.status(), activityService.get(row.activityId(), userId))).toList();
     }
 
-    private ActivityRow lockOpenActivity(long activityId) {
-        ActivityRow activity = monitoring.measureRegistrationLock(() -> activities.lockById(activityId));
+    private ActivityLockRow lockOpenActivity(long activityId) {
+        ActivityLockRow activity = monitoring.measureRegistrationLock(() -> activities.lockById(activityId));
         if (activity == null) throw new ApiException(HttpStatus.NOT_FOUND, "ACTIVITY_NOT_FOUND", "活动不存在");
         // Check after acquiring the lock: a request waiting for a seat may cross the start time.
         if (!activity.startsAt().toInstant(ZoneOffset.UTC).isAfter(clock.instant())) {

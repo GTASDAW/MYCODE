@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { performanceSettings, latencyStatistics, summarizeRequests, verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView } from './performance-check.mjs';
+import { performanceSettings, performanceOutput, verifyApplicationArtifact, collectQueryEvidence, LOCK_QUERY_SQL, latencyStatistics, summarizeRequests,
+  verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView } from './performance-check.mjs';
 
 const isolated = {
   COMPOSE_PROJECT_NAME: 'gather-perf-ci', PERF_BASE_URL: 'http://127.0.0.1:18098',
@@ -26,6 +27,90 @@ test('fixed baseline guard permits only explicitly isolated local targets and ex
     { PERF_BASE_URL: 'https://127.0.0.1:18098' }, { PERF_APP_SHA: 'latest' },
     { PERF_CPU_LIMIT: '4' }, { PERF_MEMORY_LIMIT: '2048m' },
   ]) assert.throws(() => performanceSettings({ ...isolated, ...override }));
+});
+
+test('comparison outputs are derived only from four fixed phase names and require an exact harness revision', () => {
+  assert.match(performanceOutput(undefined), /[\\/]\.runtime[\\/]ci$/);
+  for (const phase of ['A1', 'B1', 'B2', 'A2']) {
+    const settings = performanceSettings({ ...isolated, PERF_COMPARISON_PHASE: phase, GITHUB_SHA: 'b'.repeat(40) });
+    assert.match(settings.output, new RegExp(`[\\\\/]comparison[\\\\/]${phase}$`));
+  }
+  for (const phase of ['', 'A3', '../A1', 'A1/../../secrets', 'C:\\data', '/tmp/report']) {
+    assert.throws(() => performanceOutput(phase));
+    assert.throws(() => performanceSettings({ ...isolated, PERF_COMPARISON_PHASE: phase, GITHUB_SHA: 'b'.repeat(40) }));
+  }
+  assert.throws(() => performanceSettings({ ...isolated, PERF_COMPARISON_PHASE: 'A1' }), /harness GITHUB_SHA/);
+  const proof = manifest();
+  proof.phase = '../elsewhere';
+  assert.throws(() => verifyOwnershipManifest(proof), /output phase/);
+});
+
+test('comparison verifies running image revision and actual production JAR/runtime using read-only Docker calls', () => {
+  const backend = { Id: 'isolated-backend', Image: `sha256:${'a'.repeat(64)}` };
+  const settings = { appSha: 'b'.repeat(40), phase: 'B1' };
+  const calls = [];
+  const inspect = (revision = settings.appSha, jar = `${'c'.repeat(64)}  /app/app.jar\n`, java = 'openjdk 21.0.10 2026-01-20 LTS\n') => ({
+    readDocker(args) {
+      calls.push(args);
+      if (args[0] === 'image') return JSON.stringify([{ Id: backend.Image, Config: { Labels: revision === null ? {} : { 'org.opencontainers.image.revision': revision } } }]);
+      return args[2] === 'sha256sum' ? jar : java;
+    },
+  });
+  assert.deepEqual(verifyApplicationArtifact(backend, settings, inspect()), {
+    sourceRevision: settings.appSha, jarSha256: 'c'.repeat(64), javaRuntime: 'openjdk 21.0.10 2026-01-20 LTS',
+  });
+  assert.deepEqual(calls, [['image', 'inspect', backend.Image], ['exec', backend.Id, 'sha256sum', '/app/app.jar'],
+    ['exec', backend.Id, 'java', '--version']]);
+  assert.throws(() => verifyApplicationArtifact(backend, settings, inspect('d'.repeat(40))), /revision must equal/);
+  assert.throws(() => verifyApplicationArtifact(backend, settings, inspect(null)), /revision must equal/);
+  assert.throws(() => verifyApplicationArtifact(backend, settings, inspect(settings.appSha, 'not-a-jar-hash')), /JAR SHA-256/);
+  assert.throws(() => verifyApplicationArtifact(backend, settings, inspect(settings.appSha, undefined, 'openjdk 17.0.1')), /actual Java 21/);
+  const unlabeledBaseline = verifyApplicationArtifact(backend, { appSha: settings.appSha }, inspect(null));
+  assert.equal(unlabeledBaseline.sourceRevision, null, 'Existing single-version baseline mode remains compatible with an unlabeled image.');
+});
+
+test('SQL evidence excludes EXPLAIN from exact handler deltas and releases both probe locks', async () => {
+  const calls = [];
+  let version;
+  let measured = false;
+  let rollbacks = 0;
+  const db = {
+    async execute(sql, values) {
+      assert(sql.startsWith('SELECT capacity') && values.every(value => value === 4));
+      return [[{ capacity: 10, active: 10, waiting: 90 }]];
+    },
+    async query(sql, values) {
+      calls.push(sql);
+      if (sql.startsWith('SET TRANSACTION')) return [[]];
+      if (sql.startsWith('EXPLAIN')) {
+        version = sql.includes("rw.status='WAITING'") ? 'baseline' : 'candidate';
+        assert.deepEqual(values, [4]);
+        measured = false;
+        return [[{ EXPLAIN: JSON.stringify({ query_block: { table: { table_name: 'activities' } } }) }]];
+      }
+      if (sql.startsWith('SHOW SESSION')) return [[
+        { Variable_name: 'Handler_read_key', Value: String(100 + (measured ? (version === 'baseline' ? 2 : 1) : 0)) },
+        { Variable_name: 'Handler_read_next', Value: String(200 + (measured && version === 'baseline' ? 90 : 0)) },
+      ]];
+      assert.equal(sql, LOCK_QUERY_SQL[version]);
+      measured = true;
+      return [[version === 'baseline' ? { waiting_count: 90 } : {}], new Array(version === 'baseline' ? 9 : 3)];
+    },
+    async beginTransaction() { calls.push('BEGIN'); },
+    async rollback() { calls.push('ROLLBACK'); rollbacks++; },
+  };
+  const evidence = await collectQueryEvidence(db, 4);
+  assert.equal(rollbacks, 2);
+  assert.deepEqual(evidence.queries.baseline.handlerDelta, { Handler_read_key: 2, Handler_read_next: 90 });
+  assert.deepEqual(evidence.queries.candidate.handlerDelta, { Handler_read_key: 1, Handler_read_next: 0 });
+  assert(calls.indexOf(`EXPLAIN FORMAT=JSON ${LOCK_QUERY_SQL.baseline}`) < calls.findIndex(sql => sql.startsWith('SHOW SESSION')));
+  assert.equal(calls.at(-1), 'ROLLBACK');
+  const broken = { ...db, async query(sql) {
+    if (sql.startsWith('EXPLAIN')) throw new Error('Probe failure');
+    return [[]];
+  } };
+  await assert.rejects(collectQueryEvidence(broken, 4), /Probe failure/);
+  assert.equal(rollbacks, 3, 'Failed SQL evidence also releases the transaction lock.');
 });
 
 test('application readiness waits for HTTP 200 and UP through bounded startup failures', async () => {

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { cpus, platform, release, totalmem } from 'node:os';
+import { cpus, hostname, platform, release, totalmem } from 'node:os';
 import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,19 @@ const REQUESTS = 100;
 const REPEATS = 3;
 const CONCURRENCIES = [1, 10, 50];
 const OUTPUT = resolve('.runtime/ci');
+const PHASES = ['A1', 'B1', 'B2', 'A2'];
+export const MEASUREMENT_CONTRACT = 'gather-signup-v2-write-warmup';
+const WARMUP_CONCURRENCIES = [1, 50];
+export const LOCK_QUERY_SQL = {
+  baseline: "SELECT id, title, description, location, starts_at, capacity, registered_count, (SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=activities.id AND rw.status='WAITING') AS waiting_count, NULL AS registration_status FROM activities WHERE id=? FOR UPDATE",
+  candidate: 'SELECT starts_at, capacity, registered_count FROM activities WHERE id=? FOR UPDATE',
+};
 const pause = ms => new Promise(done => setTimeout(done, ms));
+
+export function performanceOutput(phase) {
+  assert(phase === undefined || PHASES.includes(phase), 'Comparison output phase must be one of A1/B1/B2/A2.');
+  return phase === undefined ? OUTPUT : resolve(OUTPUT, 'comparison', phase);
+}
 
 export function performanceSettings(env = process.env) {
   assert.equal(env.COMPOSE_PROJECT_NAME, RUN_PROJECT, 'Performance writes require the isolated gather-perf-ci project.');
@@ -30,8 +42,11 @@ export function performanceSettings(env = process.env) {
   assert.equal(env.PERF_MEMORY_LIMIT ?? '1024m', '1024m', 'The fixed baseline requires a 1024 MiB backend limit.');
   const appSha = env.PERF_APP_SHA ?? env.GITHUB_SHA;
   assert(/^[0-9a-f]{40}$/.test(appSha ?? ''), 'Set PERF_APP_SHA to the exact 40-character measured application commit.');
+  const phase = env.PERF_COMPARISON_PHASE;
+  const output = performanceOutput(phase);
+  if (phase !== undefined) assert(/^[0-9a-f]{40}$/.test(env.GITHUB_SHA ?? ''), 'Comparison requires the exact harness GITHUB_SHA.');
   return {
-    base, appSha,
+    base, appSha, phase, output,
     database: { host: env.PERF_DB_HOST, port: 33306, database: RUN_DATABASE, user: env.PERF_DB_USERNAME,
       password: env.PERF_DB_PASSWORD, connectTimeout: 10000, timezone: 'Z', dateStrings: true, multipleStatements: false },
   };
@@ -114,12 +129,33 @@ function verifyContainerTargets(settings) {
     assert(bindings?.length === 1 && bindings[0].HostIp === '127.0.0.1' && bindings[0].HostPort === port,
       'Isolated port binding is not the expected exact loopback endpoint.');
   }
-  assert.equal(Number(backend.HostConfig.NanoCpus), 2_000_000_000, 'Backend must have an actual 2 CPU cgroup limit.');
-  assert.equal(Number(backend.HostConfig.Memory), 1024 * 1024 * 1024, 'Backend must have an actual 1024 MiB memory cgroup limit.');
+  for (const container of [backend, database]) {
+    assert.equal(Number(container.HostConfig.NanoCpus), 2_000_000_000, 'Backend and MySQL must have actual 2 CPU cgroup limits.');
+    assert.equal(Number(container.HostConfig.Memory), 1024 * 1024 * 1024, 'Backend and MySQL must have actual 1024 MiB memory cgroup limits.');
+  }
+  const applicationArtifact = verifyApplicationArtifact(backend, settings);
   const metadata = container => ({ image: container.Config.Image,
+    imageId: container.Image,
     cpuLimit: Number(container.HostConfig.NanoCpus) / 1_000_000_000,
     memoryLimitBytes: Number(container.HostConfig.Memory) });
-  return { backend: metadata(backend), mysql: metadata(database), web: metadata(web) };
+  return { backend: { ...metadata(backend), ...applicationArtifact }, mysql: metadata(database), web: metadata(web) };
+}
+
+export function verifyApplicationArtifact(backend, settings, { readDocker = dockerRead } = {}) {
+  assert(/^sha256:[0-9a-f]{64}$/.test(backend.Image ?? ''), 'Backend must have a concrete Docker image digest.');
+  const images = JSON.parse(readDocker(['image', 'inspect', backend.Image]));
+  assert(images.length === 1 && images[0].Id === backend.Image, 'Running backend image identity differs from image inspection.');
+  const revision = images[0].Config.Labels?.['org.opencontainers.image.revision'] ?? null;
+  if (settings.phase !== undefined) {
+    assert.equal(revision, settings.appSha, 'Running application image revision must equal the measured source commit.');
+  } else if (revision !== null) {
+    assert.equal(revision, settings.appSha, 'Labeled baseline image revision differs from the measured source commit.');
+  }
+  const jar = readDocker(['exec', backend.Id, 'sha256sum', '/app/app.jar']).trim();
+  assert(/^[0-9a-f]{64}\s+\/app\/app\.jar$/.test(jar), 'Running production JAR SHA-256 could not be verified.');
+  const java = readDocker(['exec', backend.Id, 'java', '--version']).split(/\r?\n/)[0];
+  assert(/^openjdk 21(?:\.|\s)/.test(java), 'Measured runtime must be actual Java 21.');
+  return { sourceRevision: revision, jarSha256: jar.split(/\s+/)[0], javaRuntime: java };
 }
 
 export async function waitForApiReady(base, { fetchRequest = fetch, now = Date.now, wait = pause } = {}) {
@@ -277,8 +313,9 @@ async function verifyDatabase(db, settings) {
 }
 
 function saveManifest(manifest) {
-  mkdirSync(OUTPUT, { recursive: true });
-  const path = resolve(OUTPUT, `performance-${manifest.runId}.manifest.json`);
+  const output = performanceOutput(manifest.phase);
+  mkdirSync(output, { recursive: true });
+  const path = resolve(output, `performance-${manifest.runId}.manifest.json`);
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   renameSync(temporary, path);
@@ -299,6 +336,7 @@ async function verifyUniqueApiDatabase(db, settings, manifest) {
 }
 
 export function verifyOwnershipManifest(manifest) {
+  performanceOutput(manifest.phase);
   assert(manifest.version === 1 && UUID.test(manifest.runId), 'Invalid performance ownership manifest.');
   assert(manifest.database === RUN_DATABASE && manifest.project === RUN_PROJECT, 'Performance ownership target changed.');
   assert(Number.isSafeInteger(manifest.adminId) && manifest.adminId > 0, 'Performance creator proof is missing.');
@@ -523,6 +561,7 @@ async function measureRound(admin, db, clients, activities, scenario, concurrenc
     lockQueryCount: locks, lockQueryAverageMs: locks ? (after.lockTotalMs - before.lockTotalMs) / locks : 0,
     poolMax: after.max, sampledPoolPeakActive: Math.max(peakActive, after.active),
     sampledPoolPeakPending: Math.max(peakPending, after.pending), poolSamples, poolSampleIntervalMs: 200 } };
+  stats.server.poolSamples++;
   recordRound(stats);
   assert(summary.requests === REQUESTS && summary.statuses[200] === REQUESTS && summary.business4xx === 0
     && summary.system5xx === 0 && summary.networkFailures === 0 && summary.otherHttpFailures === 0,
@@ -547,6 +586,44 @@ async function measureRound(admin, db, clients, activities, scenario, concurrenc
   return stats;
 }
 
+export async function collectQueryEvidence(db, activityId) {
+  assert(Number.isSafeInteger(activityId) && activityId > 0, 'Query evidence requires a verified synthetic activity primary key.');
+  const [[state]] = await db.execute("SELECT capacity, registered_count AS active, (SELECT COUNT(*) FROM registrations WHERE activity_id = ? AND status = 'WAITING') AS waiting FROM activities WHERE id = ?", [activityId, activityId]);
+  assert(state && Number(state.capacity) === 10 && Number(state.active) === 10 && Number(state.waiting) === 90,
+    'SQL evidence must use the already validated 10 ACTIVE / 90 WAITING warmup fixture.');
+  const results = {};
+  const status = async () => {
+    const [rows] = await db.query("SHOW SESSION STATUS WHERE Variable_name IN ('Handler_read_key', 'Handler_read_next')");
+    const values = Object.fromEntries(rows.map(row => [row.Variable_name, Number(row.Value)]));
+    assert(['Handler_read_key', 'Handler_read_next'].every(key => Number.isSafeInteger(values[key]) && values[key] >= 0),
+      'Actual session handler counters must be available.');
+    return values;
+  };
+  for (const [version, sourceSql] of Object.entries(LOCK_QUERY_SQL)) {
+    await db.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    await db.beginTransaction();
+    try {
+      const [plans] = await db.query(`EXPLAIN FORMAT=JSON ${sourceSql}`, [activityId]);
+      assert(plans.length === 1 && typeof plans[0].EXPLAIN === 'string', 'MySQL must return one actual JSON execution plan.');
+      const plan = JSON.parse(plans[0].EXPLAIN);
+      const before = await status();
+      const [rows, fields] = await db.query(sourceSql, [activityId]);
+      const after = await status();
+      assert(rows.length === 1 && fields.length === (version === 'baseline' ? 9 : 3), 'The measured SQL projection differs from the production version.');
+      if (version === 'baseline') assert.equal(Number(rows[0].waiting_count), 90, 'Baseline correlated count must read the 90 waiting rows.');
+      const handlerDelta = Object.fromEntries(Object.keys(before).map(key => [key, after[key] - before[key]]));
+      assert(Object.values(handlerDelta).every(value => Number.isSafeInteger(value) && value >= 0), 'Session handler counter delta must be nonnegative.');
+      results[version] = { sourceSql, explainFormat: 'JSON', plan, resultRows: rows.length, resultColumns: fields.length,
+        handlerDelta, countsExcludeExplain: true };
+    } finally {
+      // Same connection, no concurrent writes; explicitly release each probe row lock.
+      await db.rollback();
+    }
+  }
+  return { transactionIsolation: 'READ_COMMITTED', active: 10, waiting: 90,
+    measuredThrough: 'direct-mysql-single-select', excludedFromHttpMeasurementAndMetrics: true, queries: results };
+}
+
 function markdownReport(report) {
   const lines = ['# Gather 可复现报名压测', '', `- 结果：${report.success ? '通过' : '失败'}`, `- 应用提交：${report.environment?.appSha ?? '未验证'}`,
     '- 性质：当前软件基线；没有宣称任何性能优化或生产容量。',
@@ -562,8 +639,11 @@ function markdownReport(report) {
     '同活动：10 名额，结果应为 10 ACTIVE / 90 WAITING。不同活动：100 场各 1 名额，结果应为 100 ACTIVE。',
     '每轮使用新活动，固定开始时间为本次运行开始后 48 小时；100 用户只准备登录一次；BCrypt 准备并发最多 5。',
     '每轮测量后精确删除该轮活动和报名，保留合成用户；每轮前后基线固定为 102 用户、4 活动（含 1 身份探针）、0 报名。',
-    '正式测量前顺序 GET 活动列表 20 次。HTTP 报名不重试。', '',
+    '正式测量前顺序 GET 活动列表 20 次，再按并发 1/50 × 同活动/不同活动各预热 1 批，共 400 次真实报名；每批同样验证和精确清理。',
+    '预热单独记录，不属于正式 18 批或其计数差；HTTP 报名不重试。池采样次数包含批次前、周期读取及批次后。', '',
     '## 实际环境', '', '```json', JSON.stringify(report.environment ?? {}, null, 2), '```', '',
+    '## 写路径预热', '', '```json', JSON.stringify(report.warmup?.map(row => ({ scenario: row.scenario,
+      concurrency: row.concurrency, requests: row.requests, database: row.database, cleanup: row.cleanup })) ?? [], null, 2), '```', '',
     '## 批次结果', '', '| 场景 | 并发 | 轮次 | req/s | avg ms | P50 ms | P95 ms | P99 ms | max ms | 锁查询均值 ms | 池 active/pending 采样峰值 | 4xx/5xx/网络 |',
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|'];
   for (const row of report.rounds) lines.push(`| ${row.scenario} | ${row.concurrency} | ${row.repeat} | ${row.throughputPerSecond.toFixed(2)} | ${row.latencyMs.avg.toFixed(2)} | ${row.latencyMs.p50.toFixed(2)} | ${row.latencyMs.p95.toFixed(2)} | ${row.latencyMs.p99.toFixed(2)} | ${row.latencyMs.max.toFixed(2)} | ${row.server.lockQueryAverageMs.toFixed(2)} | ${row.server.sampledPoolPeakActive}/${row.server.sampledPoolPeakPending} | ${row.business4xx}/${row.system5xx}/${row.networkFailures} |`);
@@ -573,7 +653,8 @@ function markdownReport(report) {
 }
 
 export async function runPerformanceChecks() {
-  const report = { success: false, startedAt: new Date().toISOString(), rounds: [], cleanup: { completed: false } };
+  const report = { success: false, measurementContract: MEASUREMENT_CONTRACT, startedAt: new Date().toISOString(),
+    warmup: [], rounds: [], cleanup: { completed: false } };
   const clients = [];
   let db;
   let baseline;
@@ -582,6 +663,7 @@ export async function runPerformanceChecks() {
   let settings;
   try {
     settings = performanceSettings();
+    report.phase = settings.phase ?? null;
     const containers = verifyContainerTargets(settings);
     // Compose --wait only guarantees running state for services without healthchecks.
     // Application/Flyway readiness is outside all measured request durations.
@@ -590,25 +672,45 @@ export async function runPerformanceChecks() {
     const seed = await verifyDatabase(db, settings);
     baseline = await snapshotDatabase(db);
     manifest = { version: 1, runId: randomUUID(), project: RUN_PROJECT, database: RUN_DATABASE,
-      serverUuid: seed.identity.serverUuid, adminId: seed.admin.id, users: [], activities: [] };
+      serverUuid: seed.identity.serverUuid, adminId: seed.admin.id, phase: settings.phase, users: [], activities: [] };
     saveManifest(manifest);
     await verifyUniqueApiDatabase(db, settings, manifest);
     const admin = new ApiClient(settings.base);
     clients.push(admin);
     const adminIdentity = await admin.login('admin', 'Admin123!');
     assert(adminIdentity.id === seed.admin.id && adminIdentity.role === 'ADMIN', 'Admin API identity differs from the verified database.');
-    const monitoring = monitoringView(await admin.json('/api/admin/monitoring'));
-    report.environment = { appSha: settings.appSha, node: process.version, java: monitoring.javaVersion ?? process.env.PERF_JAVA_VERSION ?? 'unavailable',
+    monitoringView(await admin.json('/api/admin/monitoring'));
+    report.environment = { appSha: settings.appSha, harnessSha: process.env.GITHUB_SHA ?? null,
+      node: process.version, java: containers.backend.javaRuntime,
       mysql: seed.identity.version, os: `${platform()} ${release()}`, cpuModels: [...new Set(cpus().map(cpu => cpu.model))],
-      logicalCpus: cpus().length, hostMemoryBytes: totalmem(), containers, project: RUN_PROJECT, database: RUN_DATABASE,
+      hostname: hostname(), logicalCpus: cpus().length, hostMemoryBytes: totalmem(), containers,
+      project: RUN_PROJECT, database: RUN_DATABASE, databaseServerUuid: seed.identity.serverUuid,
+      databaseBaselineSha256: createHash('sha256').update(baseline).digest('hex'),
       sessionMode: 'memory', loadGeneratorSharesHost: true, warmupGetRequests: 20,
-      requestsPerBatch: REQUESTS, repeats: REPEATS, concurrencies: CONCURRENCIES, samplingIntervalMs: 200 };
+      warmupWriteRequests: 400, warmupConcurrencies: WARMUP_CONCURRENCIES, startsAfterHours: 48,
+      requestsPerBatch: REQUESTS, repeats: REPEATS, concurrencies: CONCURRENCIES, samplingIntervalMs: 200,
+      clientTiming: 'fetch-start-through-complete-json-parse', percentileMethod: 'nearest-rank',
+      measurementExcludes: ['login', 'activity-creation', 'warmup', 'database-assertions', 'cleanup'],
+      poolSamplesInclude: ['before', 'periodic', 'after'] };
     const prepared = await prepareUsers(db, settings, seed, manifest, clients);
     const roundBaseline = await snapshotDatabase(db);
     report.environment.roundBaselineRows = { users: 102, activities: 4, registrations: 0 };
     const warmup = new ApiClient(settings.base);
     for (let index = 0; index < 20; index++) await warmup.json('/api/activities');
     const startsAt = new Date(Date.parse(report.startedAt) + 48 * 3600000).toISOString();
+    for (const concurrency of WARMUP_CONCURRENCIES) for (const scenario of ['same-activity', 'different-activities']) {
+      const activities = await createActivities(admin, manifest, scenario === 'same-activity' ? 1 : REQUESTS, startsAt,
+        scenario === 'same-activity' ? 10 : 1);
+      const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, 1, row => report.warmup.push(row));
+      if (settings.phase !== undefined && scenario === 'same-activity' && concurrency === 50) {
+        report.queryEvidence = await collectQueryEvidence(db, activities[0].id);
+      }
+      round.cleanup = await cleanupOwned(db, manifest, { activityIds: activities.map(activity => activity.id),
+        deleteUsers: false, persistManifest: saveManifest });
+      assert.equal(await snapshotDatabase(db), roundBaseline, 'Write warmup cleanup must restore the exact prepared baseline before measurement.');
+      round.cleanup.baselineRowsPreserved = true;
+      console.log(`WARMUP PASS: ${scenario}, concurrency ${concurrency}: 100 HTTP 200; exact cleanup verified; excluded from measurement.`);
+    }
     for (const concurrency of CONCURRENCIES) for (const scenario of ['same-activity', 'different-activities']) for (let repeat = 1; repeat <= REPEATS; repeat++) {
       const activities = await createActivities(admin, manifest, scenario === 'same-activity' ? 1 : REQUESTS, startsAt,
         scenario === 'same-activity' ? 10 : 1);
@@ -629,7 +731,7 @@ export async function runPerformanceChecks() {
         if (manifest) {
           const counts = await cleanupOwned(db, manifest, { persistManifest: saveManifest });
           assert.equal(await snapshotDatabase(db), baseline, 'Exact cleanup did not preserve every original seed database row.');
-          const rounds = report.rounds.reduce((total, round) => ({ activities: total.activities + (round.cleanup?.activitiesRemoved ?? 0),
+          const rounds = [...report.warmup, ...report.rounds].reduce((total, round) => ({ activities: total.activities + (round.cleanup?.activitiesRemoved ?? 0),
             registrations: total.registrations + (round.cleanup?.registrationsRemoved ?? 0) }), { activities: 0, registrations: 0 });
           report.cleanup = { ...counts, roundActivitiesRemoved: rounds.activities, roundRegistrationsRemoved: rounds.registrations,
             totalActivitiesRemoved: counts.activitiesRemoved + rounds.activities,
@@ -640,16 +742,17 @@ export async function runPerformanceChecks() {
       } catch (error) { primaryError = primaryError ? new AggregateError([primaryError, error], 'Measurement and exact fixture cleanup failed.') : error; }
       finally { await db.end(); }
     }
-    report.success = !primaryError && report.rounds.length === 18 && report.cleanup.completed;
+    report.success = !primaryError && report.rounds.length === 18 && report.warmup.length === 4 && report.cleanup.completed;
     report.completedAt = new Date().toISOString();
     if (primaryError) report.failure = safeError(primaryError);
-    mkdirSync(OUTPUT, { recursive: true });
-    writeFileSync(resolve(OUTPUT, 'performance.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-    writeFileSync(resolve(OUTPUT, 'performance.md'), markdownReport(report), 'utf8');
+    const output = settings?.output ?? OUTPUT;
+    mkdirSync(output, { recursive: true });
+    writeFileSync(resolve(output, 'performance.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    writeFileSync(resolve(output, 'performance.md'), markdownReport(report), 'utf8');
   }
   if (primaryError) throw primaryError;
   assert(report.success, 'Performance check did not complete all required rounds and cleanup.');
-  console.log('Performance verification completed: 18 batches, 1800 signups; exact cleanup preserved seed rows. Reports: .runtime/ci/performance.{json,md}');
+  console.log(`Performance verification completed: 400 warmup + 1800 measured signups; exact cleanup preserved seed rows. Reports: ${settings.output}/performance.{json,md}`);
 }
 
 function safeError(error) {
