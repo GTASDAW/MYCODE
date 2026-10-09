@@ -1,4 +1,4 @@
-interface AccountRequest {
+export interface AccountRequest {
   generation: number;
   userId: number;
 }
@@ -26,6 +26,10 @@ export class AuthRequestGuard {
 
   isCurrentAuthentication(generation: number): boolean {
     return this.generation === generation;
+  }
+
+  beginAccountRequest(userId: number): AccountRequest {
+    return { generation: this.generation, userId };
   }
 
   beginProfileRead(userId: number): ProfileRead {

@@ -45,6 +45,14 @@ if [[ "${1:-}" == cleanup ]]; then
 fi
 [[ $# == 0 ]] || { echo 'Unexpected comparison command.' >&2; exit 1; }
 [[ "$(git rev-parse HEAD)" == "$candidate_sha" ]] || { echo 'Candidate checkout differs from its measured revision.' >&2; exit 1; }
+# The historical experiment measures the V2 three-column locking projection.
+# Later schema/business changes need a separate comparison contract, not a silently mixed claim.
+readonly experiment_candidate_sha=d781648d7d9036b653a80e3082b609358a59df35
+git cat-file -e "$experiment_candidate_sha^{commit}"
+git diff --quiet "$experiment_candidate_sha" "$candidate_sha" -- backend/src/main/resources/db/migration backend/src/main/java/com/example/gather/mapper/ActivityMapper.java backend/src/main/java/com/example/gather/service/RegistrationService.java || {
+  echo 'This historical comparison requires its V2 schema and locking projection. Reproduce it from d781648; later lifecycle changes need a new experiment.' >&2
+  exit 1
+}
 git diff --quiet HEAD -- backend frontend scripts .github package.json package-lock.json || {
   echo 'Measured source has uncommitted changes.' >&2
   exit 1

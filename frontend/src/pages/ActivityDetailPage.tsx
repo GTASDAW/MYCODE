@@ -7,6 +7,7 @@ import {
   Descriptions,
   Popconfirm,
   Progress,
+  Space,
   Tag,
 } from "antd";
 import {
@@ -20,6 +21,7 @@ import { api, ApiError, errorMessage } from "../api";
 import { useAuth } from "../auth";
 import {
   ActivityStatus,
+  ActivityCancellationNotice,
   BackLink,
   ErrorState,
   LoadingState,
@@ -27,6 +29,8 @@ import {
 } from "../components";
 import { formatDate, formatTime } from "../date";
 import { useResource } from "../useResource";
+import { activityClosed } from "../activityLifecycle";
+import { ActivityManagementActions } from "./ActivityManagementActions";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -118,7 +122,7 @@ function ActivityDetailPage() {
   const waiting = activity.registrationStatus === "WAITING";
   const cancelled = activity.registrationStatus === "CANCELLED";
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
-  const closed = activity.closed || Date.parse(activity.startsAt) <= Date.now();
+  const closed = activityClosed(activity);
 
   return (
     <div className="page-container detail-page">
@@ -127,13 +131,17 @@ function ActivityDetailPage() {
         description="活动详情 · 时间均为北京时间"
         extra={
           auth.user?.role === "ADMIN" ? (
-            <Link to={`/admin/activities/${activity.id}/registrations`}>
-              <Button>报名名单</Button>
-            </Link>
+            <Space wrap>
+              <ActivityManagementActions activity={activity} onChanged={resource.setData} disabled={busy} />
+              <Link to={`/admin/activities/${activity.id}/registrations`}>
+                <Button>报名名单</Button>
+              </Link>
+            </Space>
           ) : undefined
         }
       />
       <BackLink />
+      <ActivityCancellationNotice activity={activity} />
       <div className="detail-layout">
         <Card
           title="活动信息"
@@ -169,20 +177,22 @@ function ActivityDetailPage() {
             showIcon
             icon={<SafetyCertificateOutlined aria-hidden="true" />}
             title="报名须知"
-            description="报名后可在「我的报名」查看记录。活动开始前可以取消，开始后将关闭报名与取消。"
+            description="报名后可在「我的报名」查看记录。活动开始前可以取消，开始后将关闭报名与取消。组织者取消活动后，报名与候补关闭，历史记录保留。"
           />
         </Card>
         <Card title="活动报名" className="registration-panel">
           <h2>
-            {registered
-              ? "你的名额已确认"
-              : waiting
-                ? "你已进入候补"
-              : closed
-                ? "活动已经开始"
-                : remaining === 0
-                  ? "本场名额已满"
-                  : "报名参加活动"}
+            {activity.cancelled
+              ? "活动已取消"
+              : registered
+                ? "你的名额已确认"
+                : waiting
+                  ? "你已进入候补"
+                  : closed
+                    ? "活动已经开始"
+                    : remaining === 0
+                      ? "本场名额已满"
+                      : "报名参加活动"}
           </h2>
           <div className="registration-number">
             <strong>{activity.registeredCount}</strong>
@@ -217,21 +227,21 @@ function ActivityDetailPage() {
               title={actionError}
             />
           )}
-          {(registered || waiting) && (
+          {!activity.cancelled && (registered || waiting) && (
             <div className="registered-notice">
               <CheckCircleFilled aria-hidden="true" />
               <span>{registered ? "已成功报名" : "已进入候补"}</span>
               {closed && <Tag>活动已开始</Tag>}
             </div>
           )}
-          {cancelled && (
+          {cancelled && !activity.cancelled && (
             <p className="cancelled-notice">
               你之前取消了报名，有空位时可以重新加入。
             </p>
           )}
           {closed ? (
             <Button block disabled>
-              活动已开始
+              {activity.cancelled ? "活动已取消" : "活动已开始"}
             </Button>
           ) : auth.loading ? (
             <Button block loading>
@@ -277,7 +287,7 @@ function ActivityDetailPage() {
           )}
           <div className="panel-footnote">
             <ClockCircleOutlined aria-hidden="true" />
-            <span>活动开始前均可取消</span>
+            <span>{activity.cancelled ? "活动取消后不再接受报名" : "活动开始前均可取消"}</span>
           </div>
         </Card>
       </div>

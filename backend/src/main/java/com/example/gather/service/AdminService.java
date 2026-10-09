@@ -20,7 +20,7 @@ import java.util.Set;
 @Service
 @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
 public class AdminService {
-    private static final Set<String> ACTIVITY_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "UPCOMING");
+    private static final Set<String> ACTIVITY_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "UPCOMING", "CANCELLED");
     private static final Set<String> ROSTER_STATUSES = Set.of("ALL", "ACTIVE", "WAITING", "CANCELLED");
     private static final int MAX_KEYWORD_LENGTH = 200;
     private final AdminMapper admin;

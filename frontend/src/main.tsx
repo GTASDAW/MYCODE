@@ -8,6 +8,7 @@ import { Layout } from "./Layout";
 import { ActivitiesPage } from "./pages/ActivitiesPage";
 import { ActivityDetailRoute } from "./pages/ActivityDetailPage";
 import { CreateActivityPage } from "./pages/CreateActivityPage";
+import { EditActivityRoute } from "./pages/EditActivityPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ProfilePage } from "./pages/ProfilePage";
@@ -97,6 +98,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={
                     <ProtectedRoute admin>
                       <AdminRegistrationsRoute />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="admin/activities/:id/edit"
+                  element={
+                    <ProtectedRoute admin>
+                      <EditActivityRoute />
                     </ProtectedRoute>
                   }
                 />

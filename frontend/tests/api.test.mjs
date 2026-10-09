@@ -195,3 +195,40 @@ test('duplicate usernames are surfaced without replaying a registration', async 
   await assert.rejects(api.registerUser({}), error => error.status === 409 && error.code === 'USERNAME_TAKEN');
   assert.equal(writes, 1);
 });
+
+test('activity editing sends only mutable fields and cancellation sends only its reason, with CSRF and abort signals', async () => {
+  const { api } = await freshApi();
+  const calls = [];
+  const controller = new AbortController();
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    return response(200, { id: 25, title: '更新标题', cancelled: url.endsWith('/cancel') });
+  };
+  await api.updateActivity(25, { title: '更新标题', description: '更新介绍', location: '更新地点', capacity: 999, startsAt: '2030-01-01T00:00:00Z' }, controller.signal);
+  const result = await api.cancelActivity(25, '场地维护', controller.signal);
+  assert.equal(result.cancelled, true);
+  const writes = calls.filter(call => call.options.method);
+  assert.deepEqual(writes.map(call => [call.url, call.options.method]), [
+    ['/api/admin/activities/25', 'PATCH'], ['/api/admin/activities/25/cancel', 'POST'],
+  ]);
+  assert.deepEqual(JSON.parse(writes[0].options.body), { title: '更新标题', description: '更新介绍', location: '更新地点' });
+  assert.deepEqual(JSON.parse(writes[1].options.body), { reason: '场地维护' });
+  for (const { options } of writes) {
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.headers.get('X-CSRF-TOKEN'), 'valid');
+    assert.equal(options.credentials, 'same-origin');
+  }
+});
+
+test('closed or cancelled activity conflicts remain visible and never replay a management write', async () => {
+  const { api } = await freshApi();
+  let writes = 0;
+  globalThis.fetch = async url => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    writes++;
+    return response(409, { code: 'ACTIVITY_CANCELLED', message: '活动已取消，不能编辑' });
+  };
+  await assert.rejects(api.updateActivity(25, {}), error => error.status === 409 && error.code === 'ACTIVITY_CANCELLED');
+  assert.equal(writes, 1);
+});

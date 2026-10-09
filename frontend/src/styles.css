@@ -567,6 +567,32 @@ main:focus {
 .action-error {
   margin-bottom: 20px;
 }
+.activity-cancellation-notice {
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+.activity-cancellation-notice p {
+  display: block;
+  margin: 6px 0 0;
+}
+.activity-cancellation-notice .cancellation-reason {
+  color: #595959;
+}
+.card-cancellation .activity-cancellation-notice {
+  margin: 0 0 18px;
+}
+.registration-row-main .activity-cancellation-notice {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+.table-cancel-action {
+  padding-inline: 0;
+}
+.cancel-activity-warning {
+  margin: 8px 0 20px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 .create-form-panel .ant-card-body {
   max-width: 920px;
 }

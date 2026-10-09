@@ -9,7 +9,7 @@ public final class AdminModels {
 
     public record OverviewView(long totalActivities, long upcomingActivities, long startedActivities,
                                long fullActivities, long activeRegistrations, long waitingRegistrations,
-                               long availableSeats) {}
+                               long availableSeats, long cancelledActivities) {}
 
     public record ActivityPageView(List<ActivityView> items, long total, int page, int pageSize) {}
 

@@ -20,6 +20,11 @@ public interface RegistrationMapper {
     @Update("UPDATE registrations SET status=#{status}, updated_at=UTC_TIMESTAMP(6) WHERE id=#{id}")
     int changeStatus(@Param("id") long id, @Param("status") String status);
 
+    // The caller holds the activity row lock. Existing cancelled history must stay untouched.
+    @Update("UPDATE registrations SET status='CANCELLED', updated_at=#{cancelledAt} WHERE activity_id=#{activityId} AND status IN ('ACTIVE', 'WAITING')")
+    int cancelForActivity(@Param("activityId") long activityId,
+                          @Param("cancelledAt") java.time.LocalDateTime cancelledAt);
+
     @Select("SELECT id, activity_id, user_id, status FROM registrations "
         + "WHERE activity_id=#{activityId} AND status='WAITING' "
         + "ORDER BY updated_at ASC, id ASC LIMIT 1")

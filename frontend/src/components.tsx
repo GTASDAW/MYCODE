@@ -136,6 +136,7 @@ export function ActivityStatus({
   activity: Activity;
   personal?: boolean;
 }) {
+  if (activity.cancelled) return <Tag className="status-tag" color="red">活动已取消</Tag>;
   if (activity.closed) return <Tag className="status-tag">已开始</Tag>;
   if (personal && activity.registrationStatus === "ACTIVE")
     return (
@@ -159,6 +160,28 @@ export function ActivityStatus({
     <Tag className="status-tag" color="blue">
       报名中
     </Tag>
+  );
+}
+
+export function ActivityCancellationNotice({ activity }: { activity: Activity }) {
+  if (!activity.cancelled) return null;
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      className="activity-cancellation-notice"
+      data-testid="activity-cancellation-notice"
+      title="活动已取消"
+      description={
+        <div>
+          <p className="cancellation-reason">取消原因：{activity.cancellationReason}</p>
+          {activity.cancelledAt && (
+            <p className="metadata">取消时间（北京时间）：{formatDate(activity.cancelledAt)} {formatTime(activity.cancelledAt)}</p>
+          )}
+          <p>报名与候补已关闭，历史报名记录保留。</p>
+        </div>
+      }
+    />
   );
 }
 
@@ -193,6 +216,7 @@ export function ActivityCard({ activity }: { activity: Activity }) {
         <Link to={`/activities/${activity.id}`}>{activity.title}</Link>
       </h3>
       <p className="card-description">{activity.description}</p>
+      {activity.cancelled && <div className="card-cancellation"><ActivityCancellationNotice activity={activity} /></div>}
       <div className="card-meta">
         <span>
           <CalendarOutlined aria-hidden="true" />

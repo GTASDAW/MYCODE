@@ -29,7 +29,13 @@ export function AdminDashboardPage() {
       key: "upcomingActivities" as const,
       title: "即将开始",
       suffix: "场",
-      hint: "开始时间尚未到达的活动",
+      hint: "尚未开始、未取消的活动",
+    },
+    {
+      key: "cancelledActivities" as const,
+      title: "已取消活动",
+      suffix: "场",
+      hint: "组织者已取消、保留历史的活动",
     },
     {
       key: "activeRegistrations" as const,
@@ -41,7 +47,7 @@ export function AdminDashboardPage() {
       key: "availableSeats" as const,
       title: "可报名名额",
       suffix: "个",
-      hint: "尚未开始活动的剩余名额",
+      hint: "尚未开始、未取消活动的剩余名额",
     },
     {
       key: "waitingRegistrations" as const,
@@ -50,14 +56,6 @@ export function AdminDashboardPage() {
       hint: "全部活动当前候补记录",
     },
   ];
-  const overviewData = overview.data;
-  const visibleIndicators = overviewData
-    ? indicators.filter(
-        (indicator) =>
-          indicator.key !== "waitingRegistrations" ||
-          "waitingRegistrations" in overviewData,
-      )
-    : indicators.filter((indicator) => indicator.key !== "waitingRegistrations");
   return (
     <div className="page-container">
       <PageHeading
@@ -76,7 +74,7 @@ export function AdminDashboardPage() {
         <ErrorState error={overview.error} retry={overview.retry} />
       ) : (
         <div className="overview-grid">
-          {visibleIndicators.map((indicator) => (
+          {indicators.map((indicator) => (
             <Card
               key={indicator.key}
               className="stat-card"
@@ -105,6 +103,10 @@ export function AdminDashboardPage() {
           <AdminActivityTable
             activities={upcoming.data?.items ?? []}
             loading={upcoming.loading}
+            onChanged={() => {
+              upcoming.retry();
+              overview.retry();
+            }}
             pagination={false}
           />
         )}

@@ -16,7 +16,7 @@ export function ActivitiesPage() {
   const { user } = useAuth();
   const resource = useResource(api.activities, [user?.id]);
   const activities = resource.data ?? [];
-  const upcoming = activities.filter((activity) => !activity.closed);
+  const upcoming = activities.filter((activity) => !activity.cancelled && !activity.closed);
   const available = upcoming.reduce(
     (sum, activity) =>
       sum + Math.max(0, activity.capacity - activity.registeredCount),

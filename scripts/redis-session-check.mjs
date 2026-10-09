@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
-import { databaseConfig, verifyDatabase, deleteOwnedFixtures } from './e2e-cleanup.mjs';
+import { databaseConfig, verifyDatabase, deleteOwnedFixtures, initializeRun, cleanupRun } from './e2e-cleanup.mjs';
 
 const composeFiles = ['compose.yaml', 'compose.redis.yaml', '.github/compose.ci.yaml', '.github/compose.redis-ci.yaml'];
 const reportPath = '.runtime/ci/redis-session-check.json';
@@ -15,6 +15,8 @@ export function isolatedSettings(environment = process.env) {
   assert(environment.COMPOSE_PROJECT_NAME === 'gather-redis-ci', 'Redis lifecycle checks require the isolated gather-redis-ci project.');
   const database = databaseConfig(environment);
   assert(database.database === 'activity_platform_e2e', 'Redis lifecycle checks require the isolated activity_platform_e2e database.');
+  assert(database.host === '127.0.0.1' && database.port === 33306 && database.user === 'activity',
+    'Redis lifecycle checks require the exact isolated IPv4 MySQL endpoint and application account.');
   assert((environment.SESSION_TIMEOUT ?? '30m') === '30m', 'The normal session timeout must be 30m.');
   assert((environment.SESSION_NAMESPACE ?? 'gather:session') === 'gather:session', 'Unexpected Redis session namespace.');
   assert((environment.SESSION_COOKIE_SECURE ?? 'false') === 'false', 'The isolated HTTP CI stack requires SESSION_COOKIE_SECURE=false.');
@@ -24,8 +26,7 @@ export function isolatedSettings(environment = process.env) {
     let url;
     try { url = new URL(environment[key] ?? defaults[index]); }
     catch { throw new Error(`${key} must be a valid HTTP loopback URL.`); }
-    assert(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) && url.protocol === 'http:' && !url.username && !url.password,
-      `${key} must be an HTTP loopback URL without embedded credentials.`);
+    assert(url.href === `${defaults[index]}/`, `${key} must use its exact isolated HTTP loopback origin without credentials or path.`);
     return url;
   });
   assert(new Set(urls.map(url => url.origin)).size === 3, 'Nginx and both direct backend URLs must be distinct.');
@@ -72,6 +73,76 @@ function verifyComposeSettings(settings) {
       && Number(binding.target) === target && Number(binding.published) === port),
     `${service} loopback port does not match the resolved isolated Compose binding.`);
   }
+  return resolved;
+}
+
+function dockerRead(argumentsList) {
+  try { return execFileSync('docker', argumentsList, { encoding: 'utf8', stdio: 'pipe', timeout: 10000 }); }
+  catch { throw new Error('Read-only isolated Redis Docker identity inspection failed.'); }
+}
+
+function verifyRunningComposeSettings(settings, declared) {
+  const ports = { web: ['80/tcp', String(settings.web.port)], mysql: ['3306/tcp', String(settings.database.port)],
+    backend: ['8080/tcp', String(settings.a.port)], backend2: ['8080/tcp', String(settings.b.port)], redis: null };
+  for (const service of ['mysql', 'redis', 'backend', 'backend2', 'web']) {
+    const ids = dockerRead(['ps', '--filter', 'label=com.docker.compose.project=gather-redis-ci',
+      '--filter', `label=com.docker.compose.service=${service}`, '--format', '{{.ID}}']).trim().split(/\s+/).filter(Boolean);
+    assert(ids.length === 1, `Exactly one running isolated Redis-stack ${service} container is required.`);
+    const containers = JSON.parse(dockerRead(['inspect', ids[0]]));
+    assert(containers.length === 1, 'Docker inspection must resolve exactly one Redis-stack container.');
+    const actual = containers[0];
+    assert(actual.State?.Running && actual.Config?.Labels?.['com.docker.compose.project'] === 'gather-redis-ci'
+      && actual.Config.Labels['com.docker.compose.service'] === service, 'Running Redis-stack container ownership changed.');
+    const actualEnvironment = Object.fromEntries(actual.Config.Env.map(item => {
+      const separator = item.indexOf('=');
+      return [item.slice(0, separator), item.slice(separator + 1)];
+    }));
+    for (const [key, value] of Object.entries(declared.services[service].environment ?? {})) {
+      // Never expose inspected values: DB/Redis passwords remain in process memory only.
+      assert(actualEnvironment[key] === String(value), `Running ${service} environment differs from the isolated declaration (${key}).`);
+    }
+    const published = Object.entries(actual.NetworkSettings.Ports ?? {}).filter(([, bindings]) => bindings?.length);
+    if (ports[service] === null) assert(published.length === 0, 'Isolated Redis must not expose a shared host port.');
+    else {
+      const [target, port] = ports[service];
+      const bindings = actual.NetworkSettings.Ports[target];
+      assert(published.length === 1 && bindings?.length === 1 && bindings[0].HostIp === '127.0.0.1'
+        && bindings[0].HostPort === port, `Running ${service} must use its exact isolated loopback binding.`);
+    }
+  }
+}
+
+async function verifyAllApiDatabasesBeforeWrites(settings) {
+  const priorManifest = process.env.E2E_RUN_MANIFEST;
+  let manifestPath;
+  let primaryError;
+  try {
+    manifestPath = await initializeRun(settings.web);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    assert(manifest.fixtures.length === 1, 'Database identity proof must contain one exact UUID fixture.');
+    const probe = manifest.fixtures[0];
+    assert(Number.isSafeInteger(probe.id) && probe.id > 0, 'Database identity probe must have a recorded positive ID.');
+    // Read sequentially so no outstanding request can race the exact probe cleanup.
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const response = await fetch(new URL(`/api/activities/${probe.id}`, base), {
+        redirect: 'manual', signal: AbortSignal.timeout(10000), headers: { Accept: 'application/json' },
+      });
+      let activity = null;
+      if (response.ok) activity = await response.json();
+      else await response.arrayBuffer();
+      assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description,
+        'One isolated Redis API endpoint differs from the UUID SQL database proof; API writes refused.');
+    }
+  } catch (error) { primaryError = error; }
+  finally {
+    try { if (manifestPath) await cleanupRun(manifestPath); }
+    catch (error) { primaryError = primaryError ? new AggregateError([primaryError, error], 'Redis identity proof and exact probe cleanup failed.') : error; }
+    finally {
+      if (priorManifest === undefined) delete process.env.E2E_RUN_MANIFEST;
+      else process.env.E2E_RUN_MANIFEST = priorManifest;
+    }
+  }
+  if (primaryError) throw primaryError;
 }
 
 class ApiClient {
@@ -214,7 +285,8 @@ export async function runRedisSessionChecks() {
 
   try {
     settings = isolatedSettings();
-    verifyComposeSettings(settings);
+    const declared = verifyComposeSettings(settings);
+    verifyRunningComposeSettings(settings, declared);
     await waitForStack(settings);
     db = await mysql.createConnection({ ...settings.database, timezone: 'Z', dateStrings: true });
     await waitForDemoSeed(db);
@@ -222,6 +294,8 @@ export async function runRedisSessionChecks() {
     const [[seedCounts]] = await db.query('SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM activities) AS activities');
     assert(Number(seedCounts.users) === 2 && Number(seedCounts.activities) === 3,
       'The fresh isolated CI stack must contain exactly two demo users and three demo activities.');
+    await verifyAllApiDatabasesBeforeWrites(settings);
+    passed('running container ownership and exact ports verified; one cleaned UUID SQL probe binds A, B and Nginx before API writes');
     baseline = await databaseSnapshot(db);
     passed('isolated dual-instance Redis stack and MySQL identity verified');
 
@@ -350,6 +424,44 @@ export async function runRedisSessionChecks() {
     assert((await accountClient.json(settings.a, '/api/auth/me')).displayName === ownedAccount.allowedDisplayNames[1],
       'Re-login must load the persisted nickname across replicas.');
     passed('updated nickname survives replica restart and re-login; logout invalidates only its shared Session without rewriting identity or CSRF');
+
+    const edited = await admin.write(settings.b, `/api/admin/activities/${fixture.id}`, token, 'PATCH', {
+      title: ownedFixture.title, description: ownedFixture.description, location: 'Updated lifecycle verification location',
+      capacity: 99, startsAt: new Date(Date.now() + 72 * 3600000).toISOString(),
+    });
+    assert(edited.capacity === fixture.capacity && edited.startsAt === fixture.startsAt
+      && edited.location === 'Updated lifecycle verification location', 'Editing must preserve the published time and capacity.');
+    const signupToken = await accountClient.csrf(settings.a);
+    const lifecycleResults = await Promise.allSettled([
+      admin.write(settings.b, `/api/admin/activities/${fixture.id}/cancel`, token, 'POST', { reason: 'Isolated cross-instance lifecycle check' }),
+      accountClient.response(settings.a, `/api/activities/${fixture.id}/registration`, {
+        method: 'POST', headers: { [signupToken.headerName]: signupToken.token },
+      }),
+    ]);
+    assert(lifecycleResults.every(result => result.status === 'fulfilled'), 'Both cross-instance lifecycle requests must settle successfully before cleanup.');
+    const cancelledActivity = lifecycleResults[0].value;
+    const competingSignup = lifecycleResults[1].value;
+    if (competingSignup.status === 200) {
+      assert((await competingSignup.json()).registrationStatus === 'WAITING', 'Signup before cancellation can only join this full fixture queue.');
+    } else await expectedError(competingSignup, 409, 'ACTIVITY_CANCELLED');
+    assert(cancelledActivity.cancelled && cancelledActivity.closed && cancelledActivity.registeredCount === 0
+      && cancelledActivity.waitingCount === 0, 'Concurrent signup and cancellation must converge on a closed empty activity.');
+    for (const base of [settings.a, settings.b]) {
+      const activity = await accountClient.json(base, `/api/activities/${fixture.id}`);
+      assert(activity.cancelled && activity.registeredCount === 0 && activity.waitingCount === 0
+        && activity.registrationStatus === 'CANCELLED' && activity.cancellationReason === cancelledActivity.cancellationReason,
+      'Both replicas must expose cancelled history and the original reason.');
+    }
+    const repeatedActivity = await admin.write(settings.a, `/api/admin/activities/${fixture.id}/cancel`, token, 'POST', { reason: 'Ignored repeated reason' });
+    assert(repeatedActivity.cancelledAt === cancelledActivity.cancelledAt && repeatedActivity.cancellationReason === cancelledActivity.cancellationReason,
+      'Repeating cancellation must preserve the first cancellation metadata.');
+    await expectedError(await accountClient.response(settings.b, `/api/activities/${fixture.id}/registration`, {
+      method: 'POST', headers: { [signupToken.headerName]: signupToken.token },
+    }), 409, 'ACTIVITY_CANCELLED');
+    const [[finalCounts]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, COUNT(r.id) AS records FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [fixture.id]);
+    assert(Number(finalCounts.registeredCount) === 0 && Number(finalCounts.active) === 0 && Number(finalCounts.waiting) === 0
+      && Number(finalCounts.records) === 3, 'Cancellation must retain all three histories and no active or waiting rows.');
+    passed('cross-instance editing preserves immutable fields; racing signup and activity cancellation retains history with zero active or waiting rows');
 
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);

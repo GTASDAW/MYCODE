@@ -9,16 +9,17 @@ import java.util.List;
 
 @Mapper
 public interface AdminMapper {
-    // One statement and one supplied UTC time keep all six indicators on the same database snapshot.
+    // One statement and one supplied UTC time keep all indicators on the same database snapshot.
     // Count registrations separately rather than joining and multiplying activity totals/capacities.
     @Select("""
         SELECT COUNT(*) AS total_activities,
-               COALESCE(SUM(CASE WHEN starts_at > #{now} THEN 1 ELSE 0 END), 0) AS upcoming_activities,
-               COALESCE(SUM(CASE WHEN starts_at <= #{now} THEN 1 ELSE 0 END), 0) AS started_activities,
-               COALESCE(SUM(CASE WHEN starts_at > #{now} AND registered_count = capacity THEN 1 ELSE 0 END), 0) AS full_activities,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} THEN 1 ELSE 0 END), 0) AS upcoming_activities,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at <= #{now} THEN 1 ELSE 0 END), 0) AS started_activities,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} AND registered_count = capacity THEN 1 ELSE 0 END), 0) AS full_activities,
                (SELECT COUNT(*) FROM registrations WHERE status = 'ACTIVE') AS active_registrations,
                (SELECT COUNT(*) FROM registrations WHERE status = 'WAITING') AS waiting_registrations,
-               COALESCE(SUM(CASE WHEN starts_at > #{now} THEN capacity - registered_count ELSE 0 END), 0) AS available_seats
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} THEN capacity - registered_count ELSE 0 END), 0) AS available_seats,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancelled_activities
         FROM activities
         """)
     OverviewView overview(LocalDateTime now);
@@ -29,10 +30,11 @@ public interface AdminMapper {
             AND (LOCATE(#{keyword}, a.title) &gt; 0 OR LOCATE(#{keyword}, a.location) &gt; 0)
           </if>
           <choose>
-            <when test="status == 'OPEN'">AND a.starts_at &gt; #{now} AND a.registered_count &lt; a.capacity</when>
-            <when test="status == 'FULL'">AND a.starts_at &gt; #{now} AND a.registered_count = a.capacity</when>
-            <when test="status == 'STARTED'">AND a.starts_at &lt;= #{now}</when>
-            <when test="status == 'UPCOMING'">AND a.starts_at &gt; #{now}</when>
+            <when test="status == 'OPEN'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count &lt; a.capacity</when>
+            <when test="status == 'FULL'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count = a.capacity</when>
+            <when test="status == 'STARTED'">AND a.cancelled_at IS NULL AND a.starts_at &lt;= #{now}</when>
+            <when test="status == 'UPCOMING'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now}</when>
+            <when test="status == 'CANCELLED'">AND a.cancelled_at IS NOT NULL</when>
           </choose>
         </where>
         """;

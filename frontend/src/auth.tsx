@@ -9,6 +9,7 @@ import {
 import type { ReactNode } from "react";
 import { api, ApiError, errorMessage } from "./api";
 import { AuthRequestGuard } from "./authRequestGuard";
+import type { AccountRequest } from "./authRequestGuard";
 import type { User } from "./types";
 
 interface AuthContextValue {
@@ -22,6 +23,8 @@ interface AuthContextValue {
   expire: () => void;
   readProfile: (signal: AbortSignal) => Promise<User>;
   updateProfile: (displayName: string, signal?: AbortSignal) => Promise<User>;
+  captureAccountRequest: () => AccountRequest | null;
+  isCurrentAccountRequest: (request: AccountRequest) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -94,6 +97,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setNotice("登录已过期，请重新登录后继续。");
     setLoading(false);
   }, [publishUser]);
+
+  const captureAccountRequest = useCallback(() => {
+    const userId = currentUser.current?.id;
+    return userId === undefined ? null : requests.current.beginAccountRequest(userId);
+  }, []);
+  const isCurrentAccountRequest = useCallback((request: AccountRequest) =>
+    requests.current.isSameAccount(request, currentUser.current?.id), []);
 
   const readProfile = useCallback(async (signal: AbortSignal) => {
     const userId = currentUser.current?.id;
@@ -173,6 +183,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expire,
         readProfile,
         updateProfile,
+        captureAccountRequest,
+        isCurrentAccountRequest,
       }}
     >
       {children}

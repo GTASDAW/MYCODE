@@ -4,8 +4,9 @@ import { Link } from "react-router";
 import { ActivityStatus } from "../components";
 import { formatDate, formatTime } from "../date";
 import type { Activity } from "../types";
+import { ActivityManagementActions } from "./ActivityManagementActions";
 
-const columns: TableColumnsType<Activity> = [
+const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Activity> => [
   {
     title: "活动名称",
     dataIndex: "title",
@@ -51,11 +52,12 @@ const columns: TableColumnsType<Activity> = [
     title: "操作",
     key: "actions",
     fixed: "right",
-    width: 170,
+    width: 350,
     render: (_, row) => (
-      <Space size="middle">
+      <Space size="middle" wrap>
         <Link to={`/activities/${row.id}`}>查看详情</Link>
         <Link to={`/admin/activities/${row.id}/registrations`}>报名名单</Link>
+        <ActivityManagementActions activity={row} compact onChanged={onChanged} />
       </Space>
     ),
   },
@@ -65,19 +67,21 @@ export function AdminActivityTable({
   activities,
   loading,
   pagination,
+  onChanged,
 }: {
   activities: Activity[];
   loading: boolean;
   pagination: TablePaginationConfig | false;
+  onChanged: (activity: Activity) => void;
 }) {
   return (
     <Table<Activity>
       rowKey="id"
-      columns={columns}
+      columns={columns(onChanged)}
       dataSource={activities}
       loading={loading}
       pagination={pagination}
-      scroll={{ x: 1110 }}
+      scroll={{ x: 1290 }}
       locale={{ emptyText: "暂无符合条件的活动" }}
     />
   );

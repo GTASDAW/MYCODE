@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import {
   DateBadge,
+  ActivityCancellationNotice,
   EmptyState,
   ErrorState,
   LoadingState,
@@ -63,24 +64,29 @@ export function MyRegistrationsPage() {
                     <EnvironmentOutlined aria-hidden="true" />
                     {activity.location}
                   </p>
+                  <ActivityCancellationNotice activity={activity} />
                 </div>
                 <div className="registration-row-actions">
                   <Tag
                     color={
-                      status === "ACTIVE"
+                      activity.cancelled
+                        ? "red"
+                        : status === "ACTIVE"
                         ? "green"
                         : status === "WAITING"
                           ? "orange"
                           : "default"
                     }
                   >
-                    {status === "ACTIVE"
+                    {activity.cancelled
+                      ? "活动已取消"
+                      : status === "ACTIVE"
                       ? "已报名"
                       : status === "WAITING"
                         ? "候补中"
                         : "已取消"}
                   </Tag>
-                  {activity.closed && (
+                  {activity.closed && !activity.cancelled && (
                     <span className="metadata">活动已开始</span>
                   )}
                   <Link to={`/activities/${activity.id}`}>查看活动</Link>

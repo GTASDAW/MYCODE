@@ -3,6 +3,8 @@ package com.example.gather.api;
 import com.example.gather.api.AdminModels.*;
 import com.example.gather.api.ApiModels.ActivityView;
 import com.example.gather.api.ApiModels.CreateActivityRequest;
+import com.example.gather.api.ApiModels.EditActivityRequest;
+import com.example.gather.api.ApiModels.CancelActivityRequest;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
 import com.example.gather.service.AdminService;
@@ -49,5 +51,17 @@ public class AdminController {
                                         @AuthenticationPrincipal AppUserDetails principal) {
         ActivityView activity = activities.create(request, principal.id());
         return ResponseEntity.created(URI.create("/api/activities/" + activity.id())).body(activity);
+    }
+
+    @PatchMapping("/activities/{id}")
+    ActivityView edit(@PathVariable long id, @Valid @RequestBody EditActivityRequest request,
+                      @AuthenticationPrincipal AppUserDetails principal) {
+        return activities.edit(id, request, principal.id());
+    }
+
+    @PostMapping("/activities/{id}/cancel")
+    ActivityView cancel(@PathVariable long id, @Valid @RequestBody CancelActivityRequest request,
+                        @AuthenticationPrincipal AppUserDetails principal) {
+        return activities.cancel(id, request, principal.id());
     }
 }

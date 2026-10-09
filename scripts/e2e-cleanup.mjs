@@ -34,12 +34,12 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2') ORDER BY installed_rank");
-  if (!['1', '2'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3') ORDER BY installed_rank");
+  if (!['1', '2', '3'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
-  await connection.execute('SELECT id, title, description, registered_count FROM activities LIMIT 0');
+  await connection.execute('SELECT id, title, description, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
   await connection.execute('SELECT id, activity_id, user_id, status FROM registrations LIMIT 0');
   await connection.execute('SELECT id, username, display_name, role FROM users LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");
@@ -82,6 +82,11 @@ function readManifest(path) {
   for (const fixture of manifest.fixtures) {
     if (!uuidPattern.test(fixture.key) || keys.has(fixture.key) || typeof fixture.title !== 'string'
         || typeof fixture.description !== 'string' || !fixture.description.endsWith(fixtureMarker(manifest.runId, fixture.key))
+        || (fixture.allowedVersions !== undefined && (!Array.isArray(fixture.allowedVersions)
+          || fixture.allowedVersions.length === 0
+          || fixture.allowedVersions.some(version => typeof version.title !== 'string' || typeof version.description !== 'string'
+            || !version.description.endsWith(fixtureMarker(manifest.runId, fixture.key)))
+          || !fixture.allowedVersions.some(version => version.title === fixture.title && version.description === fixture.description)))
         || (fixture.id !== null && (!Number.isSafeInteger(fixture.id) || fixture.id < 1))) {
       throw new Error('Invalid fixture ownership proof. Cleanup refused.');
     }
@@ -173,6 +178,23 @@ export function recordFixtureId(key, id) {
   saveManifest(path, manifest);
 }
 
+export function recordFixtureEditIntent(key, title, description) {
+  const { manifest, path } = readManifest(process.env.E2E_RUN_MANIFEST);
+  const fixture = manifest.fixtures.find(item => item.key === key);
+  if (!fixture || typeof title !== 'string' || typeof description !== 'string'
+      || !description.endsWith(fixtureMarker(manifest.runId, key))) {
+    throw new Error('Activity edits must retain the full ownership marker and be declared before writing.');
+  }
+  fixture.allowedVersions ??= [{ title: fixture.title, description: fixture.description }];
+  if (!fixture.allowedVersions.some(version => version.title === title && version.description === description)) {
+    fixture.allowedVersions.push({ title, description });
+  }
+  // Persist the exact new values before the HTTP write: a lost response remains
+  // recoverable without accepting arbitrary later edits to this activity.
+  saveManifest(path, manifest);
+  return { title, description };
+}
+
 export function trackAccount(displayNamePrefixes = ['e2e-', '改名-']) {
   if (!process.env.E2E_RUN_MANIFEST) throw new Error('E2E fixture tracking was not initialized.');
   const { manifest, path } = readManifest(process.env.E2E_RUN_MANIFEST);
@@ -207,17 +229,27 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
   try {
     const resolved = [];
     for (const fixture of fixtures) {
+      const versions = fixture.allowedVersions ?? [{ title: fixture.title, description: fixture.description }];
+      if (!Array.isArray(versions) || versions.length === 0
+          || !versions.some(version => version.title === fixture.title && version.description === fixture.description)
+          || versions.some(version => typeof version.title !== 'string' || typeof version.description !== 'string')) {
+        throw new Error('Invalid fixture version ownership proof. Cleanup refused.');
+      }
       let id = fixture.id;
       if (id === null) {
         // An HTTP/UI assertion can fail after INSERT but before its ID is recorded.
         // Resolve that one pre-recorded intent, never a title prefix/date/range.
-        const [matches] = await connection.execute(
-          'SELECT id FROM activities WHERE CAST(title AS BINARY) = CAST(? AS BINARY) AND CAST(description AS BINARY) = CAST(? AS BINARY) LIMIT 2',
-          [fixture.title, fixture.description]);
-        if (matches.length > 1) throw new Error('One fixture intent matched multiple activities. Cleanup refused.');
-        if (matches.length === 1) id = matches[0].id;
+        const matchedIds = new Set();
+        for (const version of versions) {
+          const [matches] = await connection.execute(
+            'SELECT id FROM activities WHERE CAST(title AS BINARY) = CAST(? AS BINARY) AND CAST(description AS BINARY) = CAST(? AS BINARY) LIMIT 2',
+            [version.title, version.description]);
+          for (const match of matches) matchedIds.add(match.id);
+        }
+        if (matchedIds.size > 1) throw new Error('One fixture intent matched multiple activities. Cleanup refused.');
+        if (matchedIds.size === 1) id = [...matchedIds][0];
       }
-      if (id !== null) resolved.push({ ...fixture, id });
+      if (id !== null) resolved.push({ ...fixture, id, allowedVersions: versions });
     }
     resolved.sort((first, second) => first.id - second.id);
     if (new Set(resolved.map(fixture => fixture.id)).size !== resolved.length) throw new Error('Duplicate activity IDs in fixture manifest. Cleanup refused.');
@@ -230,10 +262,10 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
         if (alreadyDeleted.has(fixture.id)) continue;
         throw new Error(`Created activity ${fixture.id} is missing from this database. Cleanup target could be wrong.`);
       }
-      if (rows[0].title !== fixture.title || rows[0].description !== fixture.description) {
+      if (!fixture.allowedVersions.some(version => rows[0].title === version.title && rows[0].description === version.description)) {
         throw new Error(`Activity ${fixture.id} ownership changed. Entire cleanup rolled back.`);
       }
-      locked.push(fixture);
+      locked.push({ ...fixture, title: rows[0].title, description: rows[0].description });
     }
     const resolvedAccounts = [];
     for (const account of accounts) {
@@ -261,7 +293,7 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
         throw new Error(`User ${account.id} ownership changed. Entire cleanup rolled back.`);
       }
       const [registrations] = await connection.execute('SELECT activity_id AS activityId FROM registrations WHERE user_id = ?', [account.id]);
-      const [createdActivities] = await connection.execute('SELECT id FROM activities WHERE created_by = ?', [account.id]);
+      const [createdActivities] = await connection.execute('SELECT id FROM activities WHERE created_by = ? OR cancelled_by = ?', [account.id, account.id]);
       if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || createdActivities.some(row => !ownedActivityIds.has(row.id))) {
         throw new Error(`User ${account.id} references data outside this run. Entire cleanup rolled back.`);
       }

@@ -16,7 +16,7 @@ function fakeDatabase(activities, registrations = [], failDeleteId, users = [], 
       if (sql.startsWith('SELECT id FROM users')) return [state.users.filter(row => row.username === parameters[0]).slice(0, 2).map(row => ({ id: row.id }))];
       if (sql.startsWith('SELECT id, username')) return [state.users.filter(row => row.id === parameters[0])];
       if (sql.startsWith('SELECT activity_id')) return [state.registrations.filter(row => row.user_id === parameters[0]).map(row => ({ activityId: row.activity_id }))];
-      if (sql.startsWith('SELECT id FROM activities WHERE created_by')) return [state.activities.filter(row => row.created_by === parameters[0]).map(row => ({ id: row.id }))];
+      if (sql.startsWith('SELECT id FROM activities WHERE created_by')) return [state.activities.filter(row => row.created_by === parameters[0] || row.cancelled_by === parameters[1]).map(row => ({ id: row.id }))];
       if (sql.startsWith('SELECT id FROM activities')) {
         return [state.activities.filter(row => row.title === parameters[0] && row.description === parameters[1]).slice(0, 2).map(row => ({ id: row.id }))];
       }
@@ -277,4 +277,75 @@ test('both verified user and activity IDs persist before deletes and recover a l
   assert.equal(recovered.deletedActivities, 0);
   assert.deepEqual(recovered.resolvedUserIds, [201]);
   assert.equal(connection.state.commits, 2);
+});
+
+test('a declared activity edit is exactly recoverable after its HTTP response is lost', async () => {
+  const original = fixture(301);
+  const edited = { title: 'edited activity 301', description: `edited copy\n${original.description}` };
+  const protectedRow = { ...fixture(302), title: edited.title };
+  const intent = { ...original, id: null, allowedVersions: [original, edited] };
+  const connection = fakeDatabase([{ ...original, ...edited }, protectedRow], [
+    { activity_id: 301, status: 'CANCELLED' }, { activity_id: 302, status: 'ACTIVE' },
+  ]);
+  const result = await deleteOwnedFixtures(connection, [intent]);
+  assert.deepEqual(result.resolvedIds, [301]);
+  assert.equal(result.deletedActivities, 1);
+  assert.deepEqual(connection.state.activities, [protectedRow]);
+  assert.deepEqual(connection.state.registrations, [{ activity_id: 302, status: 'ACTIVE' }]);
+  const retry = await deleteOwnedFixtures(connection, [{ ...intent, id: 301 }], new Set([301]));
+  assert.equal(retry.deletedActivities, 0);
+  assert.deepEqual(connection.state.activities, [protectedRow]);
+});
+
+test('an undeclared later activity title or description refuses all cleanup deletes', async () => {
+  const first = fixture(301);
+  const original = fixture(302);
+  const edited = { title: 'declared edit', description: `declared edit\n${original.description}` };
+  const intent = { ...original, allowedVersions: [original, edited] };
+  for (const changed of [{ ...original, title: 'undeclared edit' }, { ...original, ...edited, description: 'undeclared description' }]) {
+    const connection = fakeDatabase([first, changed], [{ activity_id: first.id, status: 'ACTIVE' }]);
+    await assert.rejects(deleteOwnedFixtures(connection, [first, intent]), /ownership changed/);
+    assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+    assert.deepEqual(connection.state.activities, [first, changed]);
+    assert.equal(connection.state.rollbacks, 1);
+  }
+});
+
+test('declaring a failed edit preserves the original exact proof for cleanup', async () => {
+  const original = fixture(301);
+  const intent = { ...original, allowedVersions: [original, { title: 'never saved', description: `never saved\n${original.description}` }] };
+  const connection = fakeDatabase([original]);
+  const result = await deleteOwnedFixtures(connection, [intent]);
+  assert.equal(result.deletedActivities, 1);
+  assert.deepEqual(connection.state.activities, []);
+});
+
+test('two rows matching different declared versions are ambiguous and never deleted', async () => {
+  const original = fixture(301);
+  const edited = { title: 'declared edit', description: `declared edit\n${original.description}` };
+  const connection = fakeDatabase([original, { ...edited, id: 302 }]);
+  await assert.rejects(deleteOwnedFixtures(connection, [{ ...original, id: null, allowedVersions: [original, edited] }]), /multiple activities/);
+  assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+  assert.equal(connection.state.rollbacks, 1);
+});
+
+test('invalid fixture versions that omit the original proof fail before lookup or delete', async () => {
+  const original = fixture(301);
+  for (const allowedVersions of [[], [{ title: 'other', description: 'unowned' }], [{ title: original.title, description: null }]]) {
+    const connection = fakeDatabase([original]);
+    await assert.rejects(deleteOwnedFixtures(connection, [{ ...original, allowedVersions }]), /version ownership proof/);
+    assert.equal(connection.state.queries.filter(query => query.sql.startsWith('SELECT') || query.sql.startsWith('DELETE')).length, 0);
+    assert.equal(connection.state.rollbacks, 1);
+  }
+});
+
+test('a fixture account referenced as canceller outside this run refuses all cleanup deletes', async () => {
+  const owned = fixture(301);
+  const protectedRow = { ...fixture(302), cancelled_by: 201 };
+  const user = account(201);
+  const connection = fakeDatabase([owned, protectedRow], [], undefined, [user]);
+  await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] }), /outside this run/);
+  assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+  assert.deepEqual(connection.state.activities, [owned, protectedRow]);
+  assert.deepEqual(connection.state.users, [user]);
 });

@@ -12,10 +12,13 @@ final class RequestRoute {
         "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/me/profile", "/api/health", "/api/me/registrations", "/api/admin/overview",
         "/api/admin/activities", "/api/admin/monitoring");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",
-        "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations");
+        "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations",
+        "/api/admin/activities/{id}", "/api/admin/activities/{id}/cancel");
     private static final Pattern DETAIL = Pattern.compile("/api/activities/[^/;]+/?");
     private static final Pattern REGISTRATION = Pattern.compile("/api/activities/[^/;]+/registration/?");
     private static final Pattern ROSTER = Pattern.compile("/api/admin/activities/[^/;]+/registrations/?");
+    private static final Pattern ADMIN_ACTIVITY = Pattern.compile("/api/admin/activities/[^/;]+/?");
+    private static final Pattern ADMIN_CANCEL = Pattern.compile("/api/admin/activities/[^/;]+/cancel/?");
 
     private RequestRoute() {}
 
@@ -42,6 +45,8 @@ final class RequestRoute {
         if (STATIC_ROUTES.contains(path)) return path;
         if (REGISTRATION.matcher(path).matches()) return "/api/activities/{id}/registration";
         if (ROSTER.matcher(path).matches()) return "/api/admin/activities/{id}/registrations";
+        if (ADMIN_CANCEL.matcher(path).matches()) return "/api/admin/activities/{id}/cancel";
+        if (ADMIN_ACTIVITY.matcher(path).matches()) return "/api/admin/activities/{id}";
         if (DETAIL.matcher(path).matches()) return "/api/activities/{id}";
         return "/UNKNOWN";
     }

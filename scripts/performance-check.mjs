@@ -280,7 +280,11 @@ async function verifyDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  assert(['1', '2'].every(version => migrations.some(row => row.version === version && row.success === 1)), 'Flyway V1/V2 must be applied.');
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3'] : ['1', '2'];
+  assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
+  if (settings.phase === undefined) {
+    await db.query('SELECT cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
+  }
   assert(migrations.every(row => row.success === 1), 'Failed Flyway migrations are not allowed.');
   const seedDeadline = Date.now() + 30000;
   let seeded = false;

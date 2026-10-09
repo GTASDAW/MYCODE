@@ -6,6 +6,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import {
   ActivityStatus,
+  ActivityCancellationNotice,
   ErrorState,
   LoadingState,
   PageHeading,
@@ -106,6 +107,7 @@ function AdminRegistrationsPage() {
       />
       {activity ? (
         <Card title="活动概况" className="activity-summary">
+          <ActivityCancellationNotice activity={activity} />
           <Descriptions
             column={{ xs: 1, sm: 2, lg: 3 }}
             items={[
@@ -137,6 +139,11 @@ function AdminRegistrationsPage() {
                 key: "waiting",
                 label: "候补人数",
                 children: `${activity.waitingCount ?? 0} 人`,
+              },
+              {
+                key: "remaining",
+                label: "可报名剩余",
+                children: `${activity.closed ? 0 : Math.max(0, activity.capacity - activity.registeredCount)} 个`,
               },
               {
                 key: "status",

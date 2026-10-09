@@ -40,7 +40,7 @@ export function AdminActivitiesPage() {
       <PageHeading
         title="活动管理"
         section="管理后台"
-        description="查询活动、查看报名人数和报名名单。"
+        description="查询活动、编辑信息、取消活动或查看报名名单。"
         extra={
           <Link to="/admin/activities/new">
             <Button type="primary" icon={<PlusOutlined aria-hidden="true" />}>
@@ -93,6 +93,7 @@ export function AdminActivitiesPage() {
                 { value: "FULL", label: "已满员" },
                 { value: "STARTED", label: "已开始" },
                 { value: "UPCOMING", label: "即将开始" },
+                { value: "CANCELLED", label: "已取消" },
               ]}
             />
           </div>
@@ -125,6 +126,7 @@ export function AdminActivitiesPage() {
           <AdminActivityTable
             activities={resource.data?.items ?? []}
             loading={resource.loading}
+            onChanged={resource.retry}
             pagination={{
               current: query.page,
               pageSize: query.pageSize,

@@ -1,5 +1,6 @@
 import type {
   Activity,
+  ActivityDetails,
   NewActivity,
   Registration,
   User,
@@ -211,6 +212,24 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(activity),
+    }),
+  updateActivity: (id: number, details: ActivityDetails, signal?: AbortSignal) =>
+    request<Activity>(`/admin/activities/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: details.title,
+        description: details.description,
+        location: details.location,
+      }),
+      signal,
+    }),
+  cancelActivity: (id: number, reason: string, signal?: AbortSignal) =>
+    request<Activity>(`/admin/activities/${id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+      signal,
     }),
 };
 

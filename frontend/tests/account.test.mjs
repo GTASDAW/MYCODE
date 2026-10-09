@@ -89,3 +89,15 @@ test('late request errors are no longer current after another read, save or auth
   guard.beginAuthentication();
   assert.equal(guard.isCurrentProfileWrite(newerWrite, 1), false);
 });
+
+test('activity request identity expires on authentication change without invalidating profile reads', () => {
+  const guard = new AuthRequestGuard();
+  guard.beginAuthentication();
+  const profile = guard.beginProfileRead(1);
+  const management = guard.beginAccountRequest(1);
+  assert.equal(guard.isSameAccount(management, 1), true);
+  assert.equal(guard.isSameAccount(management, 2), false);
+  assert.equal(guard.isCurrentProfileRead(profile, 1), true);
+  guard.beginAuthentication();
+  assert.equal(guard.isSameAccount(management, 1), false);
+});

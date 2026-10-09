@@ -11,6 +11,7 @@ interface ActivityResponse {
   waitingCount: number;
   registrationStatus: 'ACTIVE' | 'WAITING' | 'CANCELLED' | null;
   closed: boolean;
+  cancelled: boolean;
 }
 
 interface RosterResponse {
@@ -143,7 +144,7 @@ test('活动列表显示真实接口数据，详情可直接访问且没有横�
   await page.goto(`/activities/${activities[0].id}`);
   await expect(page.getByRole('heading', { name: activities[0].title, exact: true })).toBeVisible();
   await expect(page.getByText(activities[0].location, { exact: true })).toBeVisible();
-  const expectedAction = activities[0].closed ? '活动已开始'
+  const expectedAction = activities[0].cancelled ? '活动已取消' : activities[0].closed ? '活动已开始'
     : activities[0].registeredCount >= activities[0].capacity ? '登录后加入候补' : '登录后报名';
   await expect(page.getByRole('button', { name: expectedAction, exact: true })).toBeVisible();
   await noDocumentOverflow(page);
@@ -356,11 +357,12 @@ test('管理概览显示真实统计，桌面侧栏和手机抽屉导航可用�
   const all = await (await page.request.get('/api/activities')).json() as ActivityResponse[];
   expect(overview.totalActivities).toBe(all.length);
   expect(overview.upcomingActivities).toBe(all.filter(activity => !activity.closed).length);
-  expect(overview.startedActivities).toBe(all.filter(activity => activity.closed).length);
+  expect(overview.startedActivities).toBe(all.filter(activity => activity.closed && !activity.cancelled).length);
+  expect(overview.cancelledActivities).toBe(all.filter(activity => activity.cancelled).length);
   expect(overview.fullActivities).toBe(all.filter(activity => !activity.closed && activity.registeredCount === activity.capacity).length);
   expect(overview.activeRegistrations).toBe(all.reduce((count, activity) => count + activity.registeredCount, 0));
   expect(overview.availableSeats).toBe(all.filter(activity => !activity.closed).reduce((count, activity) => count + activity.capacity - activity.registeredCount, 0));
-  for (const key of ['totalActivities', 'upcomingActivities', 'activeRegistrations', 'availableSeats']) {
+  for (const key of ['totalActivities', 'upcomingActivities', 'activeRegistrations', 'availableSeats', 'cancelledActivities']) {
     const value = page.getByTestId(`overview-${key}`).locator('.ant-statistic-content-value');
     await expect.poll(async () => (await value.innerText()).replace(/[\s,]/g, '')).toBe(String(overview[key]));
   }

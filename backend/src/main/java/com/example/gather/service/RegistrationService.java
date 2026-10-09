@@ -79,6 +79,9 @@ public class RegistrationService {
     private ActivityLockRow lockOpenActivity(long activityId) {
         ActivityLockRow activity = monitoring.measureRegistrationLock(() -> activities.lockById(activityId));
         if (activity == null) throw new ApiException(HttpStatus.NOT_FOUND, "ACTIVITY_NOT_FOUND", "活动不存在");
+        if (activity.cancelledAt() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CANCELLED", "活动已取消，报名和取消报名已关闭");
+        }
         // Check after acquiring the lock: a request waiting for a seat may cross the start time.
         if (!activity.startsAt().toInstant(ZoneOffset.UTC).isAfter(clock.instant())) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CLOSED", "活动已开始，报名和取消已关闭");
