@@ -9,7 +9,7 @@
 | 页面 | React、TypeScript、Vite、Ant Design、React Router | 页面路由、表单、加载状态、错误反馈 |
 | HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON |
 | 请求追踪与指标 | 请求观察 Filter、MDC、结构化日志、Micrometer Timer | 关联请求与安全错误日志，记录当前实例耗时与连接池快照 |
-| 身份与权限 | Spring Security、Cookie Session、CSRF | 登录、识别当前用户、校验管理员权限 |
+| 身份与权限 | Spring Security、Cookie Session、CSRF | 注册、登录、识别当前用户、校验管理员权限 |
 | 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
 | 业务与事务 | Java 服务层、Spring 事务 | 报名规则、取消规则、事务边界 |
 | 数据访问 | MyBatis Spring Boot Starter 4.0.0 | 执行明确的 SQL，包括行锁查询 |
@@ -33,7 +33,7 @@ flowchart LR
 
 ## 三张业务表
 
-- **用户**：保存登录名、密码哈希、展示名和角色。服务端从登录身份取得用户 ID，报名请求不能自行指定报名人。
+- **用户**：保存唯一登录名、密码哈希、展示名和角色。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名和昵称修改请求不能自行指定操作人。
 - **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。创建后不提供修改名额的接口。
 - **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。
 
@@ -44,6 +44,9 @@ flowchart LR
 | 方法与路径 | 行为 | 权限 |
 | --- | --- | --- |
 | `GET /api/auth/csrf` | 获取后续写请求需要的 CSRF 信息 | 可匿名调用 |
+| `POST /api/auth/register` | 创建普通用户，201 返回资料，不自动登录 | 可匿名调用，需 CSRF |
+| `GET /api/auth/me` | 按可信身份从数据库读取最新用户资料 | 已登录用户 |
+| `PATCH /api/me/profile` | 只修改当前用户昵称 | 已登录用户，需 CSRF |
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的七项真实统计（含候补记录数） | 管理员 |
@@ -56,6 +59,10 @@ flowchart LR
 | `GET /api/me/registrations` | 查看当前用户的报名记录 | 已登录用户 |
 
 登录、退出和获取当前用户的接口由认证模块提供。前端根据身份显示入口，最终授权仍由后端执行：隐藏按钮不能阻止别人直接调用接口。
+
+注册经 `AuthController → AccountService → UserMapper`：规范化用户名、校验昵称与密码、使用既有 BCrypt12 哈希、固定 `USER` 角色后插入。`uq_users_username` 决定并发重名的唯一成功者，冲突返回 409 `USERNAME_TAKEN`。昵称修改经 `ProfileController`，只更新登录身份 ID 对应的 `display_name`；详细输入规则见 [账户指南](account-guide.md)。
+
+前端 `/register` 成功后返回登录页，`/profile` 由登录保护后挂载。用户状态仍由 `AuthProvider` 管理，读取/修改资料按账号、认证代次与顺序忽略过期响应，避免旧昵称或旧账号覆盖当前页面。服务端不重写整个 Session `SecurityContext` 来同步昵称，`/auth/me` 直接查数据库最新资料；其他独立会话下一次读取才能更新，没有实时推送或轮询。
 
 ## 管理查询与统计口径
 
@@ -101,7 +108,7 @@ flowchart LR
 
 Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保存 `JSESSIONID`，默认模式把身份和 CSRF 状态保存在当前 Java 进程内存；`redis` profile 把这些会话属性存到共享 Redis。两种模式的默认闲置时限都是 30 分钟。登录成功后会话身份发生变化，前端应重新取得 CSRF 信息；退出后清空页面中的用户状态，并使服务端会话失效。
 
-浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。登录、退出、创建活动、报名、进入候补、取消和退出候补都属于写请求。读取活动列表不改变业务状态。
+浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。注册、登录、退出、修改昵称、创建活动、报名、进入候补、取消和退出候补都属于写请求。读取活动列表不改变业务状态。
 
 可选 Compose overlay 使用 Nginx 轮询两个相同后端，共用 MySQL、Redis、会话命名空间和时限。请求从 A 切换到 B 时，B 仍通过 Cookie 在 Redis 找到同一身份与 CSRF；不需要客户端指定后端，也不依赖粘滞会话。会话有效且 Redis 可用时，重启一个 Java 实例不会清空共享登录；Redis 失效、会话过期或退出后不能继续使用原身份。
 
