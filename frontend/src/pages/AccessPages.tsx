@@ -29,7 +29,13 @@ export function ProtectedRoute({
       </div>
     );
   if (!auth.user)
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname, notice: auth.notice ?? undefined }}
+      />
+    );
   if (admin && auth.user.role !== "ADMIN")
     return (
       <Result

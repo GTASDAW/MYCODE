@@ -6,6 +6,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
+import java.util.Locale;
 
 @Service
 public class DatabaseUserDetailsService implements UserDetailsService {
@@ -15,7 +16,7 @@ public class DatabaseUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) {
-        UserRow row = users.findByUsername(username);
+        UserRow row = users.findByUsername(username == null ? "" : username.strip().toLowerCase(Locale.ROOT));
         if (row == null) throw new UsernameNotFoundException("Unknown user");
         return new AppUserDetails(row);
     }

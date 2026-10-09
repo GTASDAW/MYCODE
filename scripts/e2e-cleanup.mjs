@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,7 @@ export async function verifyDatabase(connection, config, expected) {
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, registered_count FROM activities LIMIT 0');
   await connection.execute('SELECT id, activity_id, user_id, status FROM registrations LIMIT 0');
+  await connection.execute('SELECT id, username, display_name, role FROM users LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");
   if (!accounts.some(row => row.username === 'admin' && row.role === 'ADMIN')
       || !accounts.some(row => row.username === 'demo' && row.role === 'USER')) {
@@ -86,14 +87,35 @@ function readManifest(path) {
     }
     keys.add(fixture.key);
   }
+  if (manifest.accounts !== undefined && !Array.isArray(manifest.accounts)) throw new Error('Invalid account fixture manifest. Cleanup refused.');
+  for (const account of manifest.accounts ?? []) {
+    if (!uuidPattern.test(account.key) || keys.has(account.key)
+        || account.username !== accountUsername(manifest.runId, account.key)
+        || account.role !== 'USER' || !Array.isArray(account.allowedDisplayNames)
+        || account.allowedDisplayNames.length === 0
+        || account.allowedDisplayNames.some(name => typeof name !== 'string' || name.length > 40 || !name.endsWith(account.key))
+        || !account.allowedDisplayNames.includes(account.displayName)
+        || (account.id !== null && (!Number.isSafeInteger(account.id) || account.id < 1))) {
+      throw new Error('Invalid account ownership proof. Cleanup refused.');
+    }
+    keys.add(account.key);
+  }
   if (manifest.cleanupIntent && (!Array.isArray(manifest.cleanupIntent.verifiedIds)
-      || manifest.cleanupIntent.verifiedIds.some(id => !Number.isSafeInteger(id) || id < 1))) {
+      || manifest.cleanupIntent.verifiedIds.some(id => !Number.isSafeInteger(id) || id < 1)
+      || (manifest.cleanupIntent.verifiedUserIds !== undefined && (!Array.isArray(manifest.cleanupIntent.verifiedUserIds)
+        || manifest.cleanupIntent.verifiedUserIds.some(id => !Number.isSafeInteger(id) || id < 1))))) {
     throw new Error('Invalid persisted cleanup intent. Cleanup refused.');
   }
   return { manifest, path: absolutePath };
 }
 
 function fixtureMarker(runId, key) { return `[Gather E2E ${runId}/${key}]`; }
+
+// A compact deterministic proof fits the production 32-character username limit;
+// the display name retains the full random fixture UUID for independent checking.
+function accountUsername(runId, key) {
+  return `e2e_${createHash('sha256').update(`${runId}/${key}`).digest('hex').slice(0, 28)}`;
+}
 
 export async function initializeRun(baseUrl) {
   const url = new URL(baseUrl);
@@ -151,7 +173,35 @@ export function recordFixtureId(key, id) {
   saveManifest(path, manifest);
 }
 
-export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted = new Set(), beforeDelete = async () => {}) {
+export function trackAccount(displayNamePrefixes = ['e2e-', '改名-']) {
+  if (!process.env.E2E_RUN_MANIFEST) throw new Error('E2E fixture tracking was not initialized.');
+  const { manifest, path } = readManifest(process.env.E2E_RUN_MANIFEST);
+  const key = randomUUID();
+  const allowedDisplayNames = [...new Set(displayNamePrefixes.map(prefix => `${prefix}${key}`))];
+  if (allowedDisplayNames.length === 0 || allowedDisplayNames.some(name => name.length > 40 || /[\x00-\x1f\x7f-\x9f]/.test(name))) {
+    throw new Error('Account display names must be valid and declared before registration.');
+  }
+  const account = { key, id: null, username: accountUsername(manifest.runId, key),
+    displayName: allowedDisplayNames[0], allowedDisplayNames, role: 'USER' };
+  manifest.accounts ??= [];
+  manifest.accounts.push(account);
+  saveManifest(path, manifest);
+  return account;
+}
+
+export function recordAccountId(key, id) {
+  const { manifest, path } = readManifest(process.env.E2E_RUN_MANIFEST);
+  const account = manifest.accounts?.find(item => item.key === key);
+  if (!account || !Number.isSafeInteger(id) || id < 1 || (account.id !== null && account.id !== id)) {
+    throw new Error('Registered account ID could not be recorded safely.');
+  }
+  account.id = id;
+  saveManifest(path, manifest);
+}
+
+export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted = new Set(), beforeDelete = async () => {}, {
+  accounts = [], alreadyDeletedAccounts = new Set(),
+} = {}) {
   await connection.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
   await connection.beginTransaction();
   try {
@@ -185,9 +235,41 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
       }
       locked.push(fixture);
     }
+    const resolvedAccounts = [];
+    for (const account of accounts) {
+      let id = account.id;
+      if (id === null) {
+        // Resolve the one exact pre-recorded username, then validate its full proof.
+        // A changed nickname is a refusal, not a silently abandoned account.
+        const [matches] = await connection.execute('SELECT id FROM users WHERE CAST(username AS BINARY) = CAST(? AS BINARY) LIMIT 2', [account.username]);
+        if (matches.length > 1) throw new Error('One account intent matched multiple users. Cleanup refused.');
+        if (matches.length === 1) id = matches[0].id;
+      }
+      if (id !== null) resolvedAccounts.push({ ...account, id });
+    }
+    resolvedAccounts.sort((first, second) => first.id - second.id);
+    if (new Set(resolvedAccounts.map(account => account.id)).size !== resolvedAccounts.length) throw new Error('Duplicate user IDs in fixture manifest. Cleanup refused.');
+    const ownedActivityIds = new Set(resolved.map(fixture => fixture.id));
+    const lockedAccounts = [];
+    for (const account of resolvedAccounts) {
+      const [rows] = await connection.execute('SELECT id, username, display_name AS displayName, role FROM users WHERE id = ? FOR UPDATE', [account.id]);
+      if (rows.length === 0) {
+        if (alreadyDeletedAccounts.has(account.id)) continue;
+        throw new Error(`Registered user ${account.id} is missing from this database. Cleanup target could be wrong.`);
+      }
+      if (rows[0].username !== account.username || rows[0].role !== 'USER' || !account.allowedDisplayNames.includes(rows[0].displayName)) {
+        throw new Error(`User ${account.id} ownership changed. Entire cleanup rolled back.`);
+      }
+      const [registrations] = await connection.execute('SELECT activity_id AS activityId FROM registrations WHERE user_id = ?', [account.id]);
+      const [createdActivities] = await connection.execute('SELECT id FROM activities WHERE created_by = ?', [account.id]);
+      if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || createdActivities.some(row => !ownedActivityIds.has(row.id))) {
+        throw new Error(`User ${account.id} references data outside this run. Entire cleanup rolled back.`);
+      }
+      lockedAccounts.push(account);
+    }
     // Persist verified IDs before deleting. A lost COMMIT reply/process interruption
     // can then be retried safely even if the final manifest write never happened.
-    await beforeDelete(resolved);
+    await beforeDelete(resolved, resolvedAccounts);
     let deletedRegistrations = 0;
     for (const fixture of locked) {
       const [registrations] = await connection.execute('DELETE FROM registrations WHERE activity_id = ?', [fixture.id]);
@@ -197,8 +279,14 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
       if (activity.affectedRows !== 1) throw new Error(`Activity ${fixture.id} was not deleted exactly once.`);
       deletedRegistrations += registrations.affectedRows;
     }
+    for (const account of lockedAccounts) {
+      const [user] = await connection.execute('DELETE FROM users WHERE id = ? AND CAST(username AS BINARY) = CAST(? AS BINARY) AND role = ?',
+        [account.id, account.username, 'USER']);
+      if (user.affectedRows !== 1) throw new Error(`User ${account.id} was not deleted exactly once.`);
+    }
     await connection.commit();
-    return { deletedActivities: locked.length, deletedRegistrations, resolvedIds: resolved.map(fixture => fixture.id) };
+    return { deletedActivities: locked.length, deletedRegistrations, resolvedIds: resolved.map(fixture => fixture.id),
+      deletedUsers: lockedAccounts.length, resolvedUserIds: resolvedAccounts.map(account => account.id) };
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -213,11 +301,15 @@ export async function cleanupRun(manifestPath) {
     await verifyDatabase(connection, config, manifest.target);
     const previousIds = manifest.cleanup?.completedAt ? manifest.cleanup.resolvedIds : [];
     const allowedMissing = new Set([...previousIds, ...(manifest.cleanupIntent?.verifiedIds ?? [])]);
-    const result = await deleteOwnedFixtures(connection, manifest.fixtures, allowedMissing, async resolved => {
+    const previousUserIds = manifest.cleanup?.completedAt ? (manifest.cleanup.resolvedUserIds ?? []) : [];
+    const allowedMissingAccounts = new Set([...previousUserIds, ...(manifest.cleanupIntent?.verifiedUserIds ?? [])]);
+    const result = await deleteOwnedFixtures(connection, manifest.fixtures, allowedMissing, async (resolved, resolvedAccounts) => {
       for (const fixture of resolved) manifest.fixtures.find(item => item.key === fixture.key).id = fixture.id;
-      manifest.cleanupIntent = { verifiedIds: resolved.map(fixture => fixture.id), verifiedAt: new Date().toISOString() };
+      for (const account of resolvedAccounts) manifest.accounts.find(item => item.key === account.key).id = account.id;
+      manifest.cleanupIntent = { verifiedIds: resolved.map(fixture => fixture.id),
+        verifiedUserIds: resolvedAccounts.map(account => account.id), verifiedAt: new Date().toISOString() };
       saveManifest(path, manifest);
-    });
+    }, { accounts: manifest.accounts ?? [], alreadyDeletedAccounts: allowedMissingAccounts });
     const completedAt = new Date().toISOString();
     if (manifest.cleanup?.completedAt) {
       // Keep the first successful deletion counts when CI's always-step retries.
@@ -226,7 +318,7 @@ export async function cleanupRun(manifestPath) {
       manifest.cleanup = { ...result, completedAt };
     }
     saveManifest(path, manifest);
-    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations; demo/other rows retained.`);
+    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations, ${result.deletedUsers} users; demo/other rows retained.`);
     return result;
   } catch (error) {
     const failure = { failedAt: new Date().toISOString(), error: error.message };

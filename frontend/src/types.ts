@@ -5,6 +5,12 @@ export interface User {
   role: "USER" | "ADMIN";
 }
 
+export interface NewUser {
+  username: string;
+  password: string;
+  displayName: string;
+}
+
 export interface Activity {
   id: number;
   title: string;

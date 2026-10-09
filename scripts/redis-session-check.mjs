@@ -196,12 +196,19 @@ export async function runRedisSessionChecks() {
   const clients = [];
   const runId = randomUUID();
   const ownedFixture = { key: runId, id: null, title: `Redis 会话验证 ${runId}`, description: `gather-redis-session-check:${runId}` };
+  const accountKey = randomUUID();
+  const ownedAccount = { key: accountKey, id: null, username: `redis_${accountKey.replaceAll('-', '').slice(0, 24)}`,
+    displayName: `e2e-${accountKey}`, allowedDisplayNames: [`e2e-${accountKey}`, `改名-${accountKey}`], role: 'USER' };
+  const accountManifestPath = resolve('.runtime/ci', `redis-account-${runId}.manifest.json`);
+  let accountAttempted = false;
+  let accountClient;
+  let otherAccountSession;
   let db;
   let baseline;
   let fixture;
   let timeoutChanged = false;
   let primaryError;
-  let removed = { activities: 0, registrations: 0 };
+  let removed = { activities: 0, registrations: 0, users: 0 };
   const passed = name => { checks.push(name); console.log(`PASS: ${name}`); };
   const client = () => { const created = new ApiClient(); clients.push(created); return created; };
 
@@ -258,6 +265,49 @@ export async function runRedisSessionChecks() {
       && Number(counts.waitingCount) === 0 && Number(counts.cancelledCount) === 1, 'Real MySQL counters and registration states must agree.');
     passed('A-issued CSRF works on B; cross-instance signup, waiting and promotion preserve real MySQL invariants');
 
+    // Persist the exact account creation/nickname intent before registration; never record its password or Session.
+    await mkdir('.runtime/ci', { recursive: true });
+    const saveAccountManifest = async () => writeFile(accountManifestPath, `${JSON.stringify({
+      runId, database: settings.database.database, account: ownedAccount, fixture: ownedFixture,
+    }, null, 2)}\n`);
+    await saveAccountManifest();
+    accountAttempted = true;
+    accountClient = client();
+    const registrationToken = await accountClient.csrf(settings.a);
+    const registrationResponse = await accountClient.response(settings.b, '/api/auth/register', {
+      method: 'POST', headers: { [registrationToken.headerName]: registrationToken.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: ownedAccount.username, displayName: ownedAccount.displayName, password: 'LocalAccount123!' }),
+    });
+    assert(registrationResponse.status === 201, 'Registration through B must create an ordinary account.');
+    const accountIdentity = await registrationResponse.json();
+    assert(Number.isSafeInteger(accountIdentity.id) && accountIdentity.id > 0 && accountIdentity.role === 'USER'
+      && accountIdentity.username === ownedAccount.username && accountIdentity.displayName === ownedAccount.displayName,
+    'Registration identity differs from the exact owned account.');
+    ownedAccount.id = accountIdentity.id;
+    await saveAccountManifest();
+    await expectedError(await accountClient.response(settings.a, '/api/auth/me'), 401, 'UNAUTHENTICATED');
+    await accountClient.login(settings.a, ownedAccount.username, 'LocalAccount123!');
+    otherAccountSession = client();
+    await otherAccountSession.login(settings.b, ownedAccount.username, 'LocalAccount123!');
+    const profileToken = await accountClient.csrf(settings.a);
+    const renamed = await accountClient.write(settings.b, '/api/me/profile', profileToken, 'PATCH', {
+      displayName: ownedAccount.allowedDisplayNames[1], id: user.id, role: 'ADMIN', username: 'admin',
+    });
+    assert(renamed.id === ownedAccount.id && renamed.role === 'USER' && renamed.username === ownedAccount.username
+      && renamed.displayName === ownedAccount.allowedDisplayNames[1], 'Profile writes must target the trusted current user only.');
+    for (const current of [accountClient, otherAccountSession]) for (const base of [settings.a, settings.b]) {
+      const identity = await current.json(base, '/api/auth/me');
+      assert(identity.id === ownedAccount.id && identity.displayName === renamed.displayName && identity.role === 'USER',
+        'Independent sessions must read the latest database nickname on both replicas.');
+    }
+    assert((await admin.json(settings.a, '/api/auth/me')).displayName === user.displayName, 'Forged profile identity modified another account.');
+    await expectedError(await accountClient.response(settings.b, '/api/admin/overview'), 403, 'FORBIDDEN');
+    const candidate = await accountClient.write(settings.a, `/api/activities/${fixture.id}/registration`, profileToken);
+    assert(candidate.registrationStatus === 'WAITING' && candidate.registeredCount === 1 && candidate.waitingCount === 1,
+      'A newly registered ordinary user must participate through the shared Session.');
+    await accountClient.write(settings.b, `/api/activities/${fixture.id}/registration`, profileToken, 'DELETE');
+    passed('registration creates USER without logging in; two independent sessions read the latest nickname on A/B; profile identity cannot be forged and signup works');
+
     const backends = new Set();
     // Startup health checks can temporarily mark one upstream failed. Allow its
     // normal Nginx fail_timeout to elapse instead of treating a retry list as a replica.
@@ -283,6 +333,23 @@ export async function runRedisSessionChecks() {
     assert(repeated.registrationStatus === 'ACTIVE' && repeated.registeredCount === 1, 'Pre-restart CSRF must remain usable on B without duplicating registration.');
     assert(await databaseSnapshot(db) === beforeRestart, 'Backend A restart or duplicate signup changed database records.');
     passed('restarting only A preserves shared login, existing CSRF and exact database data');
+
+    for (const base of [settings.a, settings.b]) {
+      const identity = await accountClient.json(base, '/api/auth/me');
+      assert(identity.id === ownedAccount.id && identity.displayName === ownedAccount.allowedDisplayNames[1],
+        'Updated profile must remain readable across a Java replica restart.');
+    }
+    const oldAccountCookie = accountClient.clone();
+    await accountClient.write(settings.b, '/api/auth/logout', await accountClient.csrf(settings.a));
+    for (const base of [settings.a, settings.b]) await expectedError(await oldAccountCookie.clone().response(base, '/api/auth/me'), 401, 'UNAUTHENTICATED');
+    for (const base of [settings.a, settings.b]) {
+      assert((await otherAccountSession.json(base, '/api/auth/me')).displayName === ownedAccount.allowedDisplayNames[1],
+        'Logging out one Session must preserve another independent Session.');
+    }
+    await accountClient.login(settings.b, ownedAccount.username, 'LocalAccount123!');
+    assert((await accountClient.json(settings.a, '/api/auth/me')).displayName === ownedAccount.allowedDisplayNames[1],
+      'Re-login must load the persisted nickname across replicas.');
+    passed('updated nickname survives replica restart and re-login; logout invalidates only its shared Session without rewriting identity or CSRF');
 
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);
@@ -320,8 +387,13 @@ export async function runRedisSessionChecks() {
     if (db) {
       try {
         if (baseline !== undefined) {
-          const result = await deleteOwnedFixtures(db, [ownedFixture]);
-          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations };
+          const result = await deleteOwnedFixtures(db, [ownedFixture], new Set(), async (activities, accounts) => {
+            if (accountAttempted) await writeFile(accountManifestPath, `${JSON.stringify({ runId, database: settings.database.database,
+              account: ownedAccount, fixture: ownedFixture, cleanupIntent: {
+                activityIds: activities.map(activity => activity.id), userIds: accounts.map(account => account.id),
+              } }, null, 2)}\n`);
+          }, { accounts: accountAttempted ? [ownedAccount] : [] });
+          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations, users: result.deletedUsers };
           assert(await databaseSnapshot(db) === baseline, 'Exact Redis fixture cleanup did not preserve the database baseline.');
           passed('only the exact UUID fixture and its registrations removed; existing database records preserved');
         }
@@ -329,7 +401,8 @@ export async function runRedisSessionChecks() {
       finally { await db.end(); }
     }
     await mkdir('.runtime/ci', { recursive: true });
-    await writeFile(reportPath, `${JSON.stringify({ success: !primaryError, checks, counts: { checksPassed: checks.length, activitiesRemoved: removed.activities, registrationsRemoved: removed.registrations } }, null, 2)}\n`);
+    await writeFile(reportPath, `${JSON.stringify({ success: !primaryError, checks, counts: { checksPassed: checks.length,
+      activitiesRemoved: removed.activities, registrationsRemoved: removed.registrations, usersRemoved: removed.users } }, null, 2)}\n`);
   }
   if (primaryError) throw primaryError;
   console.log(`Redis session verification completed (${checks.length} checks); report: ${reportPath}`);

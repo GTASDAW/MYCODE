@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 final class RequestRoute {
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS");
     private static final Set<String> STATIC_ROUTES = Set.of("/api/activities", "/api/auth/csrf", "/api/auth/me",
-        "/api/auth/login", "/api/auth/logout", "/api/health", "/api/me/registrations", "/api/admin/overview",
+        "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/me/profile", "/api/health", "/api/me/registrations", "/api/admin/overview",
         "/api/admin/activities", "/api/admin/monitoring");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",
         "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations");

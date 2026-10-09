@@ -9,6 +9,8 @@ import { ActivitiesPage } from "./pages/ActivitiesPage";
 import { ActivityDetailRoute } from "./pages/ActivityDetailPage";
 import { CreateActivityPage } from "./pages/CreateActivityPage";
 import { LoginPage } from "./pages/LoginPage";
+import { RegisterPage } from "./pages/RegisterPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import { MyRegistrationsPage } from "./pages/MyRegistrationsPage";
 import { NotFoundPage, ProtectedRoute } from "./pages/AccessPages";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
@@ -49,6 +51,15 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                   element={<ActivityDetailRoute />}
                 />
                 <Route path="login" element={<LoginPage />} />
+                <Route path="register" element={<RegisterPage />} />
+                <Route
+                  path="profile"
+                  element={
+                    <ProtectedRoute>
+                      <ProfilePage />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route
                   path="my-registrations"
                   element={

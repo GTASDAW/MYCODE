@@ -5,10 +5,11 @@ import {
   CalendarOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Navigate, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth";
 import { errorMessage } from "../api";
 import { BackLink, LoadingState } from "../components";
+import { safeReturnPath } from "./authNavigation";
 export function LoginPage() {
   const auth = useAuth();
   const navigate = useNavigate();
@@ -17,17 +18,18 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const submitting = useRef(false);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const state = location.state as { from?: string; notice?: string } | null;
-  const destination =
-    state?.from?.startsWith("/") &&
-    !state.from.startsWith("//") &&
-    state.from !== "/login"
-      ? state.from
-      : "/activities";
+  const state = location.state as {
+    from?: string;
+    notice?: string;
+    username?: string;
+    registered?: boolean;
+  } | null;
+  const destination = safeReturnPath(state?.from);
 
   if (auth.loading)
     return (
@@ -38,6 +40,8 @@ export function LoginPage() {
   if (auth.user) return <Navigate to={destination} replace />;
 
   async function submit(values: { username: string; password: string }) {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -47,6 +51,7 @@ export function LoginPage() {
     } catch (err) {
       if (mounted.current) setError(errorMessage(err));
     } finally {
+      submitting.current = false;
       if (mounted.current) setBusy(false);
     }
   }
@@ -84,7 +89,7 @@ export function LoginPage() {
           {(state?.notice || auth.error) && (
             <Alert
               className="form-alert"
-              type="warning"
+              type={state?.registered ? "success" : "warning"}
               showIcon
               title={state?.notice ?? auth.error}
             />
@@ -98,6 +103,8 @@ export function LoginPage() {
             onFinish={submit}
             requiredMark={false}
             size="large"
+            initialValues={{ username: state?.username }}
+            disabled={busy}
           >
             <Form.Item
               name="username"
@@ -124,10 +131,11 @@ export function LoginPage() {
                 maxLength={128}
               />
             </Form.Item>
-            <Button type="primary" block htmlType="submit" loading={busy}>
+            <Button type="primary" block htmlType="submit" loading={busy} aria-label="登录" aria-busy={busy}>
               登录 <ArrowRightOutlined aria-hidden="true" />
             </Button>
           </Form>
+          <p className="account-switch">还没有账号？<Link to="/register" state={{ from: destination }}>注册账号</Link></p>
           <div className="demo-accounts">
             <div className="demo-heading">
               <span>先体验，再探索</span>

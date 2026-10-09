@@ -833,6 +833,51 @@ main:focus {
   padding-top: 22px;
   margin-top: 26px;
 }
+.account-switch {
+  margin-top: 20px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: #595959;
+}
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: 20px;
+  align-items: start;
+}
+.profile-card {
+  min-width: 0;
+}
+.profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+.profile-identity > div {
+  min-width: 0;
+}
+.profile-identity > .ant-avatar {
+  flex-shrink: 0;
+}
+.profile-identity h2 {
+  font-size: 20px;
+  line-height: 1.6;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.profile-note,
+.profile-form-intro {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #8c8c8c;
+}
+.profile-note {
+  margin-top: 16px;
+}
+.profile-form-intro {
+  margin-bottom: 24px;
+}
 .demo-heading {
   display: flex;
   flex-direction: column;
@@ -934,6 +979,13 @@ main:focus {
   }
 }
 @media (max-width: 767px) {
+  .profile-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .profile-card > .ant-card-body {
+    padding: 18px 16px;
+  }
   .monitoring-detail-grid {
     grid-template-columns: 1fr;
     gap: 16px;

@@ -3,6 +3,7 @@ import type {
   NewActivity,
   Registration,
   User,
+  NewUser,
   AdminOverview,
   AdminMonitoring,
   AdminActivityQuery,
@@ -138,7 +139,21 @@ async function refreshCsrf(): Promise<void> {
 
 export const api = {
   refreshCsrf,
-  me: () => request<User>("/auth/me"),
+  me: (signal?: AbortSignal) => request<User>("/auth/me", { signal }),
+  registerUser: (user: NewUser, signal?: AbortSignal) =>
+    request<User>("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(user),
+      signal,
+    }),
+  updateProfile: (displayName: string, signal?: AbortSignal) =>
+    request<User>("/me/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName }),
+      signal,
+    }),
   login: async (username: string, password: string) => {
     const user = await request<User>("/auth/login", {
       method: "POST",

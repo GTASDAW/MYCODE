@@ -19,6 +19,7 @@ import {
   MenuUnfoldOutlined,
   ProfileOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "./auth";
@@ -70,6 +71,11 @@ export function Layout() {
             to: "/my-registrations",
             label: "我的报名",
             icon: <TeamOutlined aria-hidden="true" />,
+          },
+          {
+            to: "/profile",
+            label: "个人中心",
+            icon: <UserOutlined aria-hidden="true" />,
           },
         ]
       : []),
@@ -180,6 +186,11 @@ export function Layout() {
                     icon: <TeamOutlined aria-hidden="true" />,
                     label: "我的报名",
                   },
+                  {
+                    key: "profile",
+                    icon: <UserOutlined aria-hidden="true" />,
+                    label: "个人中心",
+                  },
                   { type: "divider" },
                   {
                     key: "logout",
@@ -191,6 +202,7 @@ export function Layout() {
                 onClick: ({ key }) => {
                   if (key === "logout") void logout();
                   if (key === "mine") navigate("/my-registrations");
+                  if (key === "profile") navigate("/profile");
                 },
               }}
             >

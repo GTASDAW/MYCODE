@@ -146,3 +146,52 @@ test('an invalid JSON error response preserves its validated request ID', async 
     return true;
   });
 });
+
+test('account registration preserves the password, uses CSRF and does not automatically log in', async () => {
+  const { api } = await freshApi();
+  const calls = [];
+  const user = { id: 9, username: 'new_user', displayName: '新用户', role: 'USER' };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    return response(201, user);
+  };
+  const input = { username: 'new_user', password: ' Abc123 ', displayName: '新用户' };
+  assert.deepEqual(await api.registerUser(input), user);
+  assert.deepEqual(calls.map(call => call.url), ['/api/auth/csrf', '/api/auth/register']);
+  const write = calls[1].options;
+  assert.equal(write.method, 'POST');
+  assert.equal(write.headers.get('X-CSRF-TOKEN'), 'valid');
+  assert.deepEqual(JSON.parse(write.body), input);
+});
+
+test('profile requests pass cancellation through and writes contain only the editable nickname', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    return response(200, { id: 9, username: 'new_user', displayName: '新昵称', role: 'USER' });
+  };
+  await api.me(controller.signal);
+  await api.updateProfile('新昵称', controller.signal);
+  assert.equal(calls[0].options.signal, controller.signal);
+  const patch = calls.find(call => call.url === '/api/me/profile');
+  assert.equal(patch.options.method, 'PATCH');
+  assert.equal(patch.options.signal, controller.signal);
+  assert.equal(patch.options.headers.get('X-CSRF-TOKEN'), 'valid');
+  assert.deepEqual(JSON.parse(patch.options.body), { displayName: '新昵称' });
+});
+
+test('duplicate usernames are surfaced without replaying a registration', async () => {
+  const { api } = await freshApi();
+  let writes = 0;
+  globalThis.fetch = async url => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    writes++;
+    return response(409, { code: 'USERNAME_TAKEN', message: '用户名已被使用' });
+  };
+  await assert.rejects(api.registerUser({}), error => error.status === 409 && error.code === 'USERNAME_TAKEN');
+  assert.equal(writes, 1);
+});
