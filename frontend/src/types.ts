@@ -33,6 +33,28 @@ export interface Registration {
   activity: Activity;
 }
 
+export type NotificationFilter = "ALL" | "UNREAD" | "READ";
+
+export interface NotificationQuery {
+  page: number;
+  pageSize: number;
+  status: NotificationFilter;
+}
+
+export interface NotificationItem {
+  id: number;
+  type: "PROMOTED" | "ACTIVITY_CANCELLED";
+  activityId: number;
+  activityTitle: string;
+  cancellationReason: string | null;
+  createdAt: string;
+  readAt: string | null;
+}
+
+export interface NotificationPage extends PageResult<NotificationItem> {
+  unreadCount: number;
+}
+
 export interface NewActivity {
   title: string;
   description: string;

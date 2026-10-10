@@ -20,13 +20,15 @@ public class RegistrationService {
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
     private final ActivityService activityService;
+    private final NotificationService notifications;
     private final Clock clock;
     private final MonitoringService monitoring;
 
-    public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService, Clock clock, MonitoringService monitoring) {
+    public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService, NotificationService notifications, Clock clock, MonitoringService monitoring) {
         this.activities = activities;
         this.registrations = registrations;
         this.activityService = activityService;
+        this.notifications = notifications;
         this.clock = clock;
         this.monitoring = monitoring;
     }
@@ -63,6 +65,7 @@ public class RegistrationService {
             if (waiting != null) {
                 registrations.changeStatus(waiting.id(), "ACTIVE");
                 activities.changeRegisteredCount(activityId, 1);
+                notifications.promoted(activityId, waiting.userId());
             }
         } else if (existing != null && existing.status().equals("WAITING")) {
             registrations.changeStatus(existing.id(), "CANCELLED");

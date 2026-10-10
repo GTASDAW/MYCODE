@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   App as AntApp,
   Avatar,
+  Badge,
   Button,
   Drawer,
   Dropdown,
@@ -10,6 +11,7 @@ import {
 } from "antd";
 import {
   CalendarOutlined,
+  BellOutlined,
   AreaChartOutlined,
   DashboardOutlined,
   DownOutlined,
@@ -23,11 +25,13 @@ import {
 } from "@ant-design/icons";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { useAuth } from "./auth";
+import { useNotifications } from "./notifications";
 import { errorMessage } from "./api";
 import { Logo } from "./components";
 
 export function Layout() {
   const auth = useAuth();
+  const notifications = useNotifications();
   const navigate = useNavigate();
   const location = useLocation();
   const { message } = AntApp.useApp();
@@ -76,6 +80,11 @@ export function Layout() {
             to: "/profile",
             label: "个人中心",
             icon: <UserOutlined aria-hidden="true" />,
+          },
+          {
+            to: "/notifications",
+            label: "通知中心",
+            icon: <BellOutlined aria-hidden="true" />,
           },
         ]
       : []),
@@ -168,6 +177,18 @@ export function Layout() {
         />
         <span className="header-caption">活动报名平台</span>
         <div className="header-actions">
+          {!auth.loading && auth.user && (
+            <Tooltip title={notifications.countError ? "未读数量暂时不可用，打开通知中心重试" : "通知中心"}>
+              <Link to="/notifications" className="notification-bell" data-testid="notification-bell"
+                aria-label={notifications.unreadCount !== null
+                  ? `通知中心，未读 ${notifications.unreadCount} 条`
+                  : notifications.countLoading ? "通知中心，未读数量加载中" : "通知中心，未读数量暂时不可用"}>
+                <Badge count={<span className="ant-badge-count" data-testid="notification-unread-count">{notifications.unreadCount ?? "—"}</span>} showZero>
+                  <BellOutlined aria-hidden="true" />
+                </Badge>
+              </Link>
+            </Tooltip>
+          )}
           {auth.loading ? (
             <Spin size="small" />
           ) : auth.user ? (

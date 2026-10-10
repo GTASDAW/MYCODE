@@ -13,6 +13,9 @@ import type {
   PageResult,
   ActivitySearchQuery,
   ActivitySearchPage,
+  NotificationQuery,
+  NotificationPage,
+  NotificationItem,
 } from "./types";
 
 interface CsrfToken {
@@ -190,6 +193,19 @@ export const api = {
     request<Activity>(`/activities/${id}/registration`, { method: "DELETE" }),
   registrations: (signal?: AbortSignal) =>
     request<Registration[]>("/me/registrations", { signal }),
+  notifications: (query: NotificationQuery, signal?: AbortSignal) =>
+    request<NotificationPage>(
+      `/me/notifications?${new URLSearchParams({
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+        status: query.status,
+      })}`,
+      { signal },
+    ),
+  notificationUnreadCount: (signal?: AbortSignal) =>
+    request<{ unreadCount: number }>("/me/notifications/unread-count", { signal }),
+  readNotification: (id: number, signal?: AbortSignal) =>
+    request<NotificationItem>(`/me/notifications/${id}/read`, { method: "POST", signal }),
   adminOverview: (signal?: AbortSignal) =>
     request<AdminOverview>("/admin/overview", { signal }),
   adminMonitoring: (signal?: AbortSignal) =>

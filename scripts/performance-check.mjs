@@ -269,9 +269,10 @@ async function parallelMap(items, concurrency, work) {
   return results;
 }
 
-async function snapshotDatabase(db) {
+async function snapshotDatabase(db, phase) {
   const tables = {};
-  for (const table of ['users', 'activities', 'registrations']) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications'] : ['users', 'activities', 'registrations'];
+  for (const table of names) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   // Kept only in memory: user password hashes must never enter an artifact.
   return JSON.stringify(tables);
 }
@@ -280,10 +281,13 @@ async function verifyDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
+    await db.query('SELECT user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
+    const [[notificationSeed]] = await db.query('SELECT COUNT(*) AS count FROM notifications');
+    assert.equal(Number(notificationSeed.count), 0, 'Measurement requires a fresh notification baseline.');
   }
   assert(migrations.every(row => row.success === 1), 'Failed Flyway migrations are not allowed.');
   const seedDeadline = Date.now() + 30000;
@@ -424,10 +428,18 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
     for (const row of activities) {
       const [children] = await db.execute('SELECT user_id FROM registrations WHERE activity_id = ? FOR UPDATE', [row.id]);
       assert(children.every(child => userIds.has(child.user_id)), 'An unowned user references a performance activity. Cleanup refused.');
+      if (manifest.phase === undefined) {
+        const [recipients] = await db.execute('SELECT user_id FROM notifications WHERE activity_id = ? FOR UPDATE', [row.id]);
+        assert(recipients.every(recipient => userIds.has(recipient.user_id)), 'An unowned notification recipient references a performance activity. Cleanup refused.');
+      }
     }
     for (const row of users) {
       const [references] = await db.execute('SELECT activity_id FROM registrations WHERE user_id = ? FOR UPDATE', [row.id]);
       assert(references.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user references an unowned activity. Cleanup refused.');
+      if (manifest.phase === undefined) {
+        const [noticeReferences] = await db.execute('SELECT activity_id FROM notifications WHERE user_id = ? FOR UPDATE', [row.id]);
+        assert(noticeReferences.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user has an unowned notification reference. Cleanup refused.');
+      }
       const [created] = await db.execute('SELECT id FROM activities WHERE created_by = ? FOR UPDATE', [row.id]);
       assert.equal(created.length, 0, 'A synthetic user unexpectedly owns activities. Cleanup refused.');
     }
@@ -440,7 +452,12 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
     };
     await persistManifest(manifest);
     let registrationsRemoved = 0;
+    let notificationsRemoved = 0;
     for (const row of selectedActivities) {
+      if (manifest.phase === undefined) {
+        const [notices] = await db.execute('DELETE FROM notifications WHERE activity_id = ?', [row.id]);
+        notificationsRemoved += notices.affectedRows;
+      }
       const [children] = await db.execute('DELETE FROM registrations WHERE activity_id = ?', [row.id]);
       registrationsRemoved += children.affectedRows;
       const [deleted] = await db.execute('DELETE FROM activities WHERE id = ? AND CAST(title AS BINARY) = CAST(? AS BINARY) AND CAST(description AS BINARY) = CAST(? AS BINARY) AND created_by = ?',
@@ -453,7 +470,9 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
       assert.equal(deleted.affectedRows, 1, 'Owned synthetic user was not deleted exactly once.');
     }
     await db.commit();
-    return { activitiesRemoved: selectedActivities.length, usersRemoved: deleteUsers ? users.length : 0, registrationsRemoved };
+    const result = { activitiesRemoved: selectedActivities.length, usersRemoved: deleteUsers ? users.length : 0, registrationsRemoved };
+    if (manifest.phase === undefined) result.notificationsRemoved = notificationsRemoved;
+    return result;
   } catch (error) { await db.rollback(); throw error; }
 }
 
@@ -674,7 +693,7 @@ export async function runPerformanceChecks() {
     await waitForApiReady(settings.base);
     db = await mysql.createConnection(settings.database);
     const seed = await verifyDatabase(db, settings);
-    baseline = await snapshotDatabase(db);
+    baseline = await snapshotDatabase(db, settings.phase);
     manifest = { version: 1, runId: randomUUID(), project: RUN_PROJECT, database: RUN_DATABASE,
       serverUuid: seed.identity.serverUuid, adminId: seed.admin.id, phase: settings.phase, users: [], activities: [] };
     saveManifest(manifest);
@@ -697,8 +716,9 @@ export async function runPerformanceChecks() {
       measurementExcludes: ['login', 'activity-creation', 'warmup', 'database-assertions', 'cleanup'],
       poolSamplesInclude: ['before', 'periodic', 'after'] };
     const prepared = await prepareUsers(db, settings, seed, manifest, clients);
-    const roundBaseline = await snapshotDatabase(db);
+    const roundBaseline = await snapshotDatabase(db, settings.phase);
     report.environment.roundBaselineRows = { users: 102, activities: 4, registrations: 0 };
+    if (settings.phase === undefined) report.environment.roundBaselineRows.notifications = 0;
     const warmup = new ApiClient(settings.base);
     for (let index = 0; index < 20; index++) await warmup.json('/api/activities');
     const startsAt = new Date(Date.parse(report.startedAt) + 48 * 3600000).toISOString();
@@ -711,7 +731,7 @@ export async function runPerformanceChecks() {
       }
       round.cleanup = await cleanupOwned(db, manifest, { activityIds: activities.map(activity => activity.id),
         deleteUsers: false, persistManifest: saveManifest });
-      assert.equal(await snapshotDatabase(db), roundBaseline, 'Write warmup cleanup must restore the exact prepared baseline before measurement.');
+      assert.equal(await snapshotDatabase(db, settings.phase), roundBaseline, 'Write warmup cleanup must restore the exact prepared baseline before measurement.');
       round.cleanup.baselineRowsPreserved = true;
       console.log(`WARMUP PASS: ${scenario}, concurrency ${concurrency}: 100 HTTP 200; exact cleanup verified; excluded from measurement.`);
     }
@@ -721,7 +741,7 @@ export async function runPerformanceChecks() {
       const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, repeat, row => report.rounds.push(row));
       round.cleanup = await cleanupOwned(db, manifest, { activityIds: activities.map(activity => activity.id),
         deleteUsers: false, persistManifest: saveManifest });
-      assert.equal(await snapshotDatabase(db), roundBaseline, 'Round cleanup must restore the exact prepared baseline before the next batch.');
+      assert.equal(await snapshotDatabase(db, settings.phase), roundBaseline, 'Round cleanup must restore the exact prepared baseline before the next batch.');
       round.cleanup.baselineRowsPreserved = true;
       console.log(`PASS: ${scenario}, concurrency ${concurrency}, repeat ${repeat}: 100 HTTP 200; MySQL invariants and server counters verified.`);
     }
@@ -734,12 +754,14 @@ export async function runPerformanceChecks() {
       try {
         if (manifest) {
           const counts = await cleanupOwned(db, manifest, { persistManifest: saveManifest });
-          assert.equal(await snapshotDatabase(db), baseline, 'Exact cleanup did not preserve every original seed database row.');
+          assert.equal(await snapshotDatabase(db, settings.phase), baseline, 'Exact cleanup did not preserve every original seed database row.');
           const rounds = [...report.warmup, ...report.rounds].reduce((total, round) => ({ activities: total.activities + (round.cleanup?.activitiesRemoved ?? 0),
-            registrations: total.registrations + (round.cleanup?.registrationsRemoved ?? 0) }), { activities: 0, registrations: 0 });
+            registrations: total.registrations + (round.cleanup?.registrationsRemoved ?? 0),
+            notifications: total.notifications + (round.cleanup?.notificationsRemoved ?? 0) }), { activities: 0, registrations: 0, notifications: 0 });
           report.cleanup = { ...counts, roundActivitiesRemoved: rounds.activities, roundRegistrationsRemoved: rounds.registrations,
             totalActivitiesRemoved: counts.activitiesRemoved + rounds.activities,
             totalRegistrationsRemoved: counts.registrationsRemoved + rounds.registrations, completed: true, seedRowsPreserved: true };
+          if (settings.phase === undefined) report.cleanup.totalNotificationsRemoved = counts.notificationsRemoved + rounds.notifications;
           manifest.cleanup = report.cleanup;
           saveManifest(manifest);
         }

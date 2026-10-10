@@ -102,6 +102,7 @@ class ActivityLifecycleIntegrationTest {
     void cleanOnlyCreatedFixtures() {
         clock.set(NOW);
         for (long id : activityIds) {
+            jdbc.update("DELETE FROM notifications WHERE activity_id=?", id);
             jdbc.update("DELETE FROM registrations WHERE activity_id=?", id);
             jdbc.update("DELETE FROM activities WHERE id=?", id);
         }

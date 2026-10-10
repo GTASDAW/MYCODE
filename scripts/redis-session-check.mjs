@@ -252,7 +252,7 @@ function recreateBackends(timeout) {
 
 async function databaseSnapshot(db) {
   const rows = {};
-  for (const table of ['users', 'activities', 'registrations']) [rows[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of ['users', 'activities', 'registrations', 'notifications']) [rows[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   return JSON.stringify(rows);
 }
 
@@ -279,7 +279,7 @@ export async function runRedisSessionChecks() {
   let fixture;
   let timeoutChanged = false;
   let primaryError;
-  let removed = { activities: 0, registrations: 0, users: 0 };
+  let removed = { activities: 0, registrations: 0, users: 0, notifications: 0 };
   const passed = name => { checks.push(name); console.log(`PASS: ${name}`); };
   const client = () => { const created = new ApiClient(); clients.push(created); return created; };
 
@@ -338,6 +338,29 @@ export async function runRedisSessionChecks() {
     assert(Number(counts.registeredCount) === 1 && Number(counts.capacity) === 1 && Number(counts.activeCount) === 1
       && Number(counts.waitingCount) === 0 && Number(counts.cancelledCount) === 1, 'Real MySQL counters and registration states must agree.');
     passed('A-issued CSRF works on B; cross-instance signup, waiting and promotion preserve real MySQL invariants');
+
+    const noticePage = await admin.json(settings.a, '/api/me/notifications');
+    assert(noticePage.total === 1 && noticePage.unreadCount === 1 && noticePage.items.length === 1,
+      'One real promotion must create exactly one private unread notification.');
+    const promotionNotice = noticePage.items[0];
+    assert(promotionNotice.type === 'PROMOTED' && promotionNotice.activityId === fixture.id
+      && promotionNotice.activityTitle === ownedFixture.title && promotionNotice.readAt === null);
+    for (const base of [settings.a, settings.b, settings.web]) {
+      assert.deepEqual(await admin.json(base, '/api/me/notifications'), noticePage);
+      assert.equal((await demo.json(base, '/api/me/notifications')).total, 0);
+    }
+    await expectedError(await admin.response(settings.b, `/api/me/notifications/${promotionNotice.id}/read`, { method: 'POST' }), 403, 'CSRF_INVALID');
+    await expectedError(await demo.response(settings.b, `/api/me/notifications/${promotionNotice.id}/read`, {
+      method: 'POST', headers: { [demoToken.headerName]: demoToken.token },
+    }), 404, 'NOTIFICATION_NOT_FOUND');
+    const readNotice = await admin.write(settings.b, `/api/me/notifications/${promotionNotice.id}/read`, token);
+    assert(readNotice.readAt);
+    assert.deepEqual(await admin.write(settings.a, `/api/me/notifications/${promotionNotice.id}/read`, token), readNotice);
+    for (const base of [settings.a, settings.b, settings.web]) {
+      assert.equal((await admin.json(base, '/api/me/notifications/unread-count')).unreadCount, 0);
+      assert.deepEqual((await admin.json(base, '/api/me/notifications?status=READ')).items, [readNotice]);
+    }
+    passed('promotion notifications are private on A/B/Nginx; cross-instance read is CSRF protected and idempotent');
 
     // Persist the exact account creation/nickname intent before registration; never record its password or Session.
     await mkdir('.runtime/ci', { recursive: true });
@@ -478,6 +501,25 @@ export async function runRedisSessionChecks() {
       && anonymousSearch.summary.availableSeats === 0, 'An anonymous query must preserve public results without specifying another user identity.');
     passed('public search through A/B and Nginx preserves filtered statistics and trusted current-user registration state');
 
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const adminNotices = await admin.json(base, '/api/me/notifications');
+      const accountNotices = await accountClient.json(base, '/api/me/notifications');
+      assert.equal(adminNotices.total, 2);
+      assert.equal(adminNotices.unreadCount, 1);
+      assert.deepEqual(adminNotices.items.find(row => row.type === 'PROMOTED'), readNotice);
+      const accountCancellationCount = competingSignup.status === 200 ? 1 : 0;
+      assert.equal(accountNotices.total, accountCancellationCount);
+      assert.equal(accountNotices.unreadCount, accountCancellationCount);
+      assert.equal(accountNotices.items.length, accountCancellationCount);
+      for (const cancellation of [adminNotices.items[0], ...accountNotices.items]) {
+        assert(cancellation.type === 'ACTIVITY_CANCELLED' && cancellation.activityId === fixture.id
+          && cancellation.activityTitle === ownedFixture.title && cancellation.cancellationReason === cancelledActivity.cancellationReason);
+      }
+      assert.equal((await demo.json(base, '/api/me/notifications')).total, 0);
+    }
+    await expectedError(await new ApiClient().response(settings.web, '/api/me/notifications'), 401, 'UNAUTHENTICATED');
+    passed('cancellation notifies only current participants once; promotion read history survives restart and is shared across A/B/Nginx');
+
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);
     for (const base of [settings.a, settings.b]) await expectedError(await loggedOutCookie.clone().response(base, '/api/auth/me'), 401, 'UNAUTHENTICATED');
@@ -520,7 +562,7 @@ export async function runRedisSessionChecks() {
                 activityIds: activities.map(activity => activity.id), userIds: accounts.map(account => account.id),
               } }, null, 2)}\n`);
           }, { accounts: accountAttempted ? [ownedAccount] : [] });
-          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations, users: result.deletedUsers };
+          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations, users: result.deletedUsers, notifications: result.deletedNotifications };
           assert(await databaseSnapshot(db) === baseline, 'Exact Redis fixture cleanup did not preserve the database baseline.');
           passed('only the exact UUID fixture and its registrations removed; existing database records preserved');
         }
@@ -529,7 +571,8 @@ export async function runRedisSessionChecks() {
     }
     await mkdir('.runtime/ci', { recursive: true });
     await writeFile(reportPath, `${JSON.stringify({ success: !primaryError, checks, counts: { checksPassed: checks.length,
-      activitiesRemoved: removed.activities, registrationsRemoved: removed.registrations, usersRemoved: removed.users } }, null, 2)}\n`);
+      activitiesRemoved: removed.activities, registrationsRemoved: removed.registrations, usersRemoved: removed.users,
+      notificationsRemoved: removed.notifications } }, null, 2)}\n`);
   }
   if (primaryError) throw primaryError;
   console.log(`Redis session verification completed (${checks.length} checks); report: ${reportPath}`);

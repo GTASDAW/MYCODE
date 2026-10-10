@@ -4,6 +4,7 @@ import { App as AntApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AuthProvider } from "./auth";
+import { NotificationProvider } from "./notifications";
 import { Layout } from "./Layout";
 import { ActivitiesPage } from "./pages/ActivitiesPage";
 import { ActivityDetailRoute } from "./pages/ActivityDetailPage";
@@ -12,6 +13,7 @@ import { EditActivityRoute } from "./pages/EditActivityPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { MyRegistrationsPage } from "./pages/MyRegistrationsPage";
 import { NotFoundPage, ProtectedRoute } from "./pages/AccessPages";
 import { AdminDashboardPage } from "./pages/AdminDashboardPage";
@@ -43,6 +45,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <AntApp>
         <BrowserRouter>
           <AuthProvider>
+            <NotificationProvider>
             <Routes>
               <Route element={<Layout />}>
                 <Route index element={<Navigate to="/activities" replace />} />
@@ -53,6 +56,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
+                <Route path="notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
                 <Route
                   path="profile"
                   element={
@@ -120,6 +124,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>
+            </NotificationProvider>
           </AuthProvider>
         </BrowserRouter>
       </AntApp>

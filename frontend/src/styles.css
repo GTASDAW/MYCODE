@@ -135,6 +135,92 @@ main:focus {
   display: flex;
   align-items: center;
   min-width: 0;
+  gap: 10px;
+}
+.notification-bell {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #595959;
+  border-radius: 6px;
+}
+.notification-bell:hover {
+  background: #f0f5ff;
+  color: #1677ff;
+}
+.notification-bell .anticon {
+  font-size: 20px;
+}
+.notification-bell .ant-badge-count {
+  min-width: 18px;
+  padding: 0 4px;
+}
+.notification-controls,
+.notification-pagination {
+  margin-bottom: 20px;
+}
+.notification-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.notification-filters .ant-select {
+  min-width: 150px;
+}
+.notification-list {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.notification-item {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  padding: 24px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fff;
+}
+.notification-unread {
+  border-left: 3px solid #1677ff;
+}
+.notification-content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.notification-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.notification-item h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+.notification-description,
+.notification-reason {
+  margin: 0 0 12px;
+  line-height: 1.7;
+}
+.notification-item .metadata {
+  margin: 6px 0 0;
+}
+.notification-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.notification-pagination .ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
 }
 .user-menu {
   border: 0;
@@ -1021,6 +1107,26 @@ main:focus {
   }
 }
 @media (max-width: 767px) {
+  .notification-item {
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px 16px;
+  }
+  .notification-item-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .notification-controls > .ant-card-body,
+  .notification-pagination > .ant-card-body {
+    padding: 16px;
+  }
+  .notification-filters .metadata {
+    flex-basis: 100%;
+  }
+  .notification-pagination .ant-pagination-options {
+    display: inline-block;
+    margin-inline-start: 0;
+  }
   .profile-layout {
     grid-template-columns: 1fr;
     gap: 16px;

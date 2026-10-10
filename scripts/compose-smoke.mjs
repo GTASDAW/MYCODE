@@ -156,7 +156,8 @@ async function waitHealthy() {
 async function snapshot() {
   const [activities] = await db.query('SELECT id, title, description, location, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at FROM registrations ORDER BY id');
-  return JSON.stringify({ activities, registrations });
+  const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
+  return JSON.stringify({ activities, registrations, notifications });
 }
 
 async function removeFixture() {
@@ -170,6 +171,7 @@ async function removeFixture() {
       assert.equal(Number(rows[0].id), fixture.id, 'Smoke activity identity changed.');
     }
     for (const row of rows) {
+      await db.execute('DELETE FROM notifications WHERE activity_id=?', [row.id]);
       await db.execute('DELETE FROM registrations WHERE activity_id=?', [row.id]);
       const [result] = await db.execute('DELETE FROM activities WHERE id=? AND title=? AND description=?', [row.id, title, description]);
       assert.equal(result.affectedRows, 1, 'Smoke activity cleanup did not remove exactly one owned record.');
@@ -196,9 +198,9 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4']);
   assert(migrations.every(row => row.success === 1));
-  check('fresh MySQL schema contains successful Flyway V1, V2 and V3');
+  check('fresh MySQL schema contains successful Flyway V1, V2, V3 and V4');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -217,7 +219,7 @@ try {
   assert.equal(discovery.summary.availableSeats, activities.filter(activity => !activity.closed)
     .reduce((sum, activity) => sum + activity.capacity - activity.registeredCount, 0));
   check('anonymous discovery pagination and matching-set statistics preserve the legacy list contract');
-  for (const path of ['/', `/activities/${activities[0].id}`, '/admin/dashboard']) {
+  for (const path of ['/', `/activities/${activities[0].id}`, '/admin/dashboard', '/notifications']) {
     const page = await fetch(new URL(path, baseUrl), { signal: AbortSignal.timeout(10000) });
     assert(page.ok && page.headers.get('Content-Type')?.includes('text/html'), `SPA deep link ${path} is unavailable.`);
     const html = await page.text();
@@ -254,6 +256,27 @@ try {
   assert.equal(promoted.waitingCount, 0);
   check('login, CSRF, full signup and automatic promotion work through the real container stack');
 
+  assert.equal((await anonymous.response('/api/me/notifications')).status, 401);
+  const promotionNotices = await admin.json('/api/me/notifications?page=1&pageSize=1&status=ALL');
+  assert.equal(promotionNotices.total, 1);
+  assert.equal(promotionNotices.unreadCount, 1);
+  const promotionNotice = promotionNotices.items[0];
+  assert.equal(promotionNotice.type, 'PROMOTED');
+  assert.equal(promotionNotice.activityId, fixture.id);
+  assert.equal(promotionNotice.activityTitle, title);
+  assert.equal(promotionNotice.readAt, null);
+  assert.equal((await demo.json('/api/me/notifications')).total, 0);
+  assert.equal((await admin.response(`/api/me/notifications/${promotionNotice.id}/read`, { method: 'POST' })).status, 403);
+  const demoReadToken = await demo.json('/api/auth/csrf');
+  assert.equal((await demo.response(`/api/me/notifications/${promotionNotice.id}/read`, {
+    method: 'POST', headers: { [demoReadToken.headerName]: demoReadToken.token },
+  })).status, 404);
+  const firstRead = await admin.write(`/api/me/notifications/${promotionNotice.id}/read`);
+  assert(firstRead.readAt);
+  assert.deepEqual(await admin.write(`/api/me/notifications/${promotionNotice.id}/read`), firstRead);
+  assert.equal((await admin.json('/api/me/notifications/unread-count')).unreadCount, 0);
+  check('promotion creates one private notification; read authorization, CSRF and first-read idempotence hold');
+
   const edited = await admin.write(`/api/admin/activities/${fixture.id}`, 'PATCH', {
     title, description, location: 'Updated isolated smoke location', capacity: 99,
     startsAt: new Date(Date.now() + 72 * 3600000).toISOString(),
@@ -277,6 +300,17 @@ try {
   assert.equal(cancelledSearch.summary.availableSeats, 0);
   check('editing preserves published time/capacity; activity cancellation is atomic and idempotent');
 
+  const cancellationNotices = await admin.json('/api/me/notifications?status=UNREAD&page=1&pageSize=1');
+  assert.equal(cancellationNotices.total, 1);
+  assert.equal(cancellationNotices.unreadCount, 1);
+  assert.equal(cancellationNotices.items[0].type, 'ACTIVITY_CANCELLED');
+  assert.equal(cancellationNotices.items[0].activityId, fixture.id);
+  assert.equal(cancellationNotices.items[0].cancellationReason, cancelledActivity.cancellationReason);
+  assert.equal((await admin.json('/api/me/notifications')).total, 2);
+  assert.equal((await demo.json('/api/me/notifications')).total, 0);
+  const persistedNotices = await admin.json('/api/me/notifications');
+  check('activity cancellation notifies current participants once and excludes previously cancelled users');
+
   if (process.env.SMOKE_RESTART_BACKEND === '1') {
     assert.equal(process.env.COMPOSE_PROJECT_NAME, 'gather-ci', 'Restart is restricted to the isolated gather-ci project.');
     assert.equal(database, 'activity_platform_e2e', 'Restart requires the isolated CI database.');
@@ -291,6 +325,7 @@ try {
     assert.equal(persisted.registeredCount, 0);
     assert.equal(persisted.cancellationReason, cancelledActivity.cancellationReason);
     assert.equal(persisted.cancelledAt, cancelledActivity.cancelledAt);
+    assert.deepEqual(await admin.json('/api/me/notifications'), persistedNotices, 'Notification history and first-read time must survive restart.');
     check('backend restart preserves database data and expires the documented in-memory Session');
   }
 } catch (error) {

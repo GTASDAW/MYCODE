@@ -248,12 +248,13 @@ test('manifest validation refuses changed UUID ownership, USER role and cleanup 
 });
 
 function fakeDatabase({ changedActivity = false, unownedReference = false, unownedActivityReference = false,
-  changedUserRole = false, changedServer = false } = {}) {
+  changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false } = {}) {
   const calls = [];
   const proof = manifest();
   let activityDeleted = false;
   let userDeleted = false;
   let registrationDeleted = false;
+  let notificationDeleted = false;
   return {
     calls,
     async query(sql) {
@@ -266,6 +267,9 @@ function fakeDatabase({ changedActivity = false, unownedReference = false, unown
     async rollback() { calls.push('ROLLBACK'); },
     async execute(sql) {
       calls.push(sql);
+      if (sql.startsWith('SELECT user_id FROM notifications')) return [notificationDeleted ? [] : [{ user_id: unownedNoticeRecipient ? 2 : 3 }]];
+      if (sql.startsWith('SELECT activity_id FROM notifications')) return [notificationDeleted ? [] : [{ activity_id: externalNotice ? 99 : 4 }]];
+      if (sql.startsWith('DELETE FROM notifications')) { notificationDeleted = true; return [{ affectedRows: 1 }]; }
       if (sql.startsWith('SELECT id, title')) return [activityDeleted ? [] : [{ id: 4, title: changedActivity ? 'original-user-data' : proof.activities[0].title,
         description: proof.activities[0].description, created_by: 1 }]];
       if (sql.startsWith('SELECT id, username')) return [userDeleted ? [] : [{ id: 3, username: proof.users[0].username,
@@ -299,11 +303,12 @@ test('cleanup validates all exact activity ownership and references before any D
 
 test('verified cleanup removes children before exact activities and users in one transaction', async () => {
   const db = fakeDatabase();
-  assert.deepEqual(await cleanupOwned(db, manifest()), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1 });
+  assert.deepEqual(await cleanupOwned(db, manifest()), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1, notificationsRemoved: 1 });
   const deletions = db.calls.filter(sql => sql.startsWith('DELETE '));
-  assert.match(deletions[0], /^DELETE FROM registrations WHERE activity_id = \?/);
-  assert.match(deletions[1], /^DELETE FROM activities WHERE id = \?.*created_by = \?/);
-  assert.match(deletions[2], /^DELETE FROM users WHERE id = \?.*role = 'USER'/);
+  assert.match(deletions[0], /^DELETE FROM notifications WHERE activity_id = \?/);
+  assert.match(deletions[1], /^DELETE FROM registrations WHERE activity_id = \?/);
+  assert.match(deletions[2], /^DELETE FROM activities WHERE id = \?.*created_by = \?/);
+  assert.match(deletions[3], /^DELETE FROM users WHERE id = \?.*role = 'USER'/);
   assert.equal(db.calls.at(-1), 'COMMIT');
 });
 
@@ -315,12 +320,12 @@ test('round cleanup preserves synthetic users, persists exact IDs before DELETE 
     assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
     persisted = structuredClone(value.cleanupIntent);
   } });
-  assert.deepEqual(round, { activitiesRemoved: 1, usersRemoved: 0, registrationsRemoved: 1 });
+  assert.deepEqual(round, { activitiesRemoved: 1, usersRemoved: 0, registrationsRemoved: 1, notificationsRemoved: 1 });
   assert.deepEqual(persisted, { activityIds: [4], userIds: [] });
   assert(!db.calls.some(sql => sql.startsWith('DELETE FROM users')));
-  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 1, registrationsRemoved: 0 });
+  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 1, registrationsRemoved: 0, notificationsRemoved: 0 });
   const deletionCount = db.calls.filter(sql => sql.startsWith('DELETE ')).length;
-  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 0, registrationsRemoved: 0 });
+  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 0, registrationsRemoved: 0, notificationsRemoved: 0 });
   assert.equal(db.calls.filter(sql => sql.startsWith('DELETE ')).length, deletionCount);
 });
 
@@ -334,4 +339,21 @@ test('missing activity without persisted ownership intent and unowned round targ
   const before = db.calls.filter(sql => sql.startsWith('DELETE ')).length;
   await assert.rejects(cleanupOwned(db, proof), /without a verified cleanup intent/);
   assert.equal(db.calls.filter(sql => sql.startsWith('DELETE ')).length, before);
+});
+
+test('notification recipients and external activity references are verified before performance cleanup deletes any rows', async () => {
+  for (const options of [{ unownedNoticeRecipient: true }, { externalNotice: true }]) {
+    const db = fakeDatabase(options);
+    await assert.rejects(cleanupOwned(db, manifest()), /Cleanup refused/);
+    assert(db.calls.includes('ROLLBACK'));
+    assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
+  }
+});
+
+test('historical V2 comparison cleanup retains its contract and never queries the newer notification table', async () => {
+  const db = fakeDatabase();
+  const proof = manifest();
+  proof.phase = 'A1';
+  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1 });
+  assert(!db.calls.some(sql => sql.includes('notifications')));
 });

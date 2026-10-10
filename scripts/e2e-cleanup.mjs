@@ -34,14 +34,15 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3') ORDER BY installed_rank");
-  if (!['1', '2', '3'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
   await connection.execute('SELECT id, activity_id, user_id, status FROM registrations LIMIT 0');
   await connection.execute('SELECT id, username, display_name, role FROM users LIMIT 0');
+  await connection.execute('SELECT id, user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");
   if (!accounts.some(row => row.username === 'admin' && row.role === 'ADMIN')
       || !accounts.some(row => row.username === 'demo' && row.role === 'USER')) {
@@ -293,8 +294,10 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
         throw new Error(`User ${account.id} ownership changed. Entire cleanup rolled back.`);
       }
       const [registrations] = await connection.execute('SELECT activity_id AS activityId FROM registrations WHERE user_id = ?', [account.id]);
+      const [notifications] = await connection.execute('SELECT activity_id AS activityId FROM notifications WHERE user_id = ?', [account.id]);
       const [createdActivities] = await connection.execute('SELECT id FROM activities WHERE created_by = ? OR cancelled_by = ?', [account.id, account.id]);
-      if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || createdActivities.some(row => !ownedActivityIds.has(row.id))) {
+      if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || notifications.some(row => !ownedActivityIds.has(row.activityId))
+          || createdActivities.some(row => !ownedActivityIds.has(row.id))) {
         throw new Error(`User ${account.id} references data outside this run. Entire cleanup rolled back.`);
       }
       lockedAccounts.push(account);
@@ -303,13 +306,16 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
     // can then be retried safely even if the final manifest write never happened.
     await beforeDelete(resolved, resolvedAccounts);
     let deletedRegistrations = 0;
+    let deletedNotifications = 0;
     for (const fixture of locked) {
+      const [notifications] = await connection.execute('DELETE FROM notifications WHERE activity_id = ?', [fixture.id]);
       const [registrations] = await connection.execute('DELETE FROM registrations WHERE activity_id = ?', [fixture.id]);
       const [activity] = await connection.execute(
         'DELETE FROM activities WHERE id = ? AND CAST(title AS BINARY) = CAST(? AS BINARY) AND CAST(description AS BINARY) = CAST(? AS BINARY)',
         [fixture.id, fixture.title, fixture.description]);
       if (activity.affectedRows !== 1) throw new Error(`Activity ${fixture.id} was not deleted exactly once.`);
       deletedRegistrations += registrations.affectedRows;
+      deletedNotifications += notifications.affectedRows;
     }
     for (const account of lockedAccounts) {
       const [user] = await connection.execute('DELETE FROM users WHERE id = ? AND CAST(username AS BINARY) = CAST(? AS BINARY) AND role = ?',
@@ -317,7 +323,7 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
       if (user.affectedRows !== 1) throw new Error(`User ${account.id} was not deleted exactly once.`);
     }
     await connection.commit();
-    return { deletedActivities: locked.length, deletedRegistrations, resolvedIds: resolved.map(fixture => fixture.id),
+    return { deletedActivities: locked.length, deletedRegistrations, deletedNotifications, resolvedIds: resolved.map(fixture => fixture.id),
       deletedUsers: lockedAccounts.length, resolvedUserIds: resolvedAccounts.map(account => account.id) };
   } catch (error) {
     await connection.rollback();
@@ -350,7 +356,7 @@ export async function cleanupRun(manifestPath) {
       manifest.cleanup = { ...result, completedAt };
     }
     saveManifest(path, manifest);
-    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations, ${result.deletedUsers} users; demo/other rows retained.`);
+    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations, ${result.deletedNotifications} notifications, ${result.deletedUsers} users; demo/other rows retained.`);
     return result;
   } catch (error) {
     const failure = { failedAt: new Date().toISOString(), error: error.message };

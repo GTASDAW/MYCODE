@@ -257,3 +257,65 @@ test('public discovery sends literal query parameters and cancellation to the se
   assert.deepEqual(await api.activities(controller.signal), [{ id: 1 }]);
   assert.equal(calls[1].url, '/api/activities');
 });
+
+test('notification reads use the current session without client identity and preserve cancellation signals', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const result = { items: [{ id: 12 }], total: 31, page: 2, pageSize: 10, unreadCount: 23 };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url.endsWith('/unread-count') ? { unreadCount: 23 } : result);
+  };
+  assert.deepEqual(await api.notifications({ page: 2, pageSize: 10, status: 'UNREAD', userId: 999 }, controller.signal), result);
+  const path = new URL(calls[0].url, 'http://localhost');
+  assert.equal(path.pathname, '/api/me/notifications');
+  assert.deepEqual(Object.fromEntries(path.searchParams), { page: '2', pageSize: '10', status: 'UNREAD' });
+  assert.deepEqual(await api.notificationUnreadCount(controller.signal), { unreadCount: 23 });
+  assert.equal(calls[1].url, '/api/me/notifications/unread-count');
+  for (const { options } of calls) {
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.method, undefined);
+  }
+});
+
+test('marking a notification read uses CSRF without an identity body and replays only an explicit token failure', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  let tokens = 0;
+  let writes = 0;
+  const item = { id: 12, readAt: '2030-01-01T00:00:00Z' };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: `token-${++tokens}`, headerName: 'X-CSRF-TOKEN' });
+    return ++writes === 1 ? response(403, { code: 'CSRF_INVALID', message: '验证已失效' }) : response(200, item);
+  };
+  assert.deepEqual(await api.readNotification(12, controller.signal), item);
+  const attempts = calls.filter(call => call.options.method === 'POST');
+  assert.equal(tokens, 2);
+  assert.equal(attempts.length, 2);
+  for (const { url, options } of attempts) {
+    assert.equal(url, '/api/me/notifications/12/read');
+    assert.equal(options.body, undefined);
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.credentials, 'same-origin');
+  }
+  assert.equal(attempts[0].options.headers.get('X-CSRF-TOKEN'), 'token-1');
+  assert.equal(attempts[1].options.headers.get('X-CSRF-TOKEN'), 'token-2');
+});
+
+test('notification ownership and authentication failures remain visible without replaying a read mutation', async () => {
+  for (const [status, code] of [[401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [404, 'NOTIFICATION_NOT_FOUND']]) {
+    const { api } = await freshApi();
+    let writes = 0;
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+      writes++;
+      return response(status, { code, message: '操作未完成' });
+    };
+    await assert.rejects(api.readNotification(12), error => error.status === status && error.code === code);
+    assert.equal(writes, 1);
+  }
+});

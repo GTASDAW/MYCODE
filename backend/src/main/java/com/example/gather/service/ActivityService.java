@@ -24,11 +24,13 @@ public class ActivityService {
     private static final Set<String> SEARCH_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "CANCELLED", "UPCOMING");
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
+    private final NotificationService notifications;
     private final Clock clock;
 
-    public ActivityService(ActivityMapper activities, RegistrationMapper registrations, Clock clock) {
+    public ActivityService(ActivityMapper activities, RegistrationMapper registrations, NotificationService notifications, Clock clock) {
         this.activities = activities;
         this.registrations = registrations;
+        this.notifications = notifications;
         this.clock = clock;
     }
 
@@ -97,6 +99,7 @@ public class ActivityService {
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         ensureNotStarted(activity, now);
         LocalDateTime cancelledAt = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
+        notifications.activityCancelled(id, reason, cancelledAt);
         registrations.cancelForActivity(id, cancelledAt);
         activities.cancel(id, cancelledAt, reason, adminId);
         return get(id, adminId);

@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { databaseConfig, deleteOwnedFixtures, verifyDatabase, renameManifestWithRetry } from './e2e-cleanup.mjs';
 
-function fakeDatabase(activities, registrations = [], failDeleteId, users = [], failUserDeleteId) {
-  const state = { activities: structuredClone(activities), registrations: structuredClone(registrations), users: structuredClone(users), queries: [], rollbacks: 0, commits: 0 };
+function fakeDatabase(activities, registrations = [], failDeleteId, users = [], failUserDeleteId, notifications = []) {
+  const state = { activities: structuredClone(activities), registrations: structuredClone(registrations), users: structuredClone(users),
+    notifications: structuredClone(notifications), queries: [], rollbacks: 0, commits: 0 };
   let snapshot;
   return {
     state,
-    async beginTransaction() { snapshot = structuredClone({ activities: state.activities, registrations: state.registrations, users: state.users }); },
+    async beginTransaction() { snapshot = structuredClone({ activities: state.activities, registrations: state.registrations, users: state.users, notifications: state.notifications }); },
     async commit() { state.commits++; },
     async rollback() { Object.assign(state, snapshot); state.rollbacks++; },
     async execute(sql, parameters = []) {
@@ -15,12 +16,20 @@ function fakeDatabase(activities, registrations = [], failDeleteId, users = [], 
       if (sql.startsWith('SET TRANSACTION')) return [];
       if (sql.startsWith('SELECT id FROM users')) return [state.users.filter(row => row.username === parameters[0]).slice(0, 2).map(row => ({ id: row.id }))];
       if (sql.startsWith('SELECT id, username')) return [state.users.filter(row => row.id === parameters[0])];
-      if (sql.startsWith('SELECT activity_id')) return [state.registrations.filter(row => row.user_id === parameters[0]).map(row => ({ activityId: row.activity_id }))];
+      if (sql.startsWith('SELECT activity_id')) {
+        const rows = sql.includes('FROM notifications') ? state.notifications : state.registrations;
+        return [rows.filter(row => row.user_id === parameters[0]).map(row => ({ activityId: row.activity_id }))];
+      }
       if (sql.startsWith('SELECT id FROM activities WHERE created_by')) return [state.activities.filter(row => row.created_by === parameters[0] || row.cancelled_by === parameters[1]).map(row => ({ id: row.id }))];
       if (sql.startsWith('SELECT id FROM activities')) {
         return [state.activities.filter(row => row.title === parameters[0] && row.description === parameters[1]).slice(0, 2).map(row => ({ id: row.id }))];
       }
       if (sql.startsWith('SELECT id, title')) return [state.activities.filter(row => row.id === parameters[0])];
+      if (sql.startsWith('DELETE FROM notifications')) {
+        const previous = state.notifications.length;
+        state.notifications = state.notifications.filter(row => row.activity_id !== parameters[0]);
+        return [{ affectedRows: previous - state.notifications.length }];
+      }
       if (sql.startsWith('DELETE FROM registrations')) {
         const previous = state.registrations.length;
         state.registrations = state.registrations.filter(row => row.activity_id !== parameters[0]);
@@ -209,9 +218,10 @@ test('exact account cleanup resolves a lost registration response, accepts prede
   assert.deepEqual(connection.state.users, [demo]);
   assert.deepEqual(connection.state.registrations, []);
   const deletes = connection.state.queries.filter(query => query.sql.startsWith('DELETE')).map(query => query.sql);
-  assert.ok(deletes[0].startsWith('DELETE FROM registrations'));
-  assert.ok(deletes[1].startsWith('DELETE FROM activities'));
-  assert.ok(deletes[2].startsWith('DELETE FROM users'));
+  assert.ok(deletes[0].startsWith('DELETE FROM notifications'));
+  assert.ok(deletes[1].startsWith('DELETE FROM registrations'));
+  assert.ok(deletes[2].startsWith('DELETE FROM activities'));
+  assert.ok(deletes[3].startsWith('DELETE FROM users'));
 });
 
 test('a later account with changed nickname or role rejects the whole cleanup before all deletes', async () => {
@@ -348,4 +358,86 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
   assert.deepEqual(connection.state.activities, [owned, protectedRow]);
   assert.deepEqual(connection.state.users, [user]);
+});
+
+test('V4 and the complete notification schema are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'table']) {
+    const queries = [];
+    const connection = { async execute(sql) {
+      queries.push(sql);
+      if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', ...(absent === 'migration' ? [] : ['4'])].map(version => ({ version }))]];
+      if (sql.includes('FROM notifications')) throw new Error('Notification schema absent');
+      return [[]];
+    } };
+    await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
+      absent === 'migration' ? /V1\/V2\/V3\/V4/ : /Notification schema absent/);
+    assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
+    if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
+    else assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
+  }
+});
+
+test('notification cleanup deletes only exact owned activities and preserves baseline notifications', async () => {
+  const owned = fixture(401);
+  const protectedRow = fixture(402);
+  const user = account(501);
+  const demo = { id: 2, username: 'demo', displayName: '体验用户', role: 'USER' };
+  const protectedNotification = { id: 603, activity_id: 402, user_id: 2, type: 'PROMOTED', read_at: 'unchanged' };
+  const notifications = [
+    { id: 601, activity_id: 401, user_id: 501, type: 'PROMOTED', read_at: null },
+    { id: 602, activity_id: 401, user_id: 2, type: 'ACTIVITY_CANCELLED', read_at: null },
+    protectedNotification,
+  ];
+  const connection = fakeDatabase([owned, protectedRow], [], undefined, [user, demo], undefined, notifications);
+  const result = await deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] });
+  assert.equal(result.deletedNotifications, 2);
+  assert.deepEqual(connection.state.notifications, [protectedNotification]);
+  assert.deepEqual(connection.state.activities, [protectedRow]);
+  assert.deepEqual(connection.state.users, [demo]);
+  const deletes = connection.state.queries.filter(query => query.sql.startsWith('DELETE')).map(query => query.sql);
+  assert.deepEqual(deletes.map(sql => sql.split(' ')[2]), ['notifications', 'registrations', 'activities', 'users']);
+});
+
+test('an owned account notification for a non-owned activity rejects cleanup before any delete', async () => {
+  const owned = fixture(401);
+  const protectedRow = fixture(402);
+  const user = account(501);
+  const notification = { id: 601, activity_id: 402, user_id: 501, type: 'ACTIVITY_CANCELLED' };
+  const connection = fakeDatabase([owned, protectedRow], [], undefined, [user], undefined, [notification]);
+  await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] }), /outside this run/);
+  assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+  assert.deepEqual(connection.state.notifications, [notification]);
+  assert.deepEqual(connection.state.users, [user]);
+  assert.equal(connection.state.rollbacks, 1);
+});
+
+test('failed activity or user cleanup rolls notification deletion back in the same transaction', async () => {
+  const owned = fixture(401);
+  const user = account(501);
+  const notifications = [{ id: 601, activity_id: 401, user_id: 501, type: 'PROMOTED' }];
+  for (const failure of ['activity', 'user']) {
+    const connection = fakeDatabase([owned], [], failure === 'activity' ? 401 : undefined,
+      [user], failure === 'user' ? 501 : undefined, notifications);
+    await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] }), /Simulated database failure/);
+    assert.deepEqual(connection.state.notifications, notifications);
+    assert.deepEqual(connection.state.activities, [owned]);
+    assert.deepEqual(connection.state.users, [user]);
+    assert.equal(connection.state.commits, 0);
+    assert.equal(connection.state.rollbacks, 1);
+  }
+});
+
+test('completed notification cleanup is idempotent and retains unrelated notifications on retry', async () => {
+  const owned = fixture(401);
+  const protectedRow = fixture(402);
+  const notifications = [{ id: 601, activity_id: 401, user_id: 2 }, { id: 602, activity_id: 402, user_id: 2 }];
+  const connection = fakeDatabase([owned, protectedRow], [], undefined, [], undefined, notifications);
+  const result = await deleteOwnedFixtures(connection, [owned]);
+  assert.equal(result.deletedNotifications, 1);
+  const previousQueryCount = connection.state.queries.length;
+  const retried = await deleteOwnedFixtures(connection, [owned], new Set(result.resolvedIds));
+  assert.equal(retried.deletedNotifications, 0);
+  assert.equal(connection.state.queries.slice(previousQueryCount).some(query => query.sql.startsWith('DELETE')), false);
+  assert.deepEqual(connection.state.notifications, [notifications[1]]);
 });
