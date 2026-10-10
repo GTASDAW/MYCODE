@@ -310,6 +310,22 @@ main:focus {
 .public-overview .ant-statistic-content {
   font-size: 26px;
 }
+.discovery-notice,
+.discovery-filters {
+  margin-bottom: 24px;
+}
+.discovery-filters .filter-form {
+  margin-bottom: 0;
+}
+.discovery-pagination {
+  margin-top: 24px;
+}
+.discovery-pagination .ant-pagination {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
 .activity-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1152,6 +1168,19 @@ main:focus {
   }
   .table-card .ant-pagination-total-text {
     width: 100%;
+  }
+  .discovery-pagination .ant-pagination {
+    justify-content: flex-start;
+  }
+  .discovery-pagination .ant-pagination-total-text {
+    width: 100%;
+  }
+  .discovery-pagination .ant-pagination-options {
+    display: block;
+    margin-inline-start: 0;
+  }
+  .discovery-pagination .ant-card-body {
+    padding: 16px;
   }
   .registration-row {
     flex-wrap: wrap;

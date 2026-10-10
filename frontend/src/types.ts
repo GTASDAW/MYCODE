@@ -75,6 +75,15 @@ export interface AdminActivityQuery {
   status: ActivityFilter;
 }
 
+export type ActivitySearchQuery = AdminActivityQuery;
+
+export interface ActivitySearchPage extends PageResult<Activity> {
+  summary: {
+    upcomingActivities: number;
+    availableSeats: number;
+  };
+}
+
 export interface AdminRegistrationQuery {
   page: number;
   pageSize: number;

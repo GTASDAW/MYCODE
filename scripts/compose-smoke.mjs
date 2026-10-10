@@ -208,6 +208,15 @@ try {
   const activities = await anonymous.json('/api/activities');
   assert(activities.length > 0, 'Fresh Compose startup must create demo activities.');
   assert(activities.every(row => Number.isInteger(row.waitingCount)));
+  const discovery = await anonymous.json('/api/activities/search?page=1&pageSize=1&keyword=&status=ALL');
+  assert.equal(discovery.total, activities.length, 'Public pagination must retain the full matching total.');
+  assert.equal(discovery.items.length, 1);
+  assert.equal(discovery.items[0].id, activities[0].id, 'Public pagination must preserve the legacy chronological ordering.');
+  assert.equal(discovery.items[0].registrationStatus, null, 'Anonymous public search must not inherit another user identity.');
+  assert.equal(discovery.summary.upcomingActivities, activities.filter(activity => !activity.closed).length);
+  assert.equal(discovery.summary.availableSeats, activities.filter(activity => !activity.closed)
+    .reduce((sum, activity) => sum + activity.capacity - activity.registeredCount, 0));
+  check('anonymous discovery pagination and matching-set statistics preserve the legacy list contract');
   for (const path of ['/', `/activities/${activities[0].id}`, '/admin/dashboard']) {
     const page = await fetch(new URL(path, baseUrl), { signal: AbortSignal.timeout(10000) });
     assert(page.ok && page.headers.get('Content-Type')?.includes('text/html'), `SPA deep link ${path} is unavailable.`);
@@ -259,6 +268,13 @@ try {
   const repeatedCancellation = await admin.write(`/api/admin/activities/${fixture.id}/cancel`, 'POST', { reason: 'Ignored repeated reason' });
   assert.equal(repeatedCancellation.cancelledAt, cancelledActivity.cancelledAt);
   assert.equal(repeatedCancellation.cancellationReason, cancelledActivity.cancellationReason);
+  const cancelledSearch = await anonymous.json(`/api/activities/search?${new URLSearchParams({
+    keyword: title, status: 'CANCELLED', page: '1', pageSize: '1',
+  })}`);
+  assert.equal(cancelledSearch.total, 1);
+  assert.equal(cancelledSearch.items[0].id, fixture.id);
+  assert.equal(cancelledSearch.summary.upcomingActivities, 0);
+  assert.equal(cancelledSearch.summary.availableSeats, 0);
   check('editing preserves published time/capacity; activity cancellation is atomic and idempotent');
 
   if (process.env.SMOKE_RESTART_BACKEND === '1') {

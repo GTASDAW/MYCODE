@@ -135,9 +135,9 @@ async function logout(page: Page) {
 test('活动列表显示真实接口数据，详情可直接访问且没有横向溢出', async ({ page }) => {
   const runtimeErrors: string[] = [];
   page.on('pageerror', error => runtimeErrors.push(error.message));
-  const response = await page.request.get('/api/activities');
+  const response = await page.request.get('/api/activities/search?keyword=&status=ALL&page=1&pageSize=12');
   expect(response.ok()).toBeTruthy();
-  const activities = await response.json();
+  const activities = (await response.json()).items;
   expect(activities.length).toBeGreaterThan(0);
   await page.goto('/activities');
   await expect(page.getByText(activities[0].title, { exact: true }).first()).toBeVisible();
@@ -333,7 +333,16 @@ test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({
     await page.getByRole('button', { name: /立即报名|重新报名/ }).click();
     await arrived;
     await page.getByRole('link', { name: /返回全部活动/ }).click();
-    await page.locator(`a[href="/activities/${second.id}"]`).first().click();
+    await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(prefix);
+    const filtered = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/activities/search'
+        && url.searchParams.get('keyword') === prefix && url.searchParams.get('status') === 'ALL'
+        && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '12';
+    });
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    expect((await filtered).ok()).toBeTruthy();
+    await page.getByRole('link', { name: `查看${second.title}的详情`, exact: true }).click();
     await expect(page.getByRole('heading', { name: second.title, exact: true })).toBeVisible();
     const lateResponse = page.waitForResponse(response => response.url().endsWith(`/api/activities/${first.id}/registration`) && response.request().method() === 'POST');
     releaseResponse();

@@ -11,6 +11,7 @@ import { Link } from "react-router";
 import { dateParts, formatDate, formatTime } from "./date";
 import { errorMessage } from "./api";
 import type { Activity } from "./types";
+import { activityDetailsPath } from "./activityDiscovery";
 
 export function Logo() {
   return (
@@ -28,10 +29,13 @@ export function Logo() {
   );
 }
 
-export function BackLink() {
+export function BackLink({
+  to = "/activities",
+  label = "返回全部活动",
+}: { to?: string; label?: string }) {
   return (
-    <Link className="back-link" to="/activities">
-      <ArrowLeftOutlined aria-hidden="true" /> 返回全部活动
+    <Link className="back-link" to={to}>
+      <ArrowLeftOutlined aria-hidden="true" /> {label}
     </Link>
   );
 }
@@ -204,8 +208,9 @@ export function DateBadge({
   );
 }
 
-export function ActivityCard({ activity }: { activity: Activity }) {
+export function ActivityCard({ activity, from }: { activity: Activity; from?: string }) {
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
+  const detailsPath = activityDetailsPath(activity.id, from);
   return (
     <article className="activity-card">
       <div className="activity-card-top">
@@ -213,7 +218,7 @@ export function ActivityCard({ activity }: { activity: Activity }) {
         <ActivityStatus activity={activity} />
       </div>
       <h3>
-        <Link to={`/activities/${activity.id}`}>{activity.title}</Link>
+        <Link to={detailsPath}>{activity.title}</Link>
       </h3>
       <p className="card-description">{activity.description}</p>
       {activity.cancelled && <div className="card-cancellation"><ActivityCancellationNotice activity={activity} /></div>}
@@ -241,7 +246,7 @@ export function ActivityCard({ activity }: { activity: Activity }) {
         </span>
         <Link
           className="card-link"
-          to={`/activities/${activity.id}`}
+          to={detailsPath}
           aria-label={`查看${activity.title}的详情`}
         >
           查看详情 <ArrowRightOutlined aria-hidden="true" />

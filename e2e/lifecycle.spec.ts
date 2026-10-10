@@ -188,7 +188,7 @@ test('管理员发布编辑并取消活动，有效报名与候补成为保留�
 
     const list = await (await page.request.get('/api/activities')).json() as Activity[];
     expect(list.find(activity => activity.id === original.id)).toMatchObject({ cancelled: true, cancellationReason: reason });
-    await page.goto('/activities');
+    await page.goto(`/activities?keyword=${encodeURIComponent(edit.title)}`);
     const card = page.locator('.activity-card').filter({ hasText: edit.title });
     await expect(card).toContainText('活动已取消');
     await page.goto('/admin/activities');
@@ -330,12 +330,21 @@ test('活动编辑真实响应迟到时切换页面，不会覆盖新页面或�
     await fetched;
     await page.getByRole('link', { name: '返回活动详情', exact: true }).click();
     await page.getByRole('link', { name: /返回全部活动/ }).click();
-    await page.locator(`a[href="/activities/${second.activity.id}"]`).first().click();
+    await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(second.activity.title);
+    const filtered = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/activities/search'
+        && url.searchParams.get('keyword') === second.activity.title && url.searchParams.get('status') === 'ALL'
+        && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '12';
+    });
+    await page.getByRole('button', { name: '查询', exact: true }).click();
+    expect((await filtered).ok()).toBeTruthy();
+    await page.getByRole('link', { name: `查看${second.activity.title}的详情`, exact: true }).click();
     await expect(page.getByRole('heading', { name: second.activity.title, exact: true })).toBeVisible();
     release();
     await completed;
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect(page).toHaveURL(new RegExp(`/activities/${second.activity.id}$`));
+    await expect.poll(() => new URL(page.url()).pathname).toBe(`/activities/${second.activity.id}`);
     await expect(page.getByRole('heading', { name: second.activity.title, exact: true })).toBeVisible();
     await expect(page.getByText('活动信息已更新', { exact: true })).toHaveCount(0);
     const persisted = await (await page.request.get(`/api/activities/${first.activity.id}`)).json() as Activity;

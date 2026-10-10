@@ -11,6 +11,8 @@ import type {
   AdminRegistrationQuery,
   AdminRegistrationPage,
   PageResult,
+  ActivitySearchQuery,
+  ActivitySearchPage,
 } from "./types";
 
 interface CsrfToken {
@@ -170,6 +172,16 @@ export const api = {
   },
   activities: (signal?: AbortSignal) =>
     request<Activity[]>("/activities", { signal }),
+  searchActivities: (query: ActivitySearchQuery, signal?: AbortSignal) =>
+    request<ActivitySearchPage>(
+      `/activities/search?${new URLSearchParams({
+        keyword: query.keyword,
+        status: query.status,
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+      })}`,
+      { signal },
+    ),
   activity: (id: string, signal?: AbortSignal) =>
     request<Activity>(`/activities/${encodeURIComponent(id)}`, { signal }),
   register: (id: number) =>

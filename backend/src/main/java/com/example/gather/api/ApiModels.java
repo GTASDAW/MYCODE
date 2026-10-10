@@ -7,6 +7,7 @@ import java.io.Serializable;
 import java.io.Serial;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 
 public final class ApiModels {
     private ApiModels() {}
@@ -33,6 +34,9 @@ public final class ApiModels {
     }
 
     public record RegistrationView(long id, String status, ActivityView activity) {}
+    public record ActivitySearchSummary(long upcomingActivities, long availableSeats) {}
+    public record ActivitySearchPageView(List<ActivityView> items, long total, int page, int pageSize,
+                                         ActivitySearchSummary summary) {}
     public record CsrfView(String token, String headerName) {}
     public record ErrorView(String code, String message) {}
 

@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 /** Only this finite vocabulary may enter logs or metric labels; never a raw URL or user-supplied query. */
 final class RequestRoute {
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS");
-    private static final Set<String> STATIC_ROUTES = Set.of("/api/activities", "/api/auth/csrf", "/api/auth/me",
+    private static final Set<String> STATIC_ROUTES = Set.of("/api/activities", "/api/activities/search", "/api/auth/csrf", "/api/auth/me",
         "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/me/profile", "/api/health", "/api/me/registrations", "/api/admin/overview",
         "/api/admin/activities", "/api/admin/monitoring");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",

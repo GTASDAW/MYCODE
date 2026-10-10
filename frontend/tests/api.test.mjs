@@ -232,3 +232,28 @@ test('closed or cancelled activity conflicts remain visible and never replay a m
   await assert.rejects(api.updateActivity(25, {}), error => error.status === 409 && error.code === 'ACTIVITY_CANCELLED');
   assert.equal(writes, 1);
 });
+
+test('public discovery sends literal query parameters and cancellation to the search endpoint without changing the legacy list API', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const query = { keyword: ' 上海 %_! ', status: 'OPEN', page: 2, pageSize: 24 };
+  const page = {
+    items: [{ id: 1 }], total: 51, page: 2, pageSize: 24,
+    summary: { upcomingActivities: 51, availableSeats: 1000 },
+  };
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url === '/api/activities' ? [{ id: 1 }] : page);
+  };
+  assert.deepEqual(await api.searchActivities(query, controller.signal), page);
+  const requested = new URL(calls[0].url, 'http://localhost');
+  assert.equal(requested.pathname, '/api/activities/search');
+  assert.deepEqual(Object.fromEntries(requested.searchParams), {
+    keyword: query.keyword, status: 'OPEN', page: '2', pageSize: '24',
+  });
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.deepEqual(await api.activities(controller.signal), [{ id: 1 }]);
+  assert.equal(calls[1].url, '/api/activities');
+});

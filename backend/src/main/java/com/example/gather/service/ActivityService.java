@@ -17,9 +17,11 @@ import java.time.ZoneOffset;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class ActivityService {
+    private static final Set<String> SEARCH_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "CANCELLED", "UPCOMING");
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
     private final Clock clock;
@@ -34,6 +36,28 @@ public class ActivityService {
     public List<ActivityView> list(Long userId) {
         var now = clock.instant();
         return activities.findAll(userId).stream().map(row -> ActivityView.from(row, now)).toList();
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ActivitySearchPageView search(int page, int pageSize, String keyword, String status, Long userId) {
+        if (page < 1 || pageSize < 1 || pageSize > 100) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码至少为 1，每页数量应在 1 到 100 之间");
+        }
+        if (keyword == null || keyword.length() > 200) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "搜索关键词最多 200 字");
+        }
+        if (status == null || !SEARCH_STATUSES.contains(status)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "筛选状态不正确");
+        }
+        // One microsecond UTC instant and one InnoDB snapshot cover the aggregate and page response.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        LocalDateTime utcNow = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
+        var totals = activities.searchTotals(utcNow, keyword, status);
+        long offset = ((long) page - 1L) * pageSize;
+        var items = activities.search(userId, utcNow, keyword, status, pageSize, offset).stream()
+            .map(row -> ActivityView.from(row, now)).toList();
+        return new ActivitySearchPageView(items, totals.total(), page, pageSize,
+            new ActivitySearchSummary(totals.upcomingActivities(), totals.availableSeats()));
     }
 
     @Transactional(readOnly = true)

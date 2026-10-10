@@ -24,6 +24,15 @@ public class ActivityController {
         return activities.list(principal == null ? null : principal.id());
     }
 
+    @GetMapping("/activities/search")
+    ActivitySearchPageView search(@RequestParam(defaultValue = "1") int page,
+                                  @RequestParam(defaultValue = "12") int pageSize,
+                                  @RequestParam(defaultValue = "") String keyword,
+                                  @RequestParam(defaultValue = "ALL") String status,
+                                  @AuthenticationPrincipal AppUserDetails principal) {
+        return activities.search(page, pageSize, keyword, status, principal == null ? null : principal.id());
+    }
+
     @GetMapping("/activities/{id}")
     ActivityView detail(@PathVariable long id, @AuthenticationPrincipal AppUserDetails principal) {
         return activities.get(id, principal == null ? null : principal.id());

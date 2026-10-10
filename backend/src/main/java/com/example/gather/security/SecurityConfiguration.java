@@ -33,7 +33,7 @@ public class SecurityConfiguration {
         http.csrf(csrf -> csrf.csrfTokenRepository(tokens).csrfTokenRequestHandler(handler))
             .requestCache(cache -> cache.requestCache(new NullRequestCache()))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/*", "/api/auth/csrf", "/api/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/search", "/api/activities/*", "/api/auth/csrf", "/api/health").permitAll()
                 .requestMatchers("/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")

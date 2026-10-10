@@ -24,28 +24,13 @@ public interface AdminMapper {
         """)
     OverviewView overview(LocalDateTime now);
 
-    String ACTIVITY_FILTER = """
-        <where>
-          <if test="keyword != ''">
-            AND (LOCATE(#{keyword}, a.title) &gt; 0 OR LOCATE(#{keyword}, a.location) &gt; 0)
-          </if>
-          <choose>
-            <when test="status == 'OPEN'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count &lt; a.capacity</when>
-            <when test="status == 'FULL'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count = a.capacity</when>
-            <when test="status == 'STARTED'">AND a.cancelled_at IS NULL AND a.starts_at &lt;= #{now}</when>
-            <when test="status == 'UPCOMING'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now}</when>
-            <when test="status == 'CANCELLED'">AND a.cancelled_at IS NOT NULL</when>
-          </choose>
-        </where>
-        """;
-
     @Select("<script>SELECT " + ActivityMapper.VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id = a.id AND r.user_id = #{userId} "
-        + ACTIVITY_FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
+        + ActivityQuerySql.FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
     List<ActivityRow> activities(@Param("userId") long userId, @Param("now") LocalDateTime now,
                                 @Param("keyword") String keyword, @Param("status") String status,
                                 @Param("limit") int limit, @Param("offset") long offset);
 
-    @Select("<script>SELECT COUNT(*) FROM activities a " + ACTIVITY_FILTER + "</script>")
+    @Select("<script>SELECT COUNT(*) FROM activities a " + ActivityQuerySql.FILTER + "</script>")
     long countActivities(@Param("now") LocalDateTime now, @Param("keyword") String keyword, @Param("status") String status);
 
     String ROSTER_FILTER = """

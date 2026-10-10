@@ -16,7 +16,7 @@ import {
   ClockCircleOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { api, ApiError, errorMessage } from "../api";
 import { useAuth } from "../auth";
 import {
@@ -31,6 +31,7 @@ import { formatDate, formatTime } from "../date";
 import { useResource } from "../useResource";
 import { activityClosed } from "../activityLifecycle";
 import { ActivityManagementActions } from "./ActivityManagementActions";
+import { safeActivityListPath } from "../activityDiscovery";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -40,6 +41,11 @@ export function ActivityDetailRoute() {
 function ActivityDetailPage() {
   const { id = "" } = useParams();
   const auth = useAuth();
+  const location = useLocation();
+  const sourceList = new URLSearchParams(location.search).get("from");
+  const returnPath = safeActivityListPath(sourceList);
+  const returnLabel = sourceList === null ? "返回全部活动" : "返回活动列表";
+  const detailPath = `${location.pathname}${location.search}`;
   const resource = useResource(
     (signal) => api.activity(id, signal),
     [id, auth.user?.id],
@@ -83,7 +89,7 @@ function ActivityDetailPage() {
         auth.expire();
         navigate("/login", {
           state: {
-            from: `/activities/${id}`,
+            from: detailPath,
             notice: "登录已过期，请重新登录后继续。",
           },
         });
@@ -113,7 +119,7 @@ function ActivityDetailPage() {
   if (resource.error)
     return (
       <div className="page-container">
-        <BackLink />
+        <BackLink to={returnPath} label={returnLabel} />
         <ErrorState error={resource.error} retry={resource.retry} />
       </div>
     );
@@ -140,7 +146,7 @@ function ActivityDetailPage() {
           ) : undefined
         }
       />
-      <BackLink />
+      <BackLink to={returnPath} label={returnLabel} />
       <ActivityCancellationNotice activity={activity} />
       <div className="detail-layout">
         <Card
@@ -248,7 +254,7 @@ function ActivityDetailPage() {
               正在确认登录状态
             </Button>
           ) : !auth.user ? (
-            <Link to="/login" state={{ from: `/activities/${id}` }}>
+            <Link to="/login" state={{ from: detailPath }}>
               <Button block type="primary">
                 {remaining === 0 ? "登录后加入候补" : "登录后报名"}{" "}
                 <ArrowRightOutlined aria-hidden="true" />

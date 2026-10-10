@@ -463,6 +463,21 @@ export async function runRedisSessionChecks() {
       && Number(finalCounts.records) === 3, 'Cancellation must retain all three histories and no active or waiting rows.');
     passed('cross-instance editing preserves immutable fields; racing signup and activity cancellation retains history with zero active or waiting rows');
 
+    const searchPath = `/api/activities/search?${new URLSearchParams({
+      keyword: ownedFixture.title, status: 'CANCELLED', page: '1', pageSize: '1',
+    })}`;
+    for (const current of [admin, accountClient]) for (const base of [settings.a, settings.b, settings.web]) {
+      const page = await current.json(base, searchPath);
+      assert(page.total === 1 && page.items.length === 1 && page.items[0].id === fixture.id
+        && page.items[0].registrationStatus === 'CANCELLED' && page.summary.upcomingActivities === 0
+        && page.summary.availableSeats === 0, 'Both replicas must return the correct scoped search, history and filtered statistics.');
+    }
+    const anonymousSearch = await new ApiClient().json(settings.web, `${searchPath}&userId=${user.id}`);
+    assert(anonymousSearch.total === 1 && anonymousSearch.items.length === 1 && anonymousSearch.items[0].id === fixture.id
+      && anonymousSearch.items[0].registrationStatus === null && anonymousSearch.summary.upcomingActivities === 0
+      && anonymousSearch.summary.availableSeats === 0, 'An anonymous query must preserve public results without specifying another user identity.');
+    passed('public search through A/B and Nginx preserves filtered statistics and trusted current-user registration state');
+
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);
     for (const base of [settings.a, settings.b]) await expectedError(await loggedOutCookie.clone().response(base, '/api/auth/me'), 401, 'UNAUTHENTICATED');
