@@ -48,6 +48,7 @@ flowchart LR
 | `GET /api/auth/me` | 按可信身份从数据库读取最新用户资料 | 已登录用户 |
 | `PATCH /api/me/profile` | 只修改当前用户昵称 | 已登录用户，需 CSRF |
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
+| `GET /api/activities/search` | 搜索、状态筛选、分页与匹配集合统计 | 可匿名调用，个人状态来自可信当前身份 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
@@ -65,6 +66,14 @@ flowchart LR
 注册经 `AuthController → AccountService → UserMapper`：规范化用户名、校验昵称与密码、使用既有 BCrypt12 哈希、固定 `USER` 角色后插入。`uq_users_username` 决定并发重名的唯一成功者，冲突返回 409 `USERNAME_TAKEN`。昵称修改经 `ProfileController`，只更新登录身份 ID 对应的 `display_name`；详细输入规则见 [账户指南](account-guide.md)。
 
 前端 `/register` 成功后返回登录页，`/profile` 由登录保护后挂载。用户状态仍由 `AuthProvider` 管理，读取/修改资料按账号、认证代次与顺序忽略过期响应，避免旧昵称或旧账号覆盖当前页面。服务端不重写整个 Session `SecurityContext` 来同步昵称，`/auth/me` 直接查数据库最新资料；其他独立会话下一次读取才能更新，没有实时推送或轮询。
+
+## 公开活动发现
+
+`/activities` 通过 `GET /api/activities/search` 查询分页对象 `{items,total,page,pageSize,summary}`，旧 `/api/activities` 数组接口继续保留。公开分页默认 12 条，最多 100 条；关键词最多 200 个 UTF-16 代码单元，在标题或地点中作字面子串匹配，不裁剪空格。公开和管理查询共用 `ActivityQuerySql.FILTER`，六种状态沿用下表口径。查询身份来自 Session，客户端不能指定其他人的 `registrationStatus`。
+
+公开查询在只读 `REPEATABLE_READ` 事务中固定一次 UTC 微秒时间，聚合与分页共享快照；`total` 和 `summary` 覆盖整个筛选集合，统计不由当前页卡片计算。排序为 `starts_at ASC, id ASC`，越界返回真实总数、统计与空 `items`。公开读取不增加活动写锁，也不改变报名的 `READ_COMMITTED` 事务。
+
+前端已提交的筛选与页码来自 URL，输入草稿独立。状态或每页数量改变回第一页，相同条件查询也真正刷新；结果减少时以 `replace` 回合法页。详情 `from` 只接受规范内部列表路径，刷新与登录再返回仍保存条件，返回后重新读取个人状态和统计。完整合同、时间边界及测试路径见 [活动发现指南](activity-discovery.md)。任意字面子串使用绑定参数 `LOCATE`，本轮没有声称 B-tree 索引可直接加速此类匹配或增加未经验证的索引。
 
 ## 管理查询与统计口径
 

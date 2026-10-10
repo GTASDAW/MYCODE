@@ -10,8 +10,8 @@
 
 | 检查 | 验证内容 | 数据环境 |
 | --- | --- | --- |
-| `frontend` | 从 lockfile 安装，运行 API/CSRF、账户校验与认证请求顺序回归、TypeScript 检查和生产构建 | 不写数据库 |
-| `backend` | Java 21、Maven Wrapper，运行账户注册/资料、活动编辑与取消、权限、查询、真实并发锁顺序/回滚和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
+| `frontend` | 从 lockfile 安装，运行 API/CSRF、账户校验与认证请求顺序、活动发现 URL/来源安全回归、TypeScript 检查和生产构建 | 不写数据库 |
+| `backend` | Java 21、Maven Wrapper，运行账户注册/资料、活动编辑与取消、权限、公开查询快照/统计/个人状态、真实并发锁顺序/回滚和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
 | `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
 | `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、独立会话最新昵称、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
 | `performance` | 固定资源下的两种报名场景、客户端原始延迟、18 轮一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
@@ -20,7 +20,7 @@
 
 版本对照由独立的 `.github/workflows/query-comparison.yml` 提供，只接受 `workflow_dispatch` 手工触发。它不是常规 `ci.yml` 的第六个推送检查，避免后续功能修改不断对固定旧版本重新实验。
 
-后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户和活动生命周期场景关闭 trace，避免保存请求体、Cookie 或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
+后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户、活动生命周期和活动发现场景关闭 trace，避免保存请求体、Cookie 或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
 
 ## 本地复现
 
@@ -76,6 +76,8 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 
 活动生命周期另有跨 A/B 的报名与组织者取消竞态：不同实例仍竞争同一 MySQL 活动行锁，完成后核对取消原因、人数 0、全部报名已取消及重复取消首次信息不变。完整浏览器流程覆盖发布、编辑、有效报名/候补、取消和历史展示；脚本提供这些验证，实际是否通过仍看 [验证记录](verification.md)。
 
+活动发现另验证 A/B 与 Nginx 的公开分页、筛选集合统计和当前用户报名状态，匿名查询即使附带 `userId` 也不能取得他人状态。两种模式的完整浏览器回归包含真实 12/1 条分页、URL 刷新与历史导航、详情登录/返回、报名后的统计刷新、越界修正、失败重试和迟到读取；临时活动继续按准确 manifest 清理。合同与学习路径见 [活动发现指南](activity-discovery.md)，执行结果仍以验证记录为准。
+
 两种重启断言都要保留：默认容器模式重启后原 Session 应失效；Redis 模式在会话有效且 Redis 可用时重启 A，原 Cookie 在 A/B 仍应识别同一身份。不能为了 Redis 的新行为删掉默认模式回归。新建空库的双实例启动还要验证管理员和普通用户各一条、演示活动正好三场，不能依赖启动失败后重试来掩盖初始化竞态。
 
 ## 性能基线交付
@@ -120,7 +122,7 @@ Windows 文件观察程序短暂占用 manifest 时，原子替换仅对 `EPERM`
 
 ## 首次迁移、重启与失败排查
 
-容器冒烟只接受 `gather-ci`、`activity_platform_e2e`、网页回环端口 18088 和数据库回环端口 33306。先核对实际 Docker 标签、配置与端口，等待 `/api/health`、Flyway V1/V2/V3 和种子事务提交，再用 UUID SQL 探针经公共详情绑定 API 与数据库；探针精确清理完成后才登录和执行业务写入。静态首页、详情直达、报名、编辑、活动取消和重启持久化分别验证。
+容器冒烟只接受 `gather-ci`、`activity_platform_e2e`、网页回环端口 18088 和数据库回环端口 33306。先核对实际 Docker 标签、配置与端口，等待 `/api/health`、Flyway V1/V2/V3 和种子事务提交，再用 UUID SQL 探针经公共详情绑定 API 与数据库；探针精确清理完成后才登录和执行业务写入。静态首页、详情直达、匿名分页与全筛选统计、报名、编辑、取消筛选和重启持久化分别验证。
 
 默认模式重启后端后，同一活动和报名应仍在数据库中；旧登录 Session 应返回未登录，重新登录后恢复操作。Redis 模式另行验证共享会话保留。数据库保留与登录保留是两项不同检查，结论必须注明模式。
 

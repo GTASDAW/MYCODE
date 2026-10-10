@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
 
-一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动并查看报名名单，用户自主注册、登录、修改昵称，报名、进入候补、取消报名和查看历史记录。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补与活动取消由数据库事务保证。
+一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动并查看报名名单，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名和查看历史记录。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补与活动取消由数据库事务保证。
 
 ## 技术栈
 
@@ -37,6 +37,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 管理员可以使用概览、活动管理、发布活动、报名名单和运行指标页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
 
 活动开始前，管理员可在详情或管理列表编辑标题、介绍和地点，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
+
+发现页支持标题或地点搜索、六种状态筛选和真实后端分页，默认每页 12 条。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
 
 也可以从登录页进入“注册账号”，创建自己的普通用户。注册成功后需要登录；账号菜单中的“个人中心”可以修改昵称，登录名保持固定。昵称修改后当前页面同步更新，其他独立会话在下一次读取当前用户时取得最新资料。接口、安全规则和面试阅读路径见 [用户注册与个人中心](docs/account-guide.md)。
 
@@ -82,7 +84,8 @@ Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保�
 | `POST /api/auth/logout` | 退出 | 需要 CSRF |
 | `GET /api/auth/me` | 从数据库读取当前用户最新资料 | 登录 |
 | `PATCH /api/me/profile` | 修改当前用户昵称 | 登录且需要 CSRF |
-| `GET /api/activities`、`GET /api/activities/{id}` | 活动列表、详情 | 公开 |
+| `GET /api/activities`、`GET /api/activities/{id}` | 保留原数组列表、详情 | 公开 |
+| `GET /api/activities/search` | 搜索、状态筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
 | `GET /api/admin/monitoring` | 当前实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/activities` | 搜索、状态筛选、分页管理列表 | 管理员 |
@@ -130,7 +133,7 @@ $env:E2E_DB_PASSWORD = 'activity_dev_password'
 npm run test:e2e
 ```
 
-后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。管理查询还验证统计、字面搜索、状态与分页；账户测试验证密码哈希、并发重名、可信身份与独立会话的最新昵称。活动生命周期测试控制报名、用户取消、编辑与组织者取消的两种行锁顺序，并检查开始边界、历史、数据库约束和中途异常回滚。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
+后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。公开与管理查询验证统计、字面搜索、状态与分页；公开查询另验证同一次时钟、真实并发取消中的统计/页面快照和可信个人状态。账户测试验证密码哈希、并发重名、可信身份与独立会话的最新昵称。活动生命周期测试控制报名、用户取消、编辑与组织者取消的两种行锁顺序，并检查开始边界、历史、数据库约束和中途异常回滚。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
 
 如果已经安装 Chrome，可以用系统浏览器运行测试，无须下载 Chromium：
 
@@ -174,6 +177,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [架构与接口说明](docs/architecture.md)
 - [用户注册与个人中心](docs/account-guide.md)
 - [活动编辑、取消与历史记录](docs/activity-lifecycle.md)
+- [活动搜索、筛选、分页与 URL 状态](docs/activity-discovery.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
