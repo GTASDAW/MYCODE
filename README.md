@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
 
-一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动并查看报名名单，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名和查看历史记录。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补与活动取消由数据库事务保证。
+一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动并查看报名名单，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名、查看历史记录与站内通知。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补、活动取消和对应通知由数据库事务保证。
 
 ## 技术栈
 
@@ -25,7 +25,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis。
+脚本不会删除数据库。启动时 Flyway 在已有 V1–V3 基础上应用 V4 通知表增量迁移，不补发旧事件或重置已有数据。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知与首次已读时间仍保留。
 
 ## 演示账号
 
@@ -39,6 +39,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 活动开始前，管理员可在详情或管理列表编辑标题、介绍和地点，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
 
 发现页支持标题或地点搜索、六种状态筛选和真实后端分页，默认每页 12 条。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
+
+登录后的顶栏铃铛与“通知中心”提供候补递补和活动取消消息，支持状态筛选、分页、手动刷新和单条标记已读。未读数来自本人全部通知，通知保存当时标题与公开取消原因；重复操作不重复生成，真正再次递补会产生新消息。没有定时轮询或外部消息发送，完整事务、权限与代码路径见 [站内通知指南](docs/notification-guide.md)。
 
 也可以从登录页进入“注册账号”，创建自己的普通用户。注册成功后需要登录；账号菜单中的“个人中心”可以修改昵称，登录名保持固定。昵称修改后当前页面同步更新，其他独立会话在下一次读取当前用户时取得最新资料。接口、安全规则和面试阅读路径见 [用户注册与个人中心](docs/account-guide.md)。
 
@@ -72,7 +74,7 @@ docker compose -f compose.yaml -f compose.redis.yaml up --build -d
 
 同样访问 [http://127.0.0.1:8088](http://127.0.0.1:8088)。Nginx 轮询两个后端，Session 身份和 CSRF 存入共享 Redis；会话未过期且 Redis 可用时，重启一个后端仍能继续登录。默认闲置时限为 30 分钟，退出会使共享会话失效。
 
-Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保证。Redis 密码样例、模式切换、停止命令和验证边界见 [共享 Session 指南](docs/shared-session.md)。网站仍只作本机演示。
+Redis 只用于共享会话，报名、候补、人数与通知继续由 MySQL 事务保证。Redis 密码样例、模式切换、停止命令和验证边界见 [共享 Session 指南](docs/shared-session.md)。网站仍只作本机演示。
 
 ## 接口与业务规则
 
@@ -96,6 +98,9 @@ Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保�
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补 | 登录 |
 | `DELETE /api/activities/{id}/registration` | 取消报名或退出候补 | 登录 |
 | `GET /api/me/registrations` | 我的报名 | 登录 |
+| `GET /api/me/notifications` | 本人通知，状态筛选、分页与全量未读数 | 登录 |
+| `GET /api/me/notifications/unread-count` | 本人全量未读数量 | 登录 |
+| `POST /api/me/notifications/{id}/read` | 单条标记已读，保留首次时间 | 登录且需要 CSRF，只能操作本人通知 |
 | `GET /api/health` | 服务和数据库健康状态 | 公开 |
 
 写操作发送 CSRF 接口返回的请求头；登录和退出后重新获取 Token。角色从服务端登录身份读取，不接受客户端指定用户或角色。
@@ -107,6 +112,7 @@ Redis 只用于共享会话，报名、候补和人数继续由 MySQL 事务保�
 - 组织者取消活动时，在同一事务中取消全部有效报名与候补、人数归零，保留所有报名 ID；此前已取消的报名历史不变。重复取消保留首次原因、时间与操作人，即使越过原开始时间仍幂等。已取消活动不可恢复，编辑、报名与用户取消返回 `ACTIVITY_CANCELLED`。
 - 报名和取消先锁活动记录，再读取报名状态，最后在同一个事务中修改状态和人数。
 - 重复报名、重复取消在活动开放期间返回当前结果，不会重复改变人数。
+- 实际候补递补生成一条本人通知；整场取消只通知当时有效报名者与候补者，和业务变更在同一事务内提交或回滚。再次真正递补产生新事件，重复请求不增加消息；标记已读保留首次时间。
 - 时间在接口中使用 UTC，在页面中按北京时间显示。
 
 管理活动列表支持标题或地点的字面子串搜索，以及全部、未开始、可报名、满员、已开始、已取消筛选；报名名单支持全部、已报名、候补中、已取消筛选。管理分页默认每页 10 条，接口最多每页 100 条。概览总活动含取消活动，并单独统计 `cancelledActivities`；其他活动时间状态和剩余名额排除取消活动，有效报名与候补仍按报名表状态统计，详细口径见 [架构与接口说明](docs/architecture.md)。
@@ -133,7 +139,7 @@ $env:E2E_DB_PASSWORD = 'activity_dev_password'
 npm run test:e2e
 ```
 
-后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。公开与管理查询验证统计、字面搜索、状态与分页；公开查询另验证同一次时钟、真实并发取消中的统计/页面快照和可信个人状态。账户测试验证密码哈希、并发重名、可信身份与独立会话的最新昵称。活动生命周期测试控制报名、用户取消、编辑与组织者取消的两种行锁顺序，并检查开始边界、历史、数据库约束和中途异常回滚。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
+后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。公开与管理查询验证统计、字面搜索、状态与分页；公开查询另验证同一次时钟、真实并发取消中的统计/页面快照和可信个人状态。账户测试验证密码哈希、并发重名、可信身份与独立会话的最新昵称。活动生命周期测试控制报名、用户取消、编辑与组织者取消的两种行锁顺序，并检查开始边界、历史、数据库约束和中途异常回滚。通知测试验证准确收件人、快照、重复与再次事件、插入前后失败回滚、并发首次标读和本人读取权限。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
 
 如果已经安装 Chrome，可以用系统浏览器运行测试，无须下载 Chromium：
 
@@ -162,7 +168,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
-这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；当前 V3 为取消判断增加第四列，脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V3 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
+这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，当前 V4 另增加通知表与业务事务中的通知写入，脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V4 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -170,7 +176,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看三张业务表、唯一约束、V2 候补状态及 V3 活动取消元数据的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看四张业务表、唯一约束、V2 候补状态、V3 活动取消元数据及 V4 通知历史的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [四阶段学习指南](docs/learning-guide.md)
@@ -178,6 +184,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [用户注册与个人中心](docs/account-guide.md)
 - [活动编辑、取消与历史记录](docs/activity-lifecycle.md)
 - [活动搜索、筛选、分页与 URL 状态](docs/activity-discovery.md)
+- [站内通知、事务事件与首次已读时间](docs/notification-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
