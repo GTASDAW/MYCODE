@@ -469,7 +469,7 @@ export async function runRedisSessionChecks() {
     for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
       state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
     }
-    assert.deepEqual(afterAttendanceOnly, beforeAttendanceOnly, 'Cross-instance check-in/export must only change check-in fields.');
+    assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Cross-instance check-in/export must only change check-in fields.');
     const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [ownedCheckInFixture.id]);
     assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
     assert.equal(Number(attendanceTruth.active), 2);

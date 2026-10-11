@@ -347,7 +347,7 @@ try {
   for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
     state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
   }
-  assert.deepEqual(afterAttendanceOnly, beforeAttendanceOnly, 'Check-in/export must preserve every other business field and notification.');
+  assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Check-in/export must preserve every other business field and notification.');
   const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [startedFixture.id]);
   assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
   assert.equal(Number(attendanceTruth.checked), 1);
