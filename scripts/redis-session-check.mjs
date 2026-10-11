@@ -153,7 +153,7 @@ class ApiClient {
 
   async response(base, path, options = {}) {
     const headers = new Headers(options.headers);
-    headers.set('Accept', 'application/json');
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (this.cookies.size) headers.set('Cookie', [...this.cookies].map(([key, value]) => `${key}=${value}`).join('; '));
     const response = await fetch(new URL(path, base), { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(10000) });
     for (const cookie of response.headers.getSetCookie()) {
@@ -267,6 +267,9 @@ export async function runRedisSessionChecks() {
   const clients = [];
   const runId = randomUUID();
   const ownedFixture = { key: runId, id: null, title: `Redis 会话验证 ${runId}`, description: `gather-redis-session-check:${runId}` };
+  const checkInKey = randomUUID();
+  const ownedCheckInFixture = { key: checkInKey, id: null, title: `Redis 签到验证 ${checkInKey}`,
+    description: `gather-redis-checkin:${runId}:${checkInKey}` };
   const accountKey = randomUUID();
   const ownedAccount = { key: accountKey, id: null, username: `redis_${accountKey.replaceAll('-', '').slice(0, 24)}`,
     displayName: `e2e-${accountKey}`, allowedDisplayNames: [`e2e-${accountKey}`, `改名-${accountKey}`], role: 'USER' };
@@ -365,7 +368,7 @@ export async function runRedisSessionChecks() {
     // Persist the exact account creation/nickname intent before registration; never record its password or Session.
     await mkdir('.runtime/ci', { recursive: true });
     const saveAccountManifest = async () => writeFile(accountManifestPath, `${JSON.stringify({
-      runId, database: settings.database.database, account: ownedAccount, fixture: ownedFixture,
+      runId, database: settings.database.database, account: ownedAccount, fixture: ownedFixture, checkInFixture: ownedCheckInFixture,
     }, null, 2)}\n`);
     await saveAccountManifest();
     accountAttempted = true;
@@ -419,6 +422,61 @@ export async function runRedisSessionChecks() {
     assert(backends.size === 2, 'Nginx must route authenticated requests to two distinct backend instances.');
     passed('Nginx serves the same authenticated cookie through two distinct backend instances');
 
+    // Initialize only this exact independent started fixture after Docker/SQL/API ownership binding.
+    await saveAccountManifest();
+    const [checkInActivity] = await db.execute('INSERT INTO activities(title,description,location,starts_at,capacity,registered_count,created_by) VALUES (?,?,?,UTC_TIMESTAMP(6) - INTERVAL 1 DAY,2,2,?)',
+      [ownedCheckInFixture.title, ownedCheckInFixture.description, 'Isolated cross-instance check-in', user.id]);
+    ownedCheckInFixture.id = Number(checkInActivity.insertId);
+    await saveAccountManifest();
+    const demoIdentity = await demo.json(settings.a, '/api/auth/me');
+    await db.execute("INSERT INTO registrations(activity_id,user_id,status,created_at,updated_at) VALUES (?,?,'ACTIVE',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY),(?,?,'ACTIVE',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY),(?,?,'WAITING',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY)",
+      [ownedCheckInFixture.id, user.id, ownedCheckInFixture.id, ownedAccount.id, ownedCheckInFixture.id, demoIdentity.id]);
+    const initialCheckInRoster = await admin.json(settings.a, `/api/admin/activities/${ownedCheckInFixture.id}/registrations`);
+    const beforeAttendanceOnly = JSON.parse(await databaseSnapshot(db));
+    assert.deepEqual(initialCheckInRoster.summary, { activeRegistrations: 2, checkedInRegistrations: 0, notCheckedInRegistrations: 2 });
+    const checkInRegistration = initialCheckInRoster.items.find(row => row.userId === ownedAccount.id);
+    assert(checkInRegistration && checkInRegistration.checkedInAt === null);
+    const checkInPath = `/api/admin/activities/${ownedCheckInFixture.id}/registrations/${checkInRegistration.id}/check-in`;
+    await expectedError(await admin.response(settings.b, checkInPath, { method: 'POST' }), 403, 'CSRF_INVALID');
+    const accountCheckInToken = await accountClient.csrf(settings.a);
+    await expectedError(await accountClient.response(settings.b, checkInPath, {
+      method: 'POST', headers: { [accountCheckInToken.headerName]: accountCheckInToken.token },
+    }), 403, 'FORBIDDEN');
+    const checkedIn = await admin.write(settings.a, checkInPath, token);
+    assert(checkedIn.checkedInAt && checkedIn.checkedInBy === user.id && checkedIn.updatedAt === checkInRegistration.updatedAt);
+    for (const base of [settings.a, settings.b, settings.web]) {
+      assert.deepEqual(await admin.write(base, checkInPath, token), checkedIn);
+      const page = await admin.json(base, `/api/admin/activities/${ownedCheckInFixture.id}/registrations?checkInStatus=CHECKED_IN`);
+      assert.deepEqual(page.summary, { activeRegistrations: 2, checkedInRegistrations: 1, notCheckedInRegistrations: 1 });
+      assert.deepEqual(page.items, [checkedIn]);
+    }
+    const exportPath = `/api/admin/activities/${ownedCheckInFixture.id}/registrations/export?status=ACTIVE&checkInStatus=CHECKED_IN`;
+    let checkInCsv;
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const response = await admin.response(base, exportPath, { headers: { Accept: 'text/csv, application/json' } });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('Content-Type'), /^text\/csv/i);
+      assert(response.headers.get('Content-Disposition').includes(`activity-${ownedCheckInFixture.id}-registrations.csv`));
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      assert.deepEqual([...bytes.slice(0, 3)], [239, 187, 191]);
+      const csv = new TextDecoder().decode(bytes);
+      assert(csv.includes(`"\t${ownedAccount.username}"`));
+      if (checkInCsv === undefined) checkInCsv = csv;
+      else assert.equal(csv, checkInCsv);
+    }
+    await expectedError(await accountClient.response(settings.web, exportPath, { headers: { Accept: 'text/csv, application/json' } }), 403, 'FORBIDDEN');
+    const afterAttendanceOnly = JSON.parse(await databaseSnapshot(db));
+    for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
+      state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
+    }
+    assert.deepEqual(afterAttendanceOnly, beforeAttendanceOnly, 'Cross-instance check-in/export must only change check-in fields.');
+    const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [ownedCheckInFixture.id]);
+    assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
+    assert.equal(Number(attendanceTruth.active), 2);
+    assert.equal(Number(attendanceTruth.waiting), 1);
+    assert.equal(Number(attendanceTruth.checked), 1);
+    passed('trusted check-in and complete filtered UTF-8 CSV agree on A/B/Nginx; repeat keeps first metadata and role/CSRF denial holds');
+
     const beforeRestart = await databaseSnapshot(db);
     compose(['restart', 'backend']);
     await waitForStack(settings);
@@ -429,6 +487,12 @@ export async function runRedisSessionChecks() {
     const repeated = await admin.write(settings.b, `/api/activities/${fixture.id}/registration`, token);
     assert(repeated.registrationStatus === 'ACTIVE' && repeated.registeredCount === 1, 'Pre-restart CSRF must remain usable on B without duplicating registration.');
     assert(await databaseSnapshot(db) === beforeRestart, 'Backend A restart or duplicate signup changed database records.');
+    for (const base of [settings.a, settings.b]) {
+      assert.deepEqual((await admin.json(base, `/api/admin/activities/${ownedCheckInFixture.id}/registrations?checkInStatus=CHECKED_IN`)).items, [checkedIn]);
+      const response = await admin.response(base, exportPath, { headers: { Accept: 'text/csv, application/json' } });
+      assert.equal(response.status, 200);
+      assert.equal(await response.text(), checkInCsv);
+    }
     passed('restarting only A preserves shared login, existing CSRF and exact database data');
 
     for (const base of [settings.a, settings.b]) {
@@ -556,9 +620,9 @@ export async function runRedisSessionChecks() {
     if (db) {
       try {
         if (baseline !== undefined) {
-          const result = await deleteOwnedFixtures(db, [ownedFixture], new Set(), async (activities, accounts) => {
+          const result = await deleteOwnedFixtures(db, [ownedFixture, ownedCheckInFixture], new Set(), async (activities, accounts) => {
             if (accountAttempted) await writeFile(accountManifestPath, `${JSON.stringify({ runId, database: settings.database.database,
-              account: ownedAccount, fixture: ownedFixture, cleanupIntent: {
+              account: ownedAccount, fixture: ownedFixture, checkInFixture: ownedCheckInFixture, cleanupIntent: {
                 activityIds: activities.map(activity => activity.id), userIds: accounts.map(account => account.id),
               } }, null, 2)}\n`);
           }, { accounts: accountAttempted ? [ownedAccount] : [] });

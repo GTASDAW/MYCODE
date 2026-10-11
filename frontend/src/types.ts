@@ -89,6 +89,7 @@ export interface PageResult<T> {
 
 export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING" | "CANCELLED";
 export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";
+export type CheckInFilter = "ALL" | "CHECKED_IN" | "NOT_CHECKED_IN";
 
 export interface AdminActivityQuery {
   page: number;
@@ -110,6 +111,7 @@ export interface AdminRegistrationQuery {
   page: number;
   pageSize: number;
   status: RegistrationFilter;
+  checkInStatus: CheckInFilter;
 }
 
 export interface AdminRegistration {
@@ -120,10 +122,18 @@ export interface AdminRegistration {
   status: "ACTIVE" | "WAITING" | "CANCELLED";
   createdAt: string;
   updatedAt: string;
+  checkedInAt: string | null;
+  checkedInBy: number | null;
+  checkedInByDisplayName: string | null;
 }
 
 export interface AdminRegistrationPage extends PageResult<AdminRegistration> {
   activity: Activity;
+  summary: {
+    activeRegistrations: number;
+    checkedInRegistrations: number;
+    notCheckedInRegistrations: number;
+  };
 }
 
 export interface DurationMetrics {

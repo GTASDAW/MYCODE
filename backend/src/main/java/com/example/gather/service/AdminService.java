@@ -22,6 +22,8 @@ import java.util.Set;
 public class AdminService {
     private static final Set<String> ACTIVITY_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "UPCOMING", "CANCELLED");
     private static final Set<String> ROSTER_STATUSES = Set.of("ALL", "ACTIVE", "WAITING", "CANCELLED");
+    private static final Set<String> CHECK_IN_STATUSES = Set.of("ALL", "CHECKED_IN", "NOT_CHECKED_IN");
+    private static final int MAX_EXPORT_ROWS = 20_000;
     private static final int MAX_KEYWORD_LENGTH = 200;
     private final AdminMapper admin;
     private final ActivityMapper activities;
@@ -50,16 +52,41 @@ public class AdminService {
     }
 
     public RosterPageView roster(long activityId, int page, int pageSize, String status, long userId) {
+        return roster(activityId, page, pageSize, status, "ALL", userId);
+    }
+
+    public RosterPageView roster(long activityId, int page, int pageSize, String status, String checkInStatus, long userId) {
         validatePage(page, pageSize);
-        validateStatus(status, ROSTER_STATUSES);
+        validateRosterStatuses(status, checkInStatus);
         Instant now = now();
+        ActivityRow activity = requireActivity(activityId, userId);
+        var summary = admin.rosterSummary(activityId);
+        long total = admin.countRoster(activityId, status, checkInStatus);
+        var items = admin.roster(activityId, status, checkInStatus, pageSize, offset(page, pageSize)).stream()
+            .map(RosterView::from).toList();
+        return new RosterPageView(ActivityView.from(activity, now), items, total, page, pageSize, summary);
+    }
+
+    public byte[] exportRoster(long activityId, String status, String checkInStatus, long userId) {
+        validateRosterStatuses(status, checkInStatus);
+        requireActivity(activityId, userId);
+        // Count and rows share this read-only REPEATABLE_READ transaction; never truncate a full export.
+        long total = admin.countRoster(activityId, status, checkInStatus);
+        if (total > MAX_EXPORT_ROWS) {
+            throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE, "EXPORT_TOO_LARGE", "匹配名单超过 20,000 条，请缩小筛选范围后导出");
+        }
+        return RegistrationCsv.encode(admin.roster(activityId, status, checkInStatus, MAX_EXPORT_ROWS, 0));
+    }
+
+    private ActivityRow requireActivity(long activityId, long userId) {
         ActivityRow activity = activities.findById(activityId, userId);
         if (activity == null) throw new ApiException(HttpStatus.NOT_FOUND, "ACTIVITY_NOT_FOUND", "活动不存在");
-        long total = admin.countRoster(activityId, status);
-        var items = admin.roster(activityId, status, pageSize, offset(page, pageSize)).stream()
-            .map(row -> new RosterView(row.id(), row.userId(), row.username(), row.displayName(), row.status(),
-                row.createdAt().toInstant(ZoneOffset.UTC), row.updatedAt().toInstant(ZoneOffset.UTC))).toList();
-        return new RosterPageView(ActivityView.from(activity, now), items, total, page, pageSize);
+        return activity;
+    }
+
+    private static void validateRosterStatuses(String status, String checkInStatus) {
+        validateStatus(status, ROSTER_STATUSES);
+        validateStatus(checkInStatus, CHECK_IN_STATUSES);
     }
 
     private Instant now() {

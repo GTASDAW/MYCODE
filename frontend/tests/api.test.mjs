@@ -319,3 +319,119 @@ test('notification ownership and authentication failures remain visible without 
     assert.equal(writes, 1);
   }
 });
+
+test('roster reads combine both filters while CSV exports omit pagination and any client identity', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const query = { page: 2, pageSize: 10, status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', userId: 999 };
+  const csv = '\ufeff"报名记录 ID","姓名"\r\n"\t123","\t中文用户"\r\n';
+  const page = { items: [{ id: 123 }], total: 21, page: 2, pageSize: 10,
+    summary: { activeRegistrations: 31, checkedInRegistrations: 10, notCheckedInRegistrations: 21 } };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return url.includes('/export?') ? new Response(csv, { headers: { 'Content-Type': 'text/csv;charset=UTF-8' } }) : response(200, page);
+  };
+  assert.deepEqual(await api.adminRegistrations('25', query, controller.signal), page);
+  const file = await api.exportAdminRegistrations('25', query, controller.signal);
+  assert.ok(file instanceof Blob);
+  assert.deepEqual(new Uint8Array(await file.arrayBuffer()).slice(0, 3), new Uint8Array([239, 187, 191]));
+  assert.equal(await file.text(), csv.slice(1)); // Blob.text decodes and removes UTF-8 BOM.
+  const paths = calls.map(call => new URL(call.url, 'http://localhost'));
+  assert.equal(paths[0].pathname, '/api/admin/activities/25/registrations');
+  assert.deepEqual(Object.fromEntries(paths[0].searchParams), { page: '2', pageSize: '10', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN' });
+  assert.equal(paths[1].pathname, '/api/admin/activities/25/registrations/export');
+  assert.deepEqual(Object.fromEntries(paths[1].searchParams), { status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN' });
+  for (const { options } of calls) {
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.body, undefined);
+    assert.equal(options.headers.get('X-CSRF-TOKEN'), null);
+  }
+  assert.equal(calls[1].options.headers.get('Accept'), 'text/csv, application/json');
+});
+
+test('CSV JSON errors retain their code and request ID and GET never refreshes CSRF or replays', async () => {
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  for (const [status, code] of [[401, 'UNAUTHORIZED'], [403, 'CSRF_INVALID'], [413, 'EXPORT_TOO_LARGE'], [500, 'INTERNAL_ERROR']]) {
+    const { api, ApiError } = await freshApi();
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return response(status, { code, message: '名单导出未完成' }, { 'X-Request-Id': requestId });
+    };
+    await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }), error => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, status);
+      assert.equal(error.code, code);
+      assert.equal(error.requestId, requestId);
+      assert.equal(error.message, '名单导出未完成');
+      return true;
+    });
+    assert.equal(calls, 1);
+  }
+});
+
+test('CSV response validation prevents JSON and HTML being offered as a successful download', async () => {
+  for (const contentType of ['application/json', 'text/html', 'application/octet-stream']) {
+    const { api } = await freshApi();
+    globalThis.fetch = async () => new Response('not a CSV file', { headers: { 'Content-Type': contentType } });
+    await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }), error => error.code === 'INVALID_RESPONSE');
+  }
+});
+
+test('check-in writes have no identity body, preserve abort and replay only one explicit CSRF rejection', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  let tokens = 0;
+  let attempts = 0;
+  const result = { id: 123, checkedInAt: '2030-01-01T00:00:00Z', checkedInBy: 1 };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: `token-${++tokens}`, headerName: 'X-CSRF-TOKEN' });
+    return ++attempts === 1 ? response(403, { code: 'CSRF_INVALID' }) : response(200, result);
+  };
+  assert.deepEqual(await api.checkInRegistration('25', 123, controller.signal), result);
+  const writes = calls.filter(call => call.options.method === 'POST');
+  assert.equal(tokens, 2);
+  assert.equal(writes.length, 2);
+  for (const { url, options } of writes) {
+    assert.equal(url, '/api/admin/activities/25/registrations/123/check-in');
+    assert.equal(options.body, undefined);
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.credentials, 'same-origin');
+  }
+  assert.equal(writes[0].options.headers.get('X-CSRF-TOKEN'), 'token-1');
+  assert.equal(writes[1].options.headers.get('X-CSRF-TOKEN'), 'token-2');
+});
+
+test('check-in conflicts and ownership failures remain visible without write replay', async () => {
+  for (const [status, code] of [[403, 'FORBIDDEN'], [404, 'REGISTRATION_NOT_FOUND'], [409, 'CHECK_IN_NOT_OPEN'], [409, 'REGISTRATION_NOT_ACTIVE']]) {
+    const { api } = await freshApi();
+    let writes = 0;
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+      writes++;
+      return response(status, { code, message: '不能签到' });
+    };
+    await assert.rejects(api.checkInRegistration('25', 123), error => error.status === status && error.code === code);
+    assert.equal(writes, 1);
+  }
+});
+
+test('cancelled CSV reads and check-in writes preserve AbortError without starting an obsolete request', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return response(200, {}); };
+  await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }, controller.signal), error => error.name === 'AbortError');
+  await assert.rejects(api.checkInRegistration('25', 123, controller.signal), error => error.name === 'AbortError');
+  assert.equal(calls, 0);
+  globalThis.fetch = async () => ({
+    ok: true, status: 200, headers: new Headers({ 'Content-Type': 'text/csv' }),
+    blob: async () => { throw new DOMException('cancelled body', 'AbortError'); },
+  });
+  await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }), error => error.name === 'AbortError');
+});

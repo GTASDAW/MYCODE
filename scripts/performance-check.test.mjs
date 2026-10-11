@@ -248,7 +248,7 @@ test('manifest validation refuses changed UUID ownership, USER role and cleanup 
 });
 
 function fakeDatabase({ changedActivity = false, unownedReference = false, unownedActivityReference = false,
-  changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false } = {}) {
+  changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false, externalCheckIn = false } = {}) {
   const calls = [];
   const proof = manifest();
   let activityDeleted = false;
@@ -269,6 +269,7 @@ function fakeDatabase({ changedActivity = false, unownedReference = false, unown
       calls.push(sql);
       if (sql.startsWith('SELECT user_id FROM notifications')) return [notificationDeleted ? [] : [{ user_id: unownedNoticeRecipient ? 2 : 3 }]];
       if (sql.startsWith('SELECT activity_id FROM notifications')) return [notificationDeleted ? [] : [{ activity_id: externalNotice ? 99 : 4 }]];
+      if (sql.startsWith('SELECT activity_id FROM registrations WHERE checked_in_by')) return [registrationDeleted ? [] : [{ activity_id: externalCheckIn ? 99 : 4 }]];
       if (sql.startsWith('DELETE FROM notifications')) { notificationDeleted = true; return [{ affectedRows: 1 }]; }
       if (sql.startsWith('SELECT id, title')) return [activityDeleted ? [] : [{ id: 4, title: changedActivity ? 'original-user-data' : proof.activities[0].title,
         description: proof.activities[0].description, created_by: 1 }]];
@@ -356,4 +357,12 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   proof.phase = 'A1';
   assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1 });
   assert(!db.calls.some(sql => sql.includes('notifications')));
+  assert(!db.calls.some(sql => sql.includes('checked_in')));
+});
+
+test('external check-in audit references reject performance cleanup before any deletion', async () => {
+  const db = fakeDatabase({ externalCheckIn: true });
+  await assert.rejects(cleanupOwned(db, manifest()), /unowned check-in reference/);
+  assert(db.calls.includes('ROLLBACK'));
+  assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
 });

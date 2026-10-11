@@ -8,8 +8,11 @@ import com.example.gather.api.ApiModels.CancelActivityRequest;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
 import com.example.gather.service.AdminService;
+import com.example.gather.service.CheckInService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import java.net.URI;
@@ -19,10 +22,12 @@ import java.net.URI;
 public class AdminController {
     private final AdminService admin;
     private final ActivityService activities;
+    private final CheckInService checkIns;
 
-    public AdminController(AdminService admin, ActivityService activities) {
+    public AdminController(AdminService admin, ActivityService activities, CheckInService checkIns) {
         this.admin = admin;
         this.activities = activities;
+        this.checkIns = checkIns;
     }
 
     @GetMapping("/overview")
@@ -42,8 +47,26 @@ public class AdminController {
                           @RequestParam(defaultValue = "1") int page,
                           @RequestParam(defaultValue = "10") int pageSize,
                           @RequestParam(defaultValue = "ALL") String status,
+                          @RequestParam(defaultValue = "ALL") String checkInStatus,
                           @AuthenticationPrincipal AppUserDetails principal) {
-        return admin.roster(id, page, pageSize, status, principal.id());
+        return admin.roster(id, page, pageSize, status, checkInStatus, principal.id());
+    }
+
+    @PostMapping("/activities/{id}/registrations/{registrationId}/check-in")
+    RosterView checkIn(@PathVariable long id, @PathVariable long registrationId,
+                       @AuthenticationPrincipal AppUserDetails principal) {
+        return checkIns.checkIn(id, registrationId, principal.id());
+    }
+
+    @GetMapping("/activities/{id}/registrations/export")
+    ResponseEntity<byte[]> export(@PathVariable long id,
+                                  @RequestParam(defaultValue = "ALL") String status,
+                                  @RequestParam(defaultValue = "ALL") String checkInStatus,
+                                  @AuthenticationPrincipal AppUserDetails principal) {
+        return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+            .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"activity-" + id + "-registrations.csv\"")
+            .header(HttpHeaders.CACHE_CONTROL, "no-store")
+            .body(admin.exportRoster(id, status, checkInStatus, principal.id()));
     }
 
     @PostMapping("/activities")

@@ -18,7 +18,8 @@ function fakeDatabase(activities, registrations = [], failDeleteId, users = [], 
       if (sql.startsWith('SELECT id, username')) return [state.users.filter(row => row.id === parameters[0])];
       if (sql.startsWith('SELECT activity_id')) {
         const rows = sql.includes('FROM notifications') ? state.notifications : state.registrations;
-        return [rows.filter(row => row.user_id === parameters[0]).map(row => ({ activityId: row.activity_id }))];
+        const userField = sql.includes('WHERE checked_in_by') ? 'checked_in_by' : 'user_id';
+        return [rows.filter(row => row[userField] === parameters[0]).map(row => ({ activityId: row.activity_id }))];
       }
       if (sql.startsWith('SELECT id FROM activities WHERE created_by')) return [state.activities.filter(row => row.created_by === parameters[0] || row.cancelled_by === parameters[1]).map(row => ({ id: row.id }))];
       if (sql.startsWith('SELECT id FROM activities')) {
@@ -360,21 +361,23 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.deepEqual(connection.state.users, [user]);
 });
 
-test('V4 and the complete notification schema are required before fixture writes or cleanup', async () => {
-  for (const absent of ['migration', 'table']) {
+test('V5 and the complete notification and check-in schema are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'notification-table', 'check-in-columns']) {
     const queries = [];
     const connection = { async execute(sql) {
       queries.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
-      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', ...(absent === 'migration' ? [] : ['4'])].map(version => ({ version }))]];
-      if (sql.includes('FROM notifications')) throw new Error('Notification schema absent');
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', ...(absent === 'migration' ? [] : ['5'])].map(version => ({ version }))]];
+      if (sql.includes('FROM registrations') && absent === 'check-in-columns') throw new Error('Check-in schema absent');
+      if (sql.includes('FROM notifications') && absent === 'notification-table') throw new Error('Notification schema absent');
       return [[]];
     } };
     await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
-      absent === 'migration' ? /V1\/V2\/V3\/V4/ : /Notification schema absent/);
+      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5/ : absent === 'check-in-columns' ? /Check-in schema absent/ : /Notification schema absent/);
     assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
     if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
-    else assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
+    else if (absent === 'notification-table') assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
+    else assert.ok(queries.some(sql => sql.includes('status, checked_in_at, checked_in_by FROM registrations LIMIT 0')));
   }
 });
 
@@ -440,4 +443,56 @@ test('completed notification cleanup is idempotent and retains unrelated notific
   assert.equal(retried.deletedNotifications, 0);
   assert.equal(connection.state.queries.slice(previousQueryCount).some(query => query.sql.startsWith('DELETE')), false);
   assert.deepEqual(connection.state.notifications, [notifications[1]]);
+});
+
+test('a fixture user referenced as check-in operator outside this run refuses every delete', async () => {
+  const owned = fixture(701);
+  const protectedRow = fixture(702);
+  const user = account(801);
+  const registrations = [
+    { id: 901, activity_id: 701, user_id: 801, status: 'ACTIVE', checked_in_at: null, checked_in_by: null },
+    { id: 902, activity_id: 702, user_id: 2, status: 'ACTIVE', checked_in_at: 'first check-in', checked_in_by: 801 },
+  ];
+  const connection = fakeDatabase([owned, protectedRow], registrations, undefined, [user]);
+  await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] }), /outside this run/);
+  assert.equal(connection.state.queries.filter(query => query.sql.startsWith('DELETE')).length, 0);
+  assert.deepEqual(connection.state.registrations, registrations);
+  assert.deepEqual(connection.state.users, [user]);
+  assert.equal(connection.state.rollbacks, 1);
+});
+
+test('owned check-in rows delete before users, preserve external metadata, and are idempotent', async () => {
+  const owned = fixture(701);
+  const protectedRow = fixture(702);
+  const user = account(801);
+  const external = { id: 902, activity_id: 702, user_id: 2, status: 'ACTIVE',
+    created_at: 'original creation', updated_at: 'original update', checked_in_at: 'first check-in', checked_in_by: 1 };
+  const connection = fakeDatabase([owned, protectedRow], [
+    { id: 901, activity_id: 701, user_id: 2, status: 'ACTIVE', checked_in_at: 'owned check-in', checked_in_by: 801 }, external,
+  ], undefined, [user]);
+  const first = await deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] });
+  assert.equal(first.deletedRegistrations, 1);
+  assert.equal(first.deletedUsers, 1);
+  assert.deepEqual(connection.state.registrations, [external]);
+  const deletes = connection.state.queries.filter(query => query.sql.startsWith('DELETE')).map(query => query.sql.split(' ')[2]);
+  assert.deepEqual(deletes, ['notifications', 'registrations', 'activities', 'users']);
+  const queryCount = connection.state.queries.length;
+  await deleteOwnedFixtures(connection, [owned], new Set(first.resolvedIds), async () => {},
+    { accounts: [user], alreadyDeletedAccounts: new Set(first.resolvedUserIds) });
+  assert.equal(connection.state.queries.slice(queryCount).some(query => query.sql.startsWith('DELETE')), false);
+  assert.deepEqual(connection.state.registrations, [external]);
+});
+
+test('a failed user delete restores owned check-in timestamps and operators atomically', async () => {
+  const owned = fixture(701);
+  const user = account(801);
+  const checked = { id: 901, activity_id: 701, user_id: 2, status: 'ACTIVE',
+    updated_at: 'unchanged registration time', checked_in_at: 'first check-in', checked_in_by: 801 };
+  const connection = fakeDatabase([owned], [checked], undefined, [user], user.id);
+  await assert.rejects(deleteOwnedFixtures(connection, [owned], new Set(), async () => {}, { accounts: [user] }), /user cleanup/);
+  assert.deepEqual(connection.state.registrations, [checked]);
+  assert.deepEqual(connection.state.activities, [owned]);
+  assert.deepEqual(connection.state.users, [user]);
+  assert.equal(connection.state.commits, 0);
+  assert.equal(connection.state.rollbacks, 1);
 });

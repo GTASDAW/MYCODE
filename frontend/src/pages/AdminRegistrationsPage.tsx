@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { Button, Card, Descriptions, Select, Table, Tag } from "antd";
-import type { TableColumnsType } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Alert, App as AntApp, Button, Card, Descriptions, Modal, Select, Statistic } from "antd";
+import { DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Link, useParams } from "react-router";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import {
   ActivityStatus,
@@ -12,74 +12,65 @@ import {
   PageHeading,
 } from "../components";
 import { formatDate, formatTime } from "../date";
+import { downloadCsv } from "../fileDownload";
+import { canCheckInRegistration } from "../registrationCheckIn";
 import type {
   AdminRegistration,
   AdminRegistrationQuery,
+  CheckInFilter,
   RegistrationFilter,
 } from "../types";
-import { useAuthenticatedResource } from "./useAuthenticatedResource";
+import { useResource } from "../useResource";
+import { AdminRegistrationTable } from "./AdminRegistrationTable";
+import { useRosterActions } from "./useRosterActions";
 
 const dateTime = (value: string) => `${formatDate(value)} ${formatTime(value)}`;
-const columns: TableColumnsType<AdminRegistration> = [
-  { title: "用户名", dataIndex: "username", key: "username", width: 160 },
-  { title: "姓名", dataIndex: "displayName", key: "displayName", width: 160 },
-  {
-    title: "报名状态",
-    dataIndex: "status",
-    key: "status",
-    width: 110,
-    render: (value: string) => (
-      <Tag
-        color={
-          value === "ACTIVE"
-            ? "green"
-            : value === "WAITING"
-              ? "orange"
-              : "default"
-        }
-      >
-        {value === "ACTIVE"
-          ? "已报名"
-          : value === "WAITING"
-            ? "候补中"
-            : "已取消"}
-      </Tag>
-    ),
-  },
-  {
-    title: "首次报名时间（北京时间）",
-    dataIndex: "createdAt",
-    key: "createdAt",
-    width: 260,
-    render: dateTime,
-  },
-  {
-    title: "最近更新时间（北京时间）",
-    dataIndex: "updatedAt",
-    key: "updatedAt",
-    width: 260,
-    render: dateTime,
-  },
-];
-
 export function AdminRegistrationsRoute() {
   const { id } = useParams();
-  const { user } = useAuth();
-  return <AdminRegistrationsPage key={`${id}:${user?.id}`} />;
+  const auth = useAuth();
+  const account = auth.captureAccountRequest();
+  return <AdminRegistrationsPage key={`${id}:${account?.userId}:${account?.generation}`} />;
 }
 
 function AdminRegistrationsPage() {
   const { id = "" } = useParams();
-  const { user } = useAuth();
+  const auth = useAuth();
+  const { message } = AntApp.useApp();
+  const account = auth.captureAccountRequest();
+  const accountKey = `${account?.userId}:${account?.generation}`;
   const [query, setQuery] = useState<AdminRegistrationQuery>({
     page: 1,
     pageSize: 10,
     status: "ALL",
+    checkInStatus: "ALL",
   });
-  const resource = useAuthenticatedResource(
-    (signal) => api.adminRegistrations(id, query, signal),
-    [id, user?.id, query.page, query.pageSize, query.status],
+  const [revision, setRevision] = useState(0);
+  const [selected, setSelected] = useState<AdminRegistration | null>(null);
+  const pageKey = `${id}:${accountKey}:${query.page}:${query.pageSize}:${query.status}:${query.checkInStatus}:${revision}`;
+  const currentPage = useRef(pageKey);
+  currentPage.current = pageKey;
+  const actions = useRosterActions(pageKey);
+  const refresh = () => setRevision((value) => value + 1);
+  const resource = useResource(
+    async (signal) => {
+      const ticket = auth.captureAccountRequest();
+      const startedPage = pageKey;
+      const current = () => !!ticket && !signal.aborted && currentPage.current === startedPage && auth.isCurrentAccountRequest(ticket);
+      const cancelled = () => new DOMException("Roster request cancelled", "AbortError");
+      if (!ticket || auth.user?.role !== "ADMIN" || !current()) throw cancelled();
+      try {
+        const result = await api.adminRegistrations(id, query, signal);
+        if (!current()) throw cancelled();
+        return result;
+      } catch (err) {
+        if (!current()) throw cancelled();
+        if (err instanceof ApiError && err.status === 401) auth.expire();
+        throw err;
+      }
+    },
+    [id, accountKey, query.page, query.pageSize, query.status, query.checkInStatus, revision],
   );
+  useEffect(() => setSelected(null), [pageKey]);
   useEffect(() => {
     if (resource.loading || resource.error || !resource.data) return;
     const lastPage = Math.max(
@@ -93,12 +84,34 @@ function AdminRegistrationsPage() {
     );
   }, [resource.data, resource.loading, resource.error, query]);
   const activity = resource.data?.activity;
+  const summary = resource.data?.summary;
+  const correctingPage = !!resource.data && query.page > Math.max(1, Math.ceil(resource.data.total / query.pageSize));
+  const canConfirm = !!selected && !!activity && canCheckInRegistration(activity, selected);
+
+  function confirmCheckIn() {
+    if (!selected || !canConfirm) return;
+    const registration = selected;
+    void actions.run("checkIn", (signal) => api.checkInRegistration(id, registration.id, signal), () => {
+      setSelected(null);
+      message.success("签到成功，名单已刷新");
+      refresh();
+    });
+  }
+
+  function exportCsv() {
+    if (!activity) return;
+    const filters = { status: query.status, checkInStatus: query.checkInStatus };
+    const filename = `activity-${activity.id}-registrations.csv`;
+    void actions.run("export", (signal) => api.exportAdminRegistrations(id, filters, signal), (blob, isCurrent) => {
+      downloadCsv(blob, filename, isCurrent);
+    });
+  }
   return (
     <div className="page-container">
       <PageHeading
         title="报名名单"
         section="活动管理"
-        description={activity ? activity.title : "查看活动参与者及报名状态。"}
+        description={activity ? activity.title : "查看活动参与者、签到情况及导出名单。"}
         extra={
           <Link to="/admin/activities">
             <Button>返回活动管理</Button>
@@ -158,6 +171,17 @@ function AdminRegistrationsPage() {
       ) : (
         resource.loading && <LoadingState />
       )}
+      <section className="roster-overview" aria-label="整场活动签到统计">
+        {[
+          { title: "有效报名人数", value: summary?.activeRegistrations, testId: "roster-active-count" },
+          { title: "已签到人数", value: summary?.checkedInRegistrations, testId: "roster-checked-in-count" },
+          { title: "未签到人数", value: summary?.notCheckedInRegistrations, testId: "roster-not-checked-in-count" },
+        ].map((stat) => <Card className="stat-card" key={stat.testId}>
+          <Statistic title={stat.title} value={stat.value ?? "—"} suffix="人"
+            formatter={() => <span data-testid={stat.testId}>{stat.value ?? "—"}</span>} />
+          <p className="roster-stat-note">统计整场活动的有效报名者</p>
+        </Card>)}
+      </section>
       <Card title="参与者记录" className="table-card">
         <div className="filter-form">
           <div className="filter-field filter-select">
@@ -177,25 +201,42 @@ function AdminRegistrationsPage() {
               ]}
             />
           </div>
+          <div className="filter-field filter-select">
+            <label htmlFor="registration-check-in-status">签到状态</label>
+            <Select<CheckInFilter> id="registration-check-in-status" aria-label="签到状态" value={query.checkInStatus}
+              onChange={(checkInStatus) => setQuery((previous) => ({ ...previous, page: 1, checkInStatus }))}
+              options={[
+                { value: "ALL", label: "全部签到状态" },
+                { value: "CHECKED_IN", label: "已签到" },
+                { value: "NOT_CHECKED_IN", label: "未签到" },
+              ]} />
+          </div>
+          <div className="filter-actions roster-actions">
+            <Button aria-label="刷新名单" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading}
+              disabled={actions.busy} onClick={() => { actions.clearError(); refresh(); }}>刷新名单</Button>
+            <Button aria-label="导出 CSV" icon={<DownloadOutlined aria-hidden="true" />} loading={actions.operation === "export"}
+              disabled={actions.busy || resource.loading || !!resource.error || !activity}
+              onClick={exportCsv}>导出 CSV</Button>
+          </div>
           <span className="filter-note">
-            取消后重新报名会更新原记录的状态和时间。
+            未签到只包括有效报名者；导出全部符合筛选条件的记录。
           </span>
         </div>
+        {activity && !activity.cancelled && <p className="roster-guidance metadata">
+          {activity.closed ? "活动已开始，可确认有效报名者到场。签到后不可撤销，支持补录。" : "活动开始后开放签到，到达开始时间请刷新名单。"}
+        </p>}
+        {actions.error && !selected && <Alert type="error" showIcon title={actions.error} className="form-alert" />}
         {resource.error ? (
-          <ErrorState error={resource.error} retry={resource.retry} />
+          <ErrorState error={resource.error} retry={refresh} />
         ) : (
-          <Table<AdminRegistration>
-            rowKey="id"
-            columns={columns}
-            dataSource={resource.data?.items ?? []}
-            loading={resource.loading}
-            scroll={{ x: 950 }}
-            locale={{ emptyText: "暂无符合条件的报名记录" }}
-            pagination={{
+          <AdminRegistrationTable activity={activity} items={resource.data?.items ?? []}
+            loading={resource.loading || correctingPage} busy={actions.busy}
+            onCheckIn={(registration) => { actions.clearError(); setSelected(registration); }}
+            pagination={correctingPage ? false : {
               current: query.page,
               pageSize: query.pageSize,
               total: resource.data?.total ?? 0,
-              showSizeChanger: true,
+              showSizeChanger: { "aria-label": "每页名单数量" },
               pageSizeOptions: [10, 20, 50],
               showTotal: (total) => `共 ${total} 条记录`,
               onChange: (page, pageSize) =>
@@ -208,6 +249,17 @@ function AdminRegistrationsPage() {
           />
         )}
       </Card>
+      <Modal title="确认签到" open={!!selected} destroyOnHidden onCancel={() => { if (!actions.busy) setSelected(null); }}
+        closable={!actions.busy} maskClosable={!actions.busy}
+        footer={[
+          <Button key="cancel" aria-label="取消签到确认" disabled={actions.busy} onClick={() => setSelected(null)}>取消</Button>,
+          <Button key="confirm" type="primary" aria-label="确认签到" loading={actions.operation === "checkIn"}
+            disabled={actions.busy || !canConfirm} onClick={confirmCheckIn}>确认签到</Button>,
+        ]}>
+        <p>确认 <strong>{selected?.displayName}</strong>（{selected?.username}）已经到场？</p>
+        <p className="metadata">签到会记录当前管理员与首次签到时间，成功后不可撤销。</p>
+        {actions.error && <Alert type="error" showIcon title={actions.error} />}
+      </Modal>
     </div>
   );
 }

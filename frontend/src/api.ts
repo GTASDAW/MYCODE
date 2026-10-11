@@ -10,6 +10,7 @@ import type {
   AdminActivityQuery,
   AdminRegistrationQuery,
   AdminRegistrationPage,
+  AdminRegistration,
   PageResult,
   ActivitySearchQuery,
   ActivitySearchPage,
@@ -55,14 +56,17 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
   allowCsrfRetry = true,
+  responseType: "json" | "csv" = "json",
 ): Promise<T> {
+  options.signal?.throwIfAborted();
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
-  headers.set("Accept", "application/json");
+  headers.set("Accept", responseType === "csv" ? "text/csv, application/json" : "application/json");
   if (method !== "GET" && method !== "HEAD") {
     const token = csrf ?? (await getCsrf());
     headers.set(token.headerName, token.token);
   }
+  options.signal?.throwIfAborted();
 
   let response: Response;
   try {
@@ -83,10 +87,21 @@ async function request<T>(
 
   let body: unknown;
   const requestId = response.headers.get("X-Request-Id") ?? undefined;
+  if (response.ok && responseType === "csv") {
+    if (response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "text/csv")
+      throw new ApiError(response.status, "导出文件格式异常，请稍后重试。", "INVALID_RESPONSE", requestId);
+    try {
+      return await response.blob() as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new ApiError(response.status, "导出文件读取失败，请稍后重试。", "INVALID_RESPONSE", requestId);
+    }
+  }
   if (response.status !== 204) {
     try {
       body = await response.json();
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") throw error;
       throw new ApiError(
         response.status,
         "服务暂时不可用，请稍后重试。",
@@ -105,7 +120,7 @@ async function request<T>(
       details?.code === "CSRF_INVALID"
     ) {
       await refreshCsrf();
-      return request<T>(path, options, false);
+      return request<T>(path, options, false, responseType);
     }
     const fallback =
       response.status === 401
@@ -231,10 +246,26 @@ export const api = {
           page: String(query.page),
           pageSize: String(query.pageSize),
           status: query.status,
+          checkInStatus: query.checkInStatus,
         },
       )}`,
       { signal },
     ),
+  checkInRegistration: (id: string, registrationId: number, signal?: AbortSignal) =>
+    request<AdminRegistration>(`/admin/activities/${encodeURIComponent(id)}/registrations/${registrationId}/check-in`, {
+      method: "POST", signal,
+    }),
+  exportAdminRegistrations: (
+    id: string,
+    query: Pick<AdminRegistrationQuery, "status" | "checkInStatus">,
+    signal?: AbortSignal,
+  ) => request<Blob>(
+    `/admin/activities/${encodeURIComponent(id)}/registrations/export?${new URLSearchParams({
+      status: query.status,
+      checkInStatus: query.checkInStatus,
+    })}`,
+    { signal }, true, "csv",
+  ),
   createActivity: (activity: NewActivity) =>
     request<Activity>("/admin/activities", {
       method: "POST",

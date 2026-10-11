@@ -1,6 +1,7 @@
 package com.example.gather.mapper;
 
 import com.example.gather.api.AdminModels.OverviewView;
+import com.example.gather.api.AdminModels.RosterSummaryView;
 import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.RosterRow;
 import org.apache.ibatis.annotations.*;
@@ -36,16 +37,39 @@ public interface AdminMapper {
     String ROSTER_FILTER = """
         WHERE r.activity_id = #{activityId}
         <if test="status != 'ALL'">AND r.status = #{status}</if>
+        <if test="checkInStatus == 'CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NOT NULL</if>
+        <if test="checkInStatus == 'NOT_CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NULL</if>
         """;
 
-    @Select("""
-        <script>
-        SELECT r.id, r.user_id, u.username, u.display_name, r.status, r.created_at, r.updated_at
+    String ROSTER_SELECT = """
+        SELECT r.id, r.user_id, u.username, u.display_name, r.status, r.created_at, r.updated_at,
+               r.checked_in_at, r.checked_in_by, checker.display_name AS checked_in_by_display_name
         FROM registrations r JOIN users u ON u.id = r.user_id
-        """ + ROSTER_FILTER + " ORDER BY r.updated_at DESC, r.id DESC LIMIT #{limit} OFFSET #{offset}</script>")
+        LEFT JOIN users checker ON checker.id = r.checked_in_by
+        """;
+
+    @Select("<script>" + ROSTER_SELECT + ROSTER_FILTER + " ORDER BY r.updated_at DESC, r.id DESC LIMIT #{limit} OFFSET #{offset}</script>")
     List<RosterRow> roster(@Param("activityId") long activityId, @Param("status") String status,
+                          @Param("checkInStatus") String checkInStatus,
                           @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("<script>SELECT COUNT(*) FROM registrations r " + ROSTER_FILTER + "</script>")
-    long countRoster(@Param("activityId") long activityId, @Param("status") String status);
+    long countRoster(@Param("activityId") long activityId, @Param("status") String status,
+                     @Param("checkInStatus") String checkInStatus);
+
+    @Select("""
+        SELECT COUNT(*) AS active_registrations,
+               COALESCE(SUM(checked_in_at IS NOT NULL), 0) AS checked_in_registrations,
+               COALESCE(SUM(checked_in_at IS NULL), 0) AS not_checked_in_registrations
+        FROM registrations WHERE activity_id=#{activityId} AND status='ACTIVE'
+        """)
+    RosterSummaryView rosterSummary(long activityId);
+
+    @Select(ROSTER_SELECT + " WHERE r.activity_id=#{activityId} AND r.id=#{registrationId}")
+    RosterRow findRosterRegistration(@Param("activityId") long activityId, @Param("registrationId") long registrationId);
+
+    // The caller holds the parent activity lock. Preserve registration status, queue order and update time.
+    @Update("UPDATE registrations SET checked_in_at=#{checkedInAt}, checked_in_by=#{adminId} WHERE id=#{registrationId} AND checked_in_at IS NULL")
+    int checkIn(@Param("registrationId") long registrationId, @Param("checkedInAt") LocalDateTime checkedInAt,
+                @Param("adminId") long adminId);
 }

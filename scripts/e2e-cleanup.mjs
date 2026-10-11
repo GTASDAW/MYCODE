@@ -34,13 +34,13 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4') ORDER BY installed_rank");
-  if (!['1', '2', '3', '4'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3/V4 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4', '5'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4/V5 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
-  await connection.execute('SELECT id, activity_id, user_id, status FROM registrations LIMIT 0');
+  await connection.execute('SELECT id, activity_id, user_id, status, checked_in_at, checked_in_by FROM registrations LIMIT 0');
   await connection.execute('SELECT id, username, display_name, role FROM users LIMIT 0');
   await connection.execute('SELECT id, user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");
@@ -294,9 +294,11 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
         throw new Error(`User ${account.id} ownership changed. Entire cleanup rolled back.`);
       }
       const [registrations] = await connection.execute('SELECT activity_id AS activityId FROM registrations WHERE user_id = ?', [account.id]);
+      const [checkIns] = await connection.execute('SELECT activity_id AS activityId FROM registrations WHERE checked_in_by = ?', [account.id]);
       const [notifications] = await connection.execute('SELECT activity_id AS activityId FROM notifications WHERE user_id = ?', [account.id]);
       const [createdActivities] = await connection.execute('SELECT id FROM activities WHERE created_by = ? OR cancelled_by = ?', [account.id, account.id]);
-      if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || notifications.some(row => !ownedActivityIds.has(row.activityId))
+      if (registrations.some(row => !ownedActivityIds.has(row.activityId)) || checkIns.some(row => !ownedActivityIds.has(row.activityId))
+          || notifications.some(row => !ownedActivityIds.has(row.activityId))
           || createdActivities.some(row => !ownedActivityIds.has(row.id))) {
         throw new Error(`User ${account.id} references data outside this run. Entire cleanup rolled back.`);
       }

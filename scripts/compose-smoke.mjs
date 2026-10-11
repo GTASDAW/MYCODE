@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import mysql from 'mysql2/promise';
-import { initializeRun, cleanupRun } from './e2e-cleanup.mjs';
+import { initializeRun, cleanupRun, deleteOwnedFixtures } from './e2e-cleanup.mjs';
 
 const baseUrl = new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1:18088');
 assert.equal(process.env.COMPOSE_PROJECT_NAME, 'gather-ci', 'Smoke checks require the isolated gather-ci project.');
@@ -24,6 +24,10 @@ let primaryError;
 const runId = randomUUID();
 const title = `Compose 验证 ${runId}`;
 const description = `gather-compose-smoke:${runId}`;
+const startedKey = randomUUID();
+const startedFixture = { key: startedKey, id: null, title: `Compose 签到验证 ${startedKey}`,
+  description: `gather-compose-checkin:${runId}:${startedKey}` };
+const fixtureIntentPath = `.runtime/ci/compose-fixtures-${runId}.json`;
 const reportPath = '.runtime/ci/compose-smoke.json';
 
 function check(name) { checks.push(name); console.log(`PASS: ${name}`); }
@@ -107,7 +111,7 @@ class ApiClient {
 
   async response(path, options = {}) {
     const headers = new Headers(options.headers);
-    headers.set('Accept', 'application/json');
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (this.cookies.size) headers.set('Cookie', [...this.cookies].map(([key, value]) => `${key}=${value}`).join('; '));
     const result = await fetch(new URL(path, baseUrl), { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(10000) });
     for (const rawCookie of result.headers.getSetCookie()) {
@@ -155,31 +159,19 @@ async function waitHealthy() {
 
 async function snapshot() {
   const [activities] = await db.query('SELECT id, title, description, location, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
-  const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at FROM registrations ORDER BY id');
+  const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   return JSON.stringify({ activities, registrations, notifications });
 }
 
 async function removeFixture() {
   // Exact intent can recover a created row even if its HTTP response was interrupted.
-  await db.beginTransaction();
-  try {
-    const [rows] = await db.execute('SELECT id, title, description FROM activities WHERE CAST(title AS BINARY)=CAST(? AS BINARY) AND CAST(description AS BINARY)=CAST(? AS BINARY) FOR UPDATE', [title, description]);
-    assert(rows.length <= 1, 'Multiple activities matched one smoke fixture intent.');
-    if (fixture) {
-      assert.equal(rows.length, 1, 'Created smoke activity is missing from the configured database; cleanup refused.');
-      assert.equal(Number(rows[0].id), fixture.id, 'Smoke activity identity changed.');
-    }
-    for (const row of rows) {
-      await db.execute('DELETE FROM notifications WHERE activity_id=?', [row.id]);
-      await db.execute('DELETE FROM registrations WHERE activity_id=?', [row.id]);
-      const [result] = await db.execute('DELETE FROM activities WHERE id=? AND title=? AND description=?', [row.id, title, description]);
-      assert.equal(result.affectedRows, 1, 'Smoke activity cleanup did not remove exactly one owned record.');
-    }
-    await db.commit();
-    assert.equal(await snapshot(), baseline, 'Existing database records changed during smoke checks.');
-    check('only the exact smoke fixture was removed; baseline data preserved');
-  } catch (error) { await db.rollback(); throw error; }
+  const proofs = [{ key: runId, id: fixture?.id ?? null, title, description }, startedFixture];
+  await deleteOwnedFixtures(db, proofs, new Set(), async (activities) => {
+    await writeFile(fixtureIntentPath, JSON.stringify({ runId, proofs, cleanupIntent: { activityIds: activities.map(row => row.id), userIds: [] } }, null, 2));
+  });
+  assert.equal(await snapshot(), baseline, 'Existing database records changed during smoke checks.');
+  check('only the exact smoke fixtures and their check-in history were removed; baseline data preserved');
 }
 
 try {
@@ -198,9 +190,9 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5']);
   assert(migrations.every(row => row.success === 1));
-  check('fresh MySQL schema contains successful Flyway V1, V2, V3 and V4');
+  check('fresh MySQL schema contains successful Flyway V1, V2, V3, V4 and V5');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -229,7 +221,7 @@ try {
 
   const admin = new ApiClient();
   const demo = new ApiClient();
-  await admin.login('admin', process.env.DEMO_ADMIN_PASSWORD ?? 'Admin123!');
+  const adminIdentity = await admin.login('admin', process.env.DEMO_ADMIN_PASSWORD ?? 'Admin123!');
   await demo.login('demo', process.env.DEMO_USER_PASSWORD ?? 'Demo123!');
   fixture = await admin.write('/api/admin/activities', 'POST', {
     title, description, location: 'Compose isolated validation', capacity: 1,
@@ -255,6 +247,12 @@ try {
   assert.equal(promoted.registeredCount, 1);
   assert.equal(promoted.waitingCount, 0);
   check('login, CSRF, full signup and automatic promotion work through the real container stack');
+  const earlyCheckToken = await admin.json('/api/auth/csrf');
+  const earlyCheck = await admin.response(`/api/admin/activities/${fixture.id}/registrations/${roster.items[0].id}/check-in`, {
+    method: 'POST', headers: { [earlyCheckToken.headerName]: earlyCheckToken.token },
+  });
+  assert.equal(earlyCheck.status, 409);
+  assert.equal((await earlyCheck.json()).code, 'CHECK_IN_NOT_OPEN');
 
   assert.equal((await anonymous.response('/api/me/notifications')).status, 401);
   const promotionNotices = await admin.json('/api/me/notifications?page=1&pageSize=1&status=ALL');
@@ -311,6 +309,51 @@ try {
   const persistedNotices = await admin.json('/api/me/notifications');
   check('activity cancellation notifies current participants once and excludes previously cancelled users');
 
+  // This exact independent test fixture starts in the past; no published activity time is edited.
+  await mkdir('.runtime/ci', { recursive: true });
+  await writeFile(fixtureIntentPath, JSON.stringify({ runId, proofs: [{ key: runId, id: fixture.id, title, description }, startedFixture] }, null, 2));
+  const [startedInsert] = await db.execute('INSERT INTO activities(title, description, location, starts_at, capacity, registered_count, created_by) VALUES (?, ?, ?, UTC_TIMESTAMP(6) - INTERVAL 1 DAY, 1, 1, ?)',
+    [startedFixture.title, startedFixture.description, 'Isolated check-in fixture', adminIdentity.id]);
+  startedFixture.id = Number(startedInsert.insertId);
+  const [registrationInsert] = await db.execute("INSERT INTO registrations(activity_id,user_id,status,created_at,updated_at) VALUES (?,?,'ACTIVE',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY)",
+    [startedFixture.id, adminIdentity.id]);
+  const checkInPath = `/api/admin/activities/${startedFixture.id}/registrations/${registrationInsert.insertId}/check-in`;
+  const initialSignedRoster = await admin.json(`/api/admin/activities/${startedFixture.id}/registrations`);
+  const beforeCheckIn = await snapshot();
+  assert.equal((await admin.response(checkInPath, { method: 'POST' })).status, 403);
+  const demoCheckToken = await demo.json('/api/auth/csrf');
+  assert.equal((await demo.response(checkInPath, { method: 'POST', headers: { [demoCheckToken.headerName]: demoCheckToken.token } })).status, 403);
+  assert.equal(await snapshot(), beforeCheckIn, 'Denied check-in requests must not change any data.');
+  const signed = await admin.write(checkInPath);
+  assert(signed.checkedInAt && signed.checkedInBy === adminIdentity.id);
+  assert.equal(signed.status, 'ACTIVE');
+  assert.equal(signed.updatedAt, initialSignedRoster.items[0].updatedAt);
+  assert.equal(signed.createdAt, initialSignedRoster.items[0].createdAt);
+  assert.deepEqual(await admin.write(checkInPath), signed);
+  const signedRoster = await admin.json(`/api/admin/activities/${startedFixture.id}/registrations?status=ACTIVE&checkInStatus=CHECKED_IN`);
+  assert.equal(signedRoster.total, 1);
+  assert.deepEqual(signedRoster.items, [signed]);
+  assert.deepEqual(signedRoster.summary, { activeRegistrations: 1, checkedInRegistrations: 1, notCheckedInRegistrations: 0 });
+  assert.equal((await admin.json(`/api/admin/activities/${startedFixture.id}/registrations?checkInStatus=NOT_CHECKED_IN`)).total, 0);
+  const csv = await admin.response(`/api/admin/activities/${startedFixture.id}/registrations/export?status=ACTIVE&checkInStatus=CHECKED_IN`, { headers: { Accept: 'text/csv, application/json' } });
+  assert.equal(csv.status, 200);
+  assert.match(csv.headers.get('Content-Type'), /^text\/csv/i);
+  assert(csv.headers.get('Content-Disposition').includes(`activity-${startedFixture.id}-registrations.csv`));
+  const csvBytes = new Uint8Array(await csv.arrayBuffer());
+  assert.deepEqual([...csvBytes.slice(0, 3)], [239, 187, 191]);
+  assert(new TextDecoder().decode(csvBytes).includes('"\tadmin"'));
+  const beforeAttendanceOnly = JSON.parse(beforeCheckIn);
+  const afterAttendanceOnly = JSON.parse(await snapshot());
+  for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
+    state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
+  }
+  assert.deepEqual(afterAttendanceOnly, beforeAttendanceOnly, 'Check-in/export must preserve every other business field and notification.');
+  const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [startedFixture.id]);
+  assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
+  assert.equal(Number(attendanceTruth.checked), 1);
+  assert.equal(Number(attendanceTruth.waiting), 0);
+  check('check-in preserves first trusted actor/time; filtered summary and protected UTF-8 CSV are real');
+
   if (process.env.SMOKE_RESTART_BACKEND === '1') {
     assert.equal(process.env.COMPOSE_PROJECT_NAME, 'gather-ci', 'Restart is restricted to the isolated gather-ci project.');
     assert.equal(database, 'activity_platform_e2e', 'Restart requires the isolated CI database.');
@@ -326,6 +369,7 @@ try {
     assert.equal(persisted.cancellationReason, cancelledActivity.cancellationReason);
     assert.equal(persisted.cancelledAt, cancelledActivity.cancelledAt);
     assert.deepEqual(await admin.json('/api/me/notifications'), persistedNotices, 'Notification history and first-read time must survive restart.');
+    assert.deepEqual((await admin.json(`/api/admin/activities/${startedFixture.id}/registrations`)).items, [signed], 'First check-in metadata must survive restart.');
     check('backend restart preserves database data and expires the documented in-memory Session');
   }
 } catch (error) {
