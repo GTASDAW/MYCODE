@@ -1,13 +1,13 @@
 # 活动报名平台：架构与请求流程
 
-这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，系统在并发请求下维护正确人数、递补队列、取消历史与站内通知。
+这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，活动开始后管理员确认到场并导出名单。系统在并发请求下维护正确人数、递补队列、取消历史、站内通知与首次签到信息。
 
 ## 技术分工
 
 | 层次 | 技术 | 负责的事情 |
 | --- | --- | --- |
 | 页面 | React、TypeScript、Vite、Ant Design、React Router | 页面路由、表单、加载状态、错误反馈 |
-| HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON |
+| HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON 或名单 CSV |
 | 请求追踪与指标 | 请求观察 Filter、MDC、结构化日志、Micrometer Timer | 关联请求与安全错误日志，记录当前实例耗时与连接池快照 |
 | 身份与权限 | Spring Security、Cookie Session、CSRF | 注册、登录、识别当前用户、校验管理员权限 |
 | 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
@@ -35,7 +35,7 @@ flowchart LR
 
 - **用户**：保存唯一登录名、密码哈希、展示名和角色。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名和昵称修改请求不能自行指定操作人。
 - **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
-- **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。
+- **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5 增加成对的可空签到时间、操作人；非空时必须为 `ACTIVE`，操作人关联用户且外键限制删除。
 - **站内通知**：V4 保存收件人、活动、事件类型、当时标题、公开取消原因、UTC 创建与首次已读时间。只在实际递补或首次活动取消时写入，同业务事务提交；外键保留历史，真正再次递补可产生新记录。
 
 需要始终满足：活动的当前人数等于该活动的 `ACTIVE` 报名记录数，并且在 `0` 到总名额之间；`WAITING` 记录不占用名额。唯一约束保证同一个用户不会有两条报名记录；事务和行锁保证并发操作下人数正确，候补记录按排队顺序递补。
@@ -54,7 +54,9 @@ flowchart LR
 | `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
-| `GET /api/admin/activities/{id}/registrations` | 分页查看活动报名名单 | 管理员 |
+| `GET /api/admin/activities/{id}/registrations` | 两类状态筛选分页与整场签到统计 | 管理员 |
+| `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 活动开始后为有效报名者保存首次签到 | 管理员，需 CSRF |
+| `GET /api/admin/activities/{id}/registrations/export` | 全筛选范围 CSV，最多 20,000 条 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍和地点 | 管理员，需 CSRF |
 | `POST /api/admin/activities/{id}/cancel` | 取消活动，保存首次原因、时间和报名历史 | 管理员，需 CSRF |
@@ -104,7 +106,9 @@ flowchart LR
 
 概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的时间条件；`fullActivities` 只统计未取消且尚未开始的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消且尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
 
-`GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，以及 `ALL`、`ACTIVE`、`WAITING`、`CANCELLED` 状态，返回 `{activity,items,total,page,pageSize}`。名单行包含报名 ID、用户 ID、账号、展示名、状态、创建时间和更新时间，时间使用 UTC；按更新时间降序、报名 ID 降序排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
+`GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，`status=ALL|ACTIVE|WAITING|CANCELLED` 与 `checkInStatus=ALL|CHECKED_IN|NOT_CHECKED_IN` 默认均为 `ALL`、按 AND 组合，返回 `{activity,items,total,page,pageSize,summary}`。签到筛选只匹配 `ACTIVE`，因此候补或已取消与已签到/未签到组合时为空。名单行保留原字段，增加可空 UTC `checkedInAt`、`checkedInBy` 与管理员当前数据库昵称 `checkedInByDisplayName`；按 `updated_at DESC, id DESC` 排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
+
+`summary` 的 `activeRegistrations`、`checkedInRegistrations`、`notCheckedInRegistrations` 统计整场活动全部 `ACTIVE`，不受筛选和分页影响。活动、三项统计、筛选总数与名单共用只读 `REPEATABLE_READ` 快照；签到仅修改两个审计字段，不改变排序使用的报名更新时间。
 
 管理列表的总数和当前页查询在只读 `REPEATABLE_READ` 事务的同一快照内执行；概览用一条 SQL 取得八项统计，并单独统计报名表，避免关联多条报名记录后重复累计活动和名额。这些查询不改变报名业务的 `READ_COMMITTED` 事务与行锁设计。
 
@@ -134,11 +138,19 @@ flowchart LR
 
 已取消活动返回 `cancelled=true`、原因、时间及 `closed=true`。有效的重复组织者取消保留首次结果，越过原开始时间仍幂等；报名、用户取消和编辑返回 409 `ACTIVITY_CANCELLED`。未取消活动开始后拒绝首次编辑或组织者取消，检查时间发生在取得锁后。V3 的外键和 CHECK 保证取消元数据完整与人数为 0，跨表状态不变量还依赖事务。详细 API、迁移、页面认证代次保护和真实验证路径见 [活动生命周期](activity-lifecycle.md)。
 
+## 管理员签到与 CSV
+
+`AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务。先锁活动主键，普通读取该活动内的报名，再核对取消状态、取得锁后的 UTC 微秒时间与 `ACTIVE` 资格。活动开始时即开放签到，没有结束时间或自动截止；重复请求保留首次时间和可信管理员 ID。签到只写 V5 的两个审计字段，不增减人数、不修改报名状态或更新时间、不递补或写通知，第一版不提供撤销。
+
+名单导出复用两类筛选与原排序，在只读快照内先计数、再取全部匹配记录；超过 20,000 条返回 413 `EXPORT_TOO_LARGE`，不会截断。响应为 UTF-8 BOM、CRLF、双引号转义的 `text/csv;charset=UTF-8`，文件名 `activity-{id}-registrations.csv`，`Cache-Control: no-store`；空集合仅表头。时间转换为北京时间，自由文本及 ID 在引号内加 Tab，面向 Excel 人工查看而非无损原始数据导入。
+
+前端统一 `api.ts` 增加文件响应分支：非成功响应仍解析 JSON 与请求编号，成功文件仅接受 CSV MIME。页面读取、签到和下载复用认证代次与取消信号，进一步核对当前筛选、页码及刷新版本，旧响应不能下载文件、显示旧提示或使新会话退出；临时链接与对象 URL 最终清理。具体错误、输入边界和阅读路径见 [签到与导出指南](checkin-export-guide.md)。两个新接口使用固定日志/指标路由，名单和文件内容不进入请求日志。
+
 ## Cookie Session 与 CSRF
 
 Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保存 `JSESSIONID`，默认模式把身份和 CSRF 状态保存在当前 Java 进程内存；`redis` profile 把这些会话属性存到共享 Redis。两种模式的默认闲置时限都是 30 分钟。登录成功后会话身份发生变化，前端应重新取得 CSRF 信息；退出后清空页面中的用户状态，并使服务端会话失效。
 
-浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。注册、登录、退出、修改昵称、创建或编辑活动、取消整场活动、报名、进入候补、取消报名、退出候补和标记通知已读都属于写请求。读取活动列表或通知不会自动修改已读状态。
+浏览器会自动携带 Cookie，因此写请求需要 CSRF 防护。前端先调用 `GET /api/auth/csrf`，按接口返回的请求头名称和令牌设置后续请求。注册、登录、退出、修改昵称、创建或编辑活动、取消整场活动、报名、进入候补、取消报名、退出候补、标记通知已读和签到都属于写请求。读取活动列表、通知或导出 CSV 不会自动修改业务数据；GET 不自动获取 CSRF 或重放。
 
 可选 Compose overlay 使用 Nginx 轮询两个相同后端，共用 MySQL、Redis、会话命名空间和时限。请求从 A 切换到 B 时，B 仍通过 Cookie 在 Redis 找到同一身份与 CSRF；不需要客户端指定后端，也不依赖粘滞会话。会话有效且 Redis 可用时，重启一个 Java 实例不会清空共享登录；Redis 失效、会话过期或退出后不能继续使用原身份。
 
