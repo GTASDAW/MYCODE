@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
 
-一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动、查看报名名单、确认签到与导出 CSV，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名、查看历史记录与站内通知。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补、活动取消、对应通知与首次签到由数据库事务保证。
+一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动、查看报名名单、确认签到与导出 CSV，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名、筛选分页查看本人记录、签到结果与站内通知。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补、活动取消、对应通知与首次签到由数据库事务保证。
 
 ## 技术栈
 
@@ -39,6 +39,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 活动开始前，管理员可在详情或管理列表编辑标题、介绍和地点，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
 
 发现页支持标题或地点搜索、六种状态筛选和真实后端分页，默认每页 12 条。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
+
+“我的报名”支持全部、已报名、候补、已取消筛选，默认每页 10 条，提供 10、20、50 条选项与手动刷新。四项统计覆盖本人全部记录，已签到是有效报名的子集；页面只展示本人的签到时间，不提供自助签到或签到管理员资料。URL、详情与登录返回保留条件，返回后重新查询并校正越界页。新分页使用两次数据 SELECT，旧数组接口保留字段和排序并改为一次联表读取，消除逐条加载活动；快照、查询证据和学习路径见 [我的报名指南](docs/my-registrations-guide.md)。
 
 登录后的顶栏铃铛与“通知中心”提供候补递补和活动取消消息，支持状态筛选、分页、手动刷新和单条标记已读。未读数来自本人全部通知，通知保存当时标题与公开取消原因；重复操作不重复生成，真正再次递补会产生新消息。没有定时轮询或外部消息发送，完整事务、权限与代码路径见 [站内通知指南](docs/notification-guide.md)。
 
@@ -101,7 +103,8 @@ Redis 只用于共享会话，报名、候补、人数与通知继续由 MySQL �
 | `POST /api/admin/activities/{id}/cancel` | 取消整场活动并保存原因和历史 | 管理员 |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补 | 登录 |
 | `DELETE /api/activities/{id}/registration` | 取消报名或退出候补 | 登录 |
-| `GET /api/me/registrations` | 我的报名 | 登录 |
+| `GET /api/me/registrations` | 保留原报名数组、字段和排序 | 登录，普通用户与管理员均仅查询本人 |
+| `GET /api/me/registrations/search` | 本人状态筛选、分页、全量统计与只读签到时间 | 登录，身份只取可信 Session |
 | `GET /api/me/notifications` | 本人通知，状态筛选、分页与全量未读数 | 登录 |
 | `GET /api/me/notifications/unread-count` | 本人全量未读数量 | 登录 |
 | `POST /api/me/notifications/{id}/read` | 单条标记已读，保留首次时间 | 登录且需要 CSRF，只能操作本人通知 |
@@ -118,6 +121,7 @@ Redis 只用于共享会话，报名、候补、人数与通知继续由 MySQL �
 - 重复报名、重复取消在活动开放期间返回当前结果，不会重复改变人数。
 - 实际候补递补生成一条本人通知；整场取消只通知当时有效报名者与候补者，和业务变更在同一事务内提交或回滚。再次真正递补产生新事件，重复请求不增加消息；标记已读保留首次时间。
 - 签到在独立 `READ_COMMITTED` 事务中先锁同一活动，再核对报名归属、活动与有效状态；只保存首次签到时间和可信管理员 ID，不改变人数、报名更新时间、候补排序或通知。名单与导出使用只读快照；未签到筛选仅包含 `ACTIVE`，候补和已取消记录显示“不适用”。
+- 个人报名分页的 `total` 按状态筛选，四项 `summary` 统计本人全部历史；列表、总数和统计共用只读 `REPEATABLE_READ` 快照与一次 UTC 微秒时刻。每项的报名 ID 与内嵌活动 ID 不同，本人签到时间来自 V5，查询不改变业务写流程。
 - 时间在接口中使用 UTC，在页面中按北京时间显示。
 
 管理活动列表支持标题或地点的字面子串搜索，以及全部、未开始、可报名、满员、已开始、已取消筛选；报名名单支持全部、已报名、候补中、已取消，并可叠加已签到或未签到条件。管理分页默认每页 10 条，接口最多每页 100 条。概览总活动含取消活动，并单独统计 `cancelledActivities`；其他活动时间状态和剩余名额排除取消活动，有效报名与候补仍按报名表状态统计。名单签到统计只包含整场活动的有效报名者，不受筛选和页码影响，详细口径见 [架构与接口说明](docs/architecture.md)。
@@ -181,7 +185,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看四张业务表、唯一约束、V2 候补状态、V3 活动取消元数据及 V4 通知历史的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看四张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史及 V5 签到审计的增量迁移；个人报名查询复用 V5，不新增迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [四阶段学习指南](docs/learning-guide.md)
@@ -189,6 +193,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [用户注册与个人中心](docs/account-guide.md)
 - [活动编辑、取消与历史记录](docs/activity-lifecycle.md)
 - [活动搜索、筛选、分页与 URL 状态](docs/activity-discovery.md)
+- [我的报名、本人签到与联表查询](docs/my-registrations-guide.md)
 - [站内通知、事务事件与首次已读时间](docs/notification-guide.md)
 - [管理员签到、整场统计与 CSV 导出](docs/checkin-export-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)

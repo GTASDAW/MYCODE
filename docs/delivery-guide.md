@@ -10,8 +10,8 @@
 
 | 检查 | 验证内容 | 数据环境 |
 | --- | --- | --- |
-| `frontend` | 从 lockfile 安装，运行 API/CSRF、账户校验与认证请求顺序、活动发现 URL/来源安全、通知 URL/未读统计顺序、签到资格/文件响应/过期下载回归、TypeScript 检查和生产构建 | 不写数据库 |
-| `backend` | Java 21、Maven Wrapper，运行账户注册/资料、活动编辑与取消、权限、公开查询快照/统计/个人状态、通知事件/快照/首次标读、签到首次审计/名单统计/完整 CSV、真实并发锁顺序/回滚和候补 FIFO 集成测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
+| `frontend` | 从 lockfile 安装，运行 API/CSRF、账户认证顺序、公开及个人 URL/详情来源安全、个人查询认证代次/取消保护、通知未读顺序、签到/文件响应/过期下载回归、TypeScript 检查和生产构建 | 不写数据库 |
+| `backend` | Java 21、Maven Wrapper，运行账户、活动生命周期、权限、公开查询快照、个人旧数组兼容/分页/全量统计/签到时间/SELECT 次数及实际计划、通知、签到/CSV、真实并发锁顺序/回滚和候补 FIFO 测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
 | `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
 | `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、独立会话最新昵称、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
 | `performance` | 固定资源下的两种报名场景、客户端原始延迟、18 轮一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
@@ -20,7 +20,7 @@
 
 版本对照由独立的 `.github/workflows/query-comparison.yml` 提供，只接受 `workflow_dispatch` 手工触发。它不是常规 `ci.yml` 的第六个推送检查，避免后续功能修改不断对固定旧版本重新实验。
 
-后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户、活动生命周期、活动发现、通知和签到导出场景关闭 trace，避免保存请求体、Cookie、文件内容或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
+后端检查在 `backend` 目录用 `sh mvnw -B verify`，避免 Windows 工作区的可执行位影响 Linux runner。浏览器测试使用 Chromium；普通业务失败保留截图、trace 和 HTML 报告。账户、活动生命周期、活动发现、个人报名、通知和签到导出场景关闭 trace，避免保存请求体、Cookie、文件内容或 DOM 快照；保留密码输入已遮蔽的页面截图，配合状态断言和服务端请求编号定位问题。容器日志、Maven Surefire 报告和冒烟结果放入 CI 附件，不进入 Git。
 
 ## 本地复现
 
@@ -83,6 +83,10 @@ Redis CI 同时使用 `.github/compose.ci.yaml` 和 `.github/compose.redis-ci.ya
 签到使用 V5 的同一 MySQL 审计字段，跨实例仍先锁活动，保留首次操作人和时间；名单统计、两类筛选与 CSV 从真实数据库读取，Java 重启不清空历史。完整浏览器回归包含确认弹窗、未开始/已取消资格、整场统计、末页修正、超过一页的实际下载与网络/迟到响应。旧 CSV 成功或 401 在换账号后不能下载或退出新会话。字段、20,000 条上限和人工 Excel 查看保护见 [签到与导出指南](checkin-export-guide.md)，各模式实际结果引用验证记录。
 
 两种重启断言都要保留：默认容器模式重启后原 Session 应失效；Redis 模式在会话有效且 Redis 可用时重启 A，原 Cookie 在 A/B 仍应识别同一身份。不能为了 Redis 的新行为删掉默认模式回归。新建空库的双实例启动还要验证管理员和普通用户各一条、演示活动正好三场，不能依赖启动失败后重试来掩盖初始化竞态。
+
+个人报名检查复用当前 V5：默认容器冒烟核对新分页、全量本人统计、真实签到时间和旧数组字段，重启后重新登录再核对数据库历史；共享模式在 A/B 与 Nginx 分别验证同一 Session 的本人集合、伪造用户参数无效和普通用户不暴露签到操作人。浏览器覆盖四种状态、10/3 分页、URL/详情与登录返回、本人签到、越界校正、失败重试和换账号/同账号重登后的迟到成功与 401。提供这些检查不等于各环境已经执行通过，实际结果统一看 [验证记录](verification.md)。
+
+后端个人读取证据使用专属测试记录捕获数据 SELECT，并对实际 Mapper SQL 执行 `EXPLAIN`；旧数组为一次数据读取，新分页为聚合加联表两次，没有逐条 `ActivityService.get`。关联候补 COUNT 仍是底层工作，未测个人接口时延/吞吐，不能将查询计数或常规报名负载报告写成其性能收益。本轮没有新迁移、索引、依赖或性能实验合同，细节见 [我的报名指南](my-registrations-guide.md)。
 
 ## 性能基线交付
 
