@@ -19,6 +19,7 @@ import {
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { api, ApiError, errorMessage } from "../api";
 import { useAuth } from "../auth";
+import { readAccountResource } from "../authRequestGuard";
 import {
   ActivityStatus,
   ActivityCancellationNotice,
@@ -31,11 +32,12 @@ import { formatDate, formatTime } from "../date";
 import { useResource } from "../useResource";
 import { activityClosed } from "../activityLifecycle";
 import { ActivityManagementActions } from "./ActivityManagementActions";
-import { safeActivityListPath } from "../activityDiscovery";
+import { safeActivityDetailReturn } from "../activityDetailNavigation";
 export function ActivityDetailRoute() {
   const { id } = useParams();
-  const { user } = useAuth();
-  return <ActivityDetailPage key={`${id}:${user?.id ?? "guest"}`} />;
+  const auth = useAuth();
+  const account = auth.captureAccountRequest();
+  return <ActivityDetailPage key={`${id}:${account ? `${account.userId}:${account.generation}` : "guest"}`} />;
 }
 
 function ActivityDetailPage() {
@@ -43,36 +45,61 @@ function ActivityDetailPage() {
   const auth = useAuth();
   const location = useLocation();
   const sourceList = new URLSearchParams(location.search).get("from");
-  const returnPath = safeActivityListPath(sourceList);
-  const returnLabel = sourceList === null ? "返回全部活动" : "返回活动列表";
+  const returnPath = safeActivityDetailReturn(sourceList);
+  const returnLabel = returnPath.split("?")[0] === "/my-registrations"
+    ? "返回我的报名" : sourceList === null ? "返回全部活动" : "返回活动列表";
   const detailPath = `${location.pathname}${location.search}`;
   const resource = useResource(
-    (signal) => api.activity(id, signal),
+    (signal) => {
+      const account = auth.captureAccountRequest();
+      if (!account) return api.activity(id, signal);
+      return readAccountResource(
+        (requestSignal) => api.activity(id, requestSignal), signal,
+        () => auth.isCurrentAccountRequest(account),
+        (error) => {
+          if (error instanceof ApiError && error.status === 401) auth.expire();
+        },
+      );
+    },
     [id, auth.user?.id],
   );
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const submission = useRef<AbortController | null>(null);
+  const currentDetail = useRef(detailPath);
+  currentDetail.current = detailPath;
   useEffect(() => {
     mounted.current = true;
+    setBusy(false);
+    setActionError(null);
     return () => {
       mounted.current = false;
+      submission.current?.abort();
+      submission.current = null;
     };
-  }, []);
+  }, [detailPath]);
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const activity = resource.data;
 
   async function mutate(cancel: boolean) {
-    if (!activity) return;
+    if (!activity || submission.current) return;
+    const account = auth.captureAccountRequest();
+    if (!account) return;
+    const controller = new AbortController();
+    submission.current = controller;
+    const startedDetail = detailPath;
+    const current = () => mounted.current && !controller.signal.aborted &&
+      currentDetail.current === startedDetail && auth.isCurrentAccountRequest(account);
     const wasWaiting = activity.registrationStatus === "WAITING";
     setBusy(true);
     setActionError(null);
     try {
       const updated = await (cancel
-        ? api.cancel(activity.id)
-        : api.register(activity.id));
-      if (!mounted.current) return;
+        ? api.cancel(activity.id, controller.signal)
+        : api.register(activity.id, controller.signal));
+      if (!current()) return;
       resource.setData(updated);
       message.success(
         cancel
@@ -84,7 +111,7 @@ function ActivityDetailPage() {
             : "报名成功",
       );
     } catch (error) {
-      if (!mounted.current) return;
+      if (!current()) return;
       if (error instanceof ApiError && error.status === 401) {
         auth.expire();
         navigate("/login", {
@@ -98,15 +125,18 @@ function ActivityDetailPage() {
         // Refresh a potentially stale capacity or deadline after a rejected operation.
         if (error instanceof ApiError && error.status === 409) {
           try {
-            const updated = await api.activity(id);
-            if (mounted.current) resource.setData(updated);
+            const updated = await api.activity(id, controller.signal);
+            if (current()) resource.setData(updated);
           } catch {
             /* Keep the original, visible action error. */
           }
         }
       }
     } finally {
-      if (mounted.current) setBusy(false);
+      if (submission.current === controller) {
+        submission.current = null;
+        if (current()) setBusy(false);
+      }
     }
   }
 

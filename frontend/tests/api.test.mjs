@@ -13,6 +13,29 @@ const response = (status, body, headers = {}) => new Response(JSON.stringify(bod
   status, headers: { 'Content-Type': 'application/json', ...headers },
 });
 
+test('personal registration search sends only query criteria and the abort signal while legacy reads retain their array contract', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const page = { items: [{ id: 9, status: 'ACTIVE', checkedInAt: '2030-01-01T00:00:00Z' }],
+    total: 11, page: 2, pageSize: 10,
+    summary: { activeRegistrations: 8, waitingRegistrations: 2, cancelledRegistrations: 1, checkedInRegistrations: 1 } };
+  const oldArray = [{ id: 9, status: 'ACTIVE', activity: { id: 22 } }];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url.includes('/search?') ? page : oldArray);
+  };
+  assert.deepEqual(await api.searchRegistrations({ page: 2, pageSize: 10, status: 'ACTIVE', userId: 999 }, controller.signal), page);
+  const parsed = new URL(calls[0].url, 'http://localhost');
+  assert.equal(parsed.pathname, '/api/me/registrations/search');
+  assert.deepEqual(Object.fromEntries(parsed.searchParams), { page: '2', pageSize: '10', status: 'ACTIVE' });
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.equal(calls[0].options.headers.get('Accept'), 'application/json');
+  assert.deepEqual(await api.registrations(controller.signal), oldArray);
+  assert.equal(calls[1].url, '/api/me/registrations');
+});
+
 test('an expired CSRF token is refreshed and the original write is replayed only once', async () => {
   const { api } = await freshApi();
   const calls = [];

@@ -320,13 +320,21 @@ test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({
   await login(page, 'demo', 'Demo123!');
   let releaseResponse!: () => void;
   let requestArrived!: () => void;
+  let responseDelivered!: () => void;
+  let writes = 0;
   const held = new Promise<void>(resolve => { releaseResponse = resolve; });
   const arrived = new Promise<void>(resolve => { requestArrived = resolve; });
+  const completed = new Promise<void>(resolve => { responseDelivered = resolve; });
   await page.route(`**/api/activities/${first.id}/registration`, async route => {
+    if (route.request().method() !== 'POST') { await route.continue(); return; }
+    writes++;
     const response = await route.fetch();
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toMatchObject({ id: first.id, title: first.title, registrationStatus: 'ACTIVE', registeredCount: 1, waitingCount: 0 });
     requestArrived();
     await held;
-    await route.fulfill({ response });
+    try { await route.fulfill({ response }); }
+    finally { responseDelivered(); }
   });
   try {
     await page.goto(`/activities/${first.id}`);
@@ -344,15 +352,27 @@ test('报名响应延迟时切换活动，不会覆盖新活动详情', async ({
     expect((await filtered).ok()).toBeTruthy();
     await page.getByRole('link', { name: `查看${second.title}的详情`, exact: true }).click();
     await expect(page.getByRole('heading', { name: second.title, exact: true })).toBeVisible();
-    const lateResponse = page.waitForResponse(response => response.url().endsWith(`/api/activities/${first.id}/registration`) && response.request().method() === 'POST');
     releaseResponse();
-    await lateResponse;
+    // Leaving the detail aborts the browser request. Verify the real server result
+    // and delayed route delivery; a cancelled request need not emit a response event.
+    await completed;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(new URL(page.url()).pathname).toBe(`/activities/${second.id}`);
     await expect(page.getByRole('heading', { name: second.title, exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: first.title, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '立即报名', exact: true })).toBeVisible();
+    await expect(page.getByText('已成功报名', { exact: true })).toHaveCount(0);
+    expect(writes).toBe(1);
+    const persistedFirst = await page.request.get(`/api/activities/${first.id}`);
+    expect(persistedFirst.status()).toBe(200);
+    expect(await persistedFirst.json()).toMatchObject({ id: first.id, title: first.title, registrationStatus: 'ACTIVE', registeredCount: 1, waitingCount: 0 });
+    const untouchedSecond = await page.request.get(`/api/activities/${second.id}`);
+    expect(untouchedSecond.status()).toBe(200);
+    expect(await untouchedSecond.json()).toMatchObject({ id: second.id, title: second.title, registrationStatus: null, registeredCount: 0, waitingCount: 0 });
   } finally {
     releaseResponse();
-    const token = await (await page.request.get('/api/auth/csrf')).json();
-    await page.request.delete(`/api/activities/${first.id}/registration`, { headers: { [token.headerName]: token.token } });
+    await page.unrouteAll({ behavior: 'wait' });
+    await writeApi(page.request, `/api/activities/${first.id}/registration`, 'DELETE');
   }
 });
 

@@ -1,10 +1,12 @@
 package com.example.gather.api;
 
 import com.example.gather.api.ApiModels.*;
+import com.example.gather.api.MyRegistrationModels.MyRegistrationPageView;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
 import com.example.gather.service.RegistrationService;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
@@ -51,5 +53,24 @@ public class ActivityController {
     @GetMapping("/me/registrations")
     List<RegistrationView> mine(@AuthenticationPrincipal AppUserDetails principal) {
         return registrations.mine(principal.id());
+    }
+
+    @GetMapping("/me/registrations/search")
+    MyRegistrationPageView searchMine(@RequestParam(required = false) String page,
+                                      @RequestParam(required = false) String pageSize,
+                                      @RequestParam(required = false) String status,
+                                      @AuthenticationPrincipal AppUserDetails principal) {
+        return registrations.searchMine(principal.id(), integer(page, 1), integer(pageSize, 10),
+            status == null ? "ALL" : status);
+    }
+
+    private static int integer(String text, int fallback) {
+        if (text == null) return fallback;
+        try {
+            if (!text.matches("[0-9]+")) throw new NumberFormatException();
+            return Integer.parseInt(text);
+        } catch (NumberFormatException exception) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码和每页数量应为有效整数");
+        }
     }
 }

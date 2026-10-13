@@ -3,6 +3,28 @@ export interface AccountRequest {
   userId: number;
 }
 
+// A read owns its AbortSignal and account ticket. Check both before reporting
+// success or errors, so an old 401 cannot expire a newer authentication.
+export async function readAccountResource<T>(
+  loader: (signal: AbortSignal) => Promise<T>,
+  signal: AbortSignal,
+  isCurrent: () => boolean,
+  onCurrentError: (error: unknown) => void,
+): Promise<T> {
+  const current = () => !signal.aborted && isCurrent();
+  const cancelled = () => new DOMException("Account request cancelled", "AbortError");
+  if (!current()) throw cancelled();
+  try {
+    const data = await loader(signal);
+    if (!current()) throw cancelled();
+    return data;
+  } catch (error) {
+    if (!current()) throw cancelled();
+    onCurrentError(error);
+    throw error;
+  }
+}
+
 interface ProfileRead extends AccountRequest {
   version: number;
   sequence: number;

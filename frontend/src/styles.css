@@ -725,6 +725,31 @@ main:focus {
   display: flex;
   flex-direction: column;
 }
+.myregistrations-controls {
+  margin-bottom: 20px;
+}
+.myregistrations-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.myregistrations-filters .ant-select {
+  min-width: 150px;
+}
+.myregistrations-pagination {
+  margin-top: 20px;
+}
+.myregistrations-pagination .ant-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.registration-row-main .myregistration-checkin {
+  display: block;
+  color: #595959;
+  margin-top: 10px;
+}
 .registration-row {
   display: flex;
   align-items: center;
@@ -1333,6 +1358,23 @@ main:focus {
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 14px;
+  }
+  .myregistrations-controls > .ant-card-body,
+  .myregistrations-pagination > .ant-card-body {
+    padding: 16px;
+  }
+  .myregistrations-filters {
+    align-items: flex-start;
+  }
+  .myregistrations-filters .metadata {
+    width: 100%;
+  }
+  .myregistrations-pagination .ant-pagination-total-text {
+    width: 100%;
+  }
+  .myregistrations-pagination .ant-pagination-options {
+    display: block;
+    margin-inline-start: 0;
   }
   .registration-row > .date-badge {
     width: 50px;

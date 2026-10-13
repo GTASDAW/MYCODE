@@ -2,6 +2,7 @@ package com.example.gather.service;
 
 import com.example.gather.api.ApiException;
 import com.example.gather.api.ApiModels.*;
+import com.example.gather.api.MyRegistrationModels.*;
 import com.example.gather.domain.ActivityLockRow;
 import com.example.gather.domain.RegistrationRow;
 import com.example.gather.mapper.ActivityMapper;
@@ -12,11 +13,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Isolation;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class RegistrationService {
+    private static final Set<String> SEARCH_STATUSES = Set.of("ALL", "ACTIVE", "WAITING", "CANCELLED");
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
     private final ActivityService activityService;
@@ -73,10 +78,31 @@ public class RegistrationService {
         return activityService.get(activityId, userId);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public List<RegistrationView> mine(long userId) {
-        return registrations.findByUser(userId).stream()
-            .map(row -> new RegistrationView(row.id(), row.status(), activityService.get(row.activityId(), userId))).toList();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        return registrations.findMine(userId).stream()
+            .map(row -> new RegistrationView(row.registrationId(), row.status(), ActivityView.from(row.activity(), now))).toList();
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public MyRegistrationPageView searchMine(long userId, int page, int pageSize, String status) {
+        if (page < 1 || pageSize < 1 || pageSize > 100) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码至少为 1，每页数量应在 1 到 100 之间");
+        }
+        if (status == null || !SEARCH_STATUSES.contains(status)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "报名筛选状态不正确");
+        }
+        // Aggregate and joined page share the transaction's InnoDB snapshot and one UTC microsecond instant.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        var totals = registrations.mineTotals(userId, status);
+        long offset = ((long) page - 1L) * pageSize;
+        var items = registrations.searchMine(userId, status, pageSize, offset).stream()
+            .map(row -> new MyRegistrationView(row.registrationId(), row.status(), ActivityView.from(row.activity(), now),
+                row.checkedInAt() == null ? null : row.checkedInAt().toInstant(ZoneOffset.UTC))).toList();
+        return new MyRegistrationPageView(items, totals.total(), page, pageSize,
+            new MyRegistrationSummary(totals.activeRegistrations(), totals.waitingRegistrations(),
+                totals.cancelledRegistrations(), totals.checkedInRegistrations()));
     }
 
     private ActivityLockRow lockOpenActivity(long activityId) {

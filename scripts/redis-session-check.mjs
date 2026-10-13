@@ -584,6 +584,41 @@ export async function runRedisSessionChecks() {
     await expectedError(await new ApiClient().response(settings.web, '/api/me/notifications'), 401, 'UNAUTHENTICATED');
     passed('cancellation notifies only current participants once; promotion read history survives restart and is shared across A/B/Nginx');
 
+    for (const current of [admin, accountClient]) {
+      const legacy = await current.json(settings.a, '/api/me/registrations');
+      assert.equal(legacy.length, 2);
+      const full = await current.json(settings.a, '/api/me/registrations/search?page=1&pageSize=100&status=ALL');
+      assert.equal(full.total, 2);
+      assert.deepEqual(full.items.map(row => row.activity.id), [fixture.id, ownedCheckInFixture.id]);
+      assert.deepEqual(full.summary, { activeRegistrations: 1, waitingRegistrations: 0, cancelledRegistrations: 1,
+        checkedInRegistrations: current === admin ? 0 : 1 });
+      assert.deepEqual(full.items.map(({ checkedInAt, ...oldFields }) => oldFields), legacy);
+      assert(full.items.every(row => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(['activity', 'checkedInAt', 'id', 'status'])
+        && row.activity.registrationStatus === row.status), 'Personal queries must not expose attendance administrator fields.');
+      const ownAttendance = full.items.find(row => row.activity.id === ownedCheckInFixture.id);
+      assert.equal(ownAttendance.checkedInAt, current === admin ? null : checkedIn.checkedInAt);
+      for (const base of [settings.a, settings.b, settings.web]) {
+        const page = await current.json(base, `/api/me/registrations/search?page=1&pageSize=1&status=ACTIVE&userId=${demoIdentity.id}`);
+        assert.equal(page.total, 1);
+        assert.deepEqual(page.items, [ownAttendance]);
+        assert.deepEqual(page.summary, full.summary);
+        const second = await current.json(base, '/api/me/registrations/search?page=2&pageSize=1&status=ALL');
+        assert.equal(second.total, 2);
+        assert.deepEqual(second.items, [full.items[1]]);
+        assert.deepEqual(second.summary, full.summary);
+      }
+    }
+    const demoPersonal = await demo.json(settings.web, '/api/me/registrations/search?page=1&pageSize=10&status=WAITING');
+    assert.equal(demoPersonal.total, 1);
+    assert.equal(demoPersonal.items[0].activity.id, ownedCheckInFixture.id);
+    assert.equal(demoPersonal.items[0].status, 'WAITING');
+    assert.equal(demoPersonal.items[0].activity.registrationStatus, demoPersonal.items[0].status);
+    assert.deepEqual(Object.keys(demoPersonal.items[0]).sort(), ['activity', 'checkedInAt', 'id', 'status']);
+    assert.equal(demoPersonal.items[0].checkedInAt, null);
+    assert.deepEqual(demoPersonal.summary, { activeRegistrations: 0, waitingRegistrations: 1, cancelledRegistrations: 1, checkedInRegistrations: 0 });
+    await expectedError(await new ApiClient().response(settings.web, '/api/me/registrations/search'), 401, 'UNAUTHENTICATED');
+    passed('personal pagination and global summary are scoped to each Session on A/B/Nginx; only own attendance is exposed and legacy arrays agree');
+
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);
     for (const base of [settings.a, settings.b]) await expectedError(await loggedOutCookie.clone().response(base, '/api/auth/me'), 401, 'UNAUTHENTICATED');

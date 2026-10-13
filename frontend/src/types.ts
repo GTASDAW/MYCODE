@@ -33,6 +33,25 @@ export interface Registration {
   activity: Activity;
 }
 
+export interface MyRegistration extends Registration {
+  checkedInAt: string | null;
+}
+
+export interface MyRegistrationQuery {
+  page: number;
+  pageSize: number;
+  status: RegistrationFilter;
+}
+
+export interface MyRegistrationPage extends PageResult<MyRegistration> {
+  summary: {
+    activeRegistrations: number;
+    waitingRegistrations: number;
+    cancelledRegistrations: number;
+    checkedInRegistrations: number;
+  };
+}
+
 export type NotificationFilter = "ALL" | "UNREAD" | "READ";
 
 export interface NotificationQuery {

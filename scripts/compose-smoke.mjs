@@ -354,6 +354,38 @@ try {
   assert.equal(Number(attendanceTruth.waiting), 0);
   check('check-in preserves first trusted actor/time; filtered summary and protected UTF-8 CSV are real');
 
+  assert.equal((await anonymous.response('/api/me/registrations/search')).status, 401);
+  const minePath = '/api/me/registrations/search?page=1&pageSize=1&status=ACTIVE';
+  const personal = await admin.json(minePath);
+  assert.equal(personal.total, 1);
+  assert.equal(personal.items.length, 1);
+  assert.deepEqual(personal.summary, { activeRegistrations: 1, waitingRegistrations: 0, cancelledRegistrations: 1, checkedInRegistrations: 1 });
+  const personalItem = personal.items[0];
+  assert.equal(personalItem.id, signed.id);
+  assert.equal(personalItem.activity.id, startedFixture.id);
+  assert.equal(personalItem.status, 'ACTIVE');
+  assert.equal(personalItem.activity.registrationStatus, personalItem.status);
+  assert.equal(personalItem.checkedInAt, signed.checkedInAt);
+  assert.deepEqual(Object.keys(personalItem).sort(), ['activity', 'checkedInAt', 'id', 'status']);
+  const legacyPersonal = await admin.json('/api/me/registrations');
+  assert.equal(legacyPersonal.length, 2);
+  assert.deepEqual(legacyPersonal.map(row => row.activity.id), [fixture.id, startedFixture.id]);
+  assert(legacyPersonal.every(row => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(['activity', 'id', 'status'])));
+  const matchingLegacy = legacyPersonal.find(row => row.id === personalItem.id);
+  assert.deepEqual(matchingLegacy, { id: personalItem.id, status: personalItem.status, activity: personalItem.activity });
+  const demoPersonal = await demo.json(`/api/me/registrations/search?page=1&pageSize=1&status=ALL&userId=${adminIdentity.id}`);
+  assert.equal(demoPersonal.total, 1);
+  assert.equal(demoPersonal.items[0].activity.id, fixture.id);
+  assert.equal(demoPersonal.items[0].status, 'CANCELLED');
+  assert.equal(demoPersonal.items[0].activity.registrationStatus, demoPersonal.items[0].status);
+  assert.equal(demoPersonal.items[0].checkedInAt, null);
+  assert.deepEqual(demoPersonal.summary, { activeRegistrations: 0, waitingRegistrations: 0, cancelledRegistrations: 1, checkedInRegistrations: 0 });
+  const outsidePersonal = await admin.json('/api/me/registrations/search?page=2&pageSize=1&status=ACTIVE');
+  assert.equal(outsidePersonal.total, 1);
+  assert.deepEqual(outsidePersonal.items, []);
+  assert.deepEqual(outsidePersonal.summary, personal.summary);
+  check('personal registration pagination preserves legacy shape, global statistics and private attendance from the trusted Session');
+
   if (process.env.SMOKE_RESTART_BACKEND === '1') {
     assert.equal(process.env.COMPOSE_PROJECT_NAME, 'gather-ci', 'Restart is restricted to the isolated gather-ci project.');
     assert.equal(database, 'activity_platform_e2e', 'Restart requires the isolated CI database.');
@@ -370,6 +402,7 @@ try {
     assert.equal(persisted.cancelledAt, cancelledActivity.cancelledAt);
     assert.deepEqual(await admin.json('/api/me/notifications'), persistedNotices, 'Notification history and first-read time must survive restart.');
     assert.deepEqual((await admin.json(`/api/admin/activities/${startedFixture.id}/registrations`)).items, [signed], 'First check-in metadata must survive restart.');
+    assert.deepEqual(await admin.json(minePath), personal, 'Personal attendance and whole-account statistics must survive restart.');
     check('backend restart preserves database data and expires the documented in-memory Session');
   }
 } catch (error) {

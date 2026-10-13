@@ -3,6 +3,8 @@ import type {
   ActivityDetails,
   NewActivity,
   Registration,
+  MyRegistrationQuery,
+  MyRegistrationPage,
   User,
   NewUser,
   AdminOverview,
@@ -202,12 +204,21 @@ export const api = {
     ),
   activity: (id: string, signal?: AbortSignal) =>
     request<Activity>(`/activities/${encodeURIComponent(id)}`, { signal }),
-  register: (id: number) =>
-    request<Activity>(`/activities/${id}/registration`, { method: "POST" }),
-  cancel: (id: number) =>
-    request<Activity>(`/activities/${id}/registration`, { method: "DELETE" }),
+  register: (id: number, signal?: AbortSignal) =>
+    request<Activity>(`/activities/${id}/registration`, { method: "POST", signal }),
+  cancel: (id: number, signal?: AbortSignal) =>
+    request<Activity>(`/activities/${id}/registration`, { method: "DELETE", signal }),
   registrations: (signal?: AbortSignal) =>
     request<Registration[]>("/me/registrations", { signal }),
+  searchRegistrations: (query: MyRegistrationQuery, signal?: AbortSignal) =>
+    request<MyRegistrationPage>(
+      `/me/registrations/search?${new URLSearchParams({
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+        status: query.status,
+      })}`,
+      { signal },
+    ),
   notifications: (query: NotificationQuery, signal?: AbortSignal) =>
     request<NotificationPage>(
       `/me/notifications?${new URLSearchParams({
