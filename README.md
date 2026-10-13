@@ -2,7 +2,25 @@
 
 [![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
 
-一个可以实际运行、演示和解释的全栈项目：管理员查看概览、搜索管理活动、发布、编辑和取消活动、查看报名名单、确认签到与导出 CSV，用户搜索、筛选和分页发现活动，自主注册、登录、修改昵称，报名、进入候补、取消报名、筛选分页查看本人记录、签到结果与站内通知。前端的数据来自 Java 接口和 MySQL，报名名额、候补递补、活动取消、对应通知与首次签到由数据库事务保证。
+一个使用 **React + TypeScript 与 Java / Spring Boot** 的活动报名平台，覆盖管理员发布活动、用户报名与候补、站内通知、到场签到和名单导出。界面参考 Ant Design Pro，页面数据来自真实 Java 接口与 MySQL；当前仅在本地运行和演示。
+
+快速了解：[真实界面展示](docs/showcase.md) · [项目讲解与简历素材](docs/interview-kit.md) · [五分钟业务演示](docs/demo-guide.md) · [架构与请求流程](docs/architecture.md)
+
+## 三个技术亮点
+
+| 问题 | 实现方式 | 可以核对的证据 |
+| --- | --- | --- |
+| 多人同时报名，如何保持名额和候补正确？ | 在 `READ_COMMITTED` 事务中先锁活动主键，再更新报名与人数；有效报名取消时按 FIFO 递补，通知与状态一起提交 | [并发设计与真实 MySQL 回归](docs/concurrency-review.md)、[通知事务](docs/notification-guide.md) |
+| 两个 Java 实例，如何共享登录且保留 CSRF 防护？ | 默认使用内存 Session；显式启用 Redis profile 后，由 Spring Session 共享会话，业务一致性仍由 MySQL 保证 | [真实双实例登录、退出、重启及闲置失效验证](docs/shared-session.md) |
+| “我的报名”如何分页，且不逐条查询活动？ | 聚合与当前页联表查询共用只读快照；旧数组一次数据 SELECT，新分页两次，统计覆盖本人全部记录 | [SQL、执行计划与查询次数证据](docs/my-registrations-guide.md) |
+
+真实 MySQL、桌面和手机浏览器、默认容器与 Redis 双实例的实际结果见[验证记录](docs/verification.md)，其中注明了测试环境和结论范围。
+
+## 界面预览
+
+![桌面活动发现：搜索、状态筛选、全量统计与分页](docs/assets/showcase/activities-desktop.png)
+
+上图来自本地真实浏览器与 MySQL 样例数据。更多[个人报名、管理员签到与手机截图](docs/showcase.md)附有截图版本、数据来源和展示说明；静态截图中的日期与人数不代表当前数据库。
 
 ## 技术栈
 
@@ -198,6 +216,8 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [管理员签到、整场统计与 CSV 导出](docs/checkin-export-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
+- [真实桌面与手机界面展示](docs/showcase.md)
+- [项目讲解、简历素材与掌握自检](docs/interview-kit.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
 - [Redis 共享 Session 与双实例演示](docs/shared-session.md)
 - [请求追踪与运行指标](docs/observability.md)
