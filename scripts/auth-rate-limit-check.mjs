@@ -166,6 +166,14 @@ async function error(response, status, code) {
   return body;
 }
 
+export async function verifyConcurrentAdmissions(responses, admitted) {
+  assert(responses.filter(response => response.status === 401).length === admitted
+    && responses.filter(response => response.status === 429).length === responses.length - admitted,
+    'Concurrent pair attempts must admit exactly the configured requests across all actual instances.');
+  for (const response of responses) await error(response, response.status,
+    response.status === 401 ? 'INVALID_CREDENTIALS' : 'AUTH_RATE_LIMITED');
+}
+
 async function attempt(client, endpoint, csrf, username, password = 'Incorrect123!', headers = {}, path = '/api/auth/login') {
   return client.response(endpoint, path, { method: 'POST',
     headers: { [csrf.headerName]: csrf.token, 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
@@ -272,9 +280,7 @@ export async function runRateLimitChecks() {
     const tokens = await Promise.all(parallelClients.map((client, index) => client.csrf(index % 2 ? second : first)));
     const parallel = await Promise.all(parallelClients.map((client, index) => attempt(client, index % 2 ? second : first,
       tokens[index], 'demo')));
-    assert(parallel.filter(response => response.status === 401).length === 3 && parallel.filter(response => response.status === 429).length === 5,
-      'Concurrent pair attempts must admit exactly the configured three requests across all actual instances.');
-    for (const response of parallel) await error(response, response.status(), response.status() === 401 ? 'INVALID_CREDENTIALS' : 'AUTH_RATE_LIMITED');
+    await verifyConcurrentAdmissions(parallel, 3);
     passed('concurrent login pair admission is atomic and admits exactly three attempts across the selected actual instances');
 
     await resetWindow();

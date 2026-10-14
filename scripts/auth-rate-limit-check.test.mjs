@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, verifyDeclaredSettings, verifyOwnedRateOperation } from './auth-rate-limit-check.mjs';
+import { isolatedSettings, verifyDeclaredSettings, verifyOwnedRateOperation, verifyConcurrentAdmissions } from './auth-rate-limit-check.mjs';
 
 const environment = {
   AUTH_RATE_LIMIT_TEST_MODE: 'redis', COMPOSE_PROJECT_NAME: 'gather-redis-ci',
@@ -82,6 +82,17 @@ test('strict auth settings accept only the declared dedicated stage and keep Ses
   }
   verifyDeclaredSettings(settings, declared, strict);
   assert.equal(declared.services.backend.environment.SESSION_TIMEOUT, '30m');
+});
+
+test('concurrent HTTP validation uses native fetch Response status properties and checks every payload', async () => {
+  const nativeResponse = (status, code = status === 401 ? 'INVALID_CREDENTIALS' : 'AUTH_RATE_LIMITED') => new Response(
+    JSON.stringify({ code, ...(status === 429 ? { retryAfterSeconds: 8 } : {}) }),
+    { status, headers: { 'X-Request-Id': 'acb8f9d2-0878-41bf-aad4-399b81230a93',
+      ...(status === 429 ? { 'Retry-After': '8' } : {}) } });
+  await verifyConcurrentAdmissions([nativeResponse(401), nativeResponse(401), nativeResponse(401),
+    ...Array.from({ length: 5 }, () => nativeResponse(429))], 3);
+  await assert.rejects(verifyConcurrentAdmissions([nativeResponse(401), nativeResponse(429)], 2));
+  await assert.rejects(verifyConcurrentAdmissions([nativeResponse(401, 'WRONG_CODE'), nativeResponse(429)], 1));
 });
 
 test('controlled Redis damage can delete only its exact UUID expiry index and cannot read values or touch Session keys', () => {
