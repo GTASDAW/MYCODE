@@ -16,8 +16,12 @@ public class DatabaseUserDetailsService implements UserDetailsService {
 
     @Override
     public UserDetails loadUserByUsername(String username) {
-        UserRow row = users.findByUsername(username == null ? "" : username.strip().toLowerCase(Locale.ROOT));
-        if (row == null) throw new UsernameNotFoundException("Unknown user");
+        String canonical = username == null ? "" : username.strip().toLowerCase(Locale.ROOT);
+        UserRow row = users.findByUsername(canonical);
+        // MySQL's accent-insensitive collation may match a different submitted
+        // spelling. Only the canonical stored name may test this user's password.
+        if (row == null || !row.username().strip().toLowerCase(Locale.ROOT).equals(canonical))
+            throw new UsernameNotFoundException("Unknown user");
         return new AppUserDetails(row);
     }
 }

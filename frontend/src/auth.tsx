@@ -18,13 +18,15 @@ interface AuthContextValue {
   error: string | null;
   notice: string | null;
   reload: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, signal?: AbortSignal) => Promise<void>;
   logout: () => Promise<void>;
   expire: () => void;
   readProfile: (signal: AbortSignal) => Promise<User>;
   updateProfile: (displayName: string, signal?: AbortSignal) => Promise<User>;
   captureAccountRequest: () => AccountRequest | null;
   isCurrentAccountRequest: (request: AccountRequest) => boolean;
+  captureAuthenticationRequest: () => number;
+  isCurrentAuthenticationRequest: (generation: number) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -68,14 +70,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [reload]);
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     const currentGeneration = requests.current.beginAuthentication();
-    const current = await api.login(username, password);
-    if (!requests.current.isCurrentAuthentication(currentGeneration))
-      throw new ApiError(0, "登录操作已失效，请重试。", "AUTH_STATE_CHANGED");
-    publishUser(current);
-    setError(null);
-    setNotice(null);
+    const isCurrent = () => !signal?.aborted &&
+      requests.current.isCurrentAuthentication(currentGeneration);
+    try {
+      const current = await api.login(username, password, signal);
+      if (!isCurrent())
+        throw new DOMException("Login request cancelled", "AbortError");
+      publishUser(current);
+      setError(null);
+      setNotice(null);
+    } catch (err) {
+      if (!isCurrent())
+        throw new DOMException("Login request cancelled", "AbortError");
+      throw err;
+    }
   };
   const logout = async () => {
     const currentGeneration = requests.current.beginAuthentication();
@@ -104,6 +115,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
   const isCurrentAccountRequest = useCallback((request: AccountRequest) =>
     requests.current.isSameAccount(request, currentUser.current?.id), []);
+
+  const captureAuthenticationRequest = useCallback(() =>
+    requests.current.captureAuthentication(), []);
+  const isCurrentAuthenticationRequest = useCallback((generation: number) =>
+    requests.current.isCurrentAuthentication(generation), []);
 
   const readProfile = useCallback(async (signal: AbortSignal) => {
     const userId = currentUser.current?.id;
@@ -185,6 +201,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         updateProfile,
         captureAccountRequest,
         isCurrentAccountRequest,
+        captureAuthenticationRequest,
+        isCurrentAuthenticationRequest,
       }}
     >
       {children}

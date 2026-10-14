@@ -4,6 +4,7 @@ import { ArrowRightOutlined, UserOutlined } from "@ant-design/icons";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth";
 import { api, errorMessage } from "../api";
+import { useAuthRateLimit } from "../useAuthRateLimit";
 import { displayNameError, passwordError, usernameError } from "../accountValidation";
 import { BackLink, LoadingState } from "../components";
 import type { NewUser } from "../types";
@@ -21,6 +22,7 @@ export function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(false);
   const submission = useRef<AbortController | null>(null);
+  const { remaining, acceptRateLimit } = useAuthRateLimit(auth.isCurrentAuthenticationRequest);
   const state = location.state as { from?: string } | null;
   const destination = safeReturnPath(state?.from);
 
@@ -37,9 +39,12 @@ export function RegisterPage() {
   if (auth.user) return <Navigate to="/profile" replace />;
 
   async function submit(values: RegisterValues) {
-    if (submission.current) return;
+    if (submission.current || remaining > 0) return;
     const controller = new AbortController();
     submission.current = controller;
+    const generation = auth.captureAuthenticationRequest();
+    const isCurrent = () => mounted.current && !controller.signal.aborted &&
+      submission.current === controller && auth.isCurrentAuthenticationRequest(generation);
     setBusy(true);
     setError(null);
     try {
@@ -48,7 +53,7 @@ export function RegisterPage() {
         password: values.password,
         displayName: values.displayName.trim(),
       }, controller.signal);
-      if (!mounted.current || controller.signal.aborted) return;
+      if (!isCurrent()) return;
       navigate("/login", {
         replace: true,
         state: {
@@ -59,11 +64,14 @@ export function RegisterPage() {
         },
       });
     } catch (err) {
-      if (mounted.current && !controller.signal.aborted)
-        setError(errorMessage(err));
+      if (isCurrent() && !(err instanceof DOMException && err.name === "AbortError")) {
+        if (!acceptRateLimit(err, generation)) setError(errorMessage(err));
+      }
     } finally {
-      submission.current = null;
-      if (mounted.current) setBusy(false);
+      if (submission.current === controller) {
+        submission.current = null;
+        if (mounted.current) setBusy(false);
+      }
     }
   }
 
@@ -83,6 +91,11 @@ export function RegisterPage() {
           <h2>创建你的账号</h2>
           <p className="form-intro">注册后使用账号和密码登录。</p>
           {error && <Alert className="form-alert" type="error" showIcon title={error} />}
+          {remaining > 0 && (
+            <Alert className="form-alert" type="warning" showIcon
+              title={`请求过于频繁，请等待 ${remaining} 秒后再试。`}
+              description="等待期间可以修改输入，到期后请手动提交。" />
+          )}
           <Form<RegisterValues>
             layout="vertical"
             onFinish={submit}
@@ -124,7 +137,7 @@ export function RegisterPage() {
             ]}>
               <Input.Password autoComplete="new-password" placeholder="再次输入密码" maxLength={128} />
             </Form.Item>
-            <Button type="primary" block htmlType="submit" loading={busy} aria-label="注册账号" aria-busy={busy}>注册账号 <ArrowRightOutlined aria-hidden="true" /></Button>
+            <Button type="primary" block htmlType="submit" loading={busy} disabled={remaining > 0} aria-label="注册账号" aria-busy={busy}>{remaining > 0 ? `等待 ${remaining} 秒` : "注册账号"} <ArrowRightOutlined aria-hidden="true" /></Button>
           </Form>
           <p className="account-switch">已有账号？<Link to="/login" state={{ from: destination }}>去登录</Link></p>
         </section>

@@ -2,6 +2,9 @@ package com.example.gather.security;
 
 import com.example.gather.api.ApiModels.ErrorView;
 import com.example.gather.monitoring.RequestObservationFilter;
+import com.example.gather.security.ratelimit.AuthRateLimitFilter;
+import com.example.gather.security.ratelimit.AuthRateLimitProperties;
+import com.example.gather.security.ratelimit.AuthRateLimitStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
@@ -12,6 +15,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CsrfException;
+import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.NullRequestCache;
@@ -25,12 +29,14 @@ public class SecurityConfiguration {
     PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(12); }
 
     @Bean
-    SecurityFilterChain applicationSecurity(HttpSecurity http, ObjectMapper json) throws Exception {
+    SecurityFilterChain applicationSecurity(HttpSecurity http, ObjectMapper json,
+            AuthRateLimitProperties rateLimits, AuthRateLimitStore rateLimitStore) throws Exception {
         // The SPA asks /auth/csrf for a plain token and sends it through the returned header.
         // Spring Security rotates the token after successful login and logout.
         var tokens = new HttpSessionCsrfTokenRepository();
         var handler = new CsrfTokenRequestAttributeHandler();
         http.csrf(csrf -> csrf.csrfTokenRepository(tokens).csrfTokenRequestHandler(handler))
+            .addFilterAfter(new AuthRateLimitFilter(rateLimits, rateLimitStore, json), CsrfFilter.class)
             .requestCache(cache -> cache.requestCache(new NullRequestCache()))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/search", "/api/activities/*", "/api/auth/csrf", "/api/health").permitAll()

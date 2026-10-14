@@ -46,6 +46,10 @@ export class AuthRequestGuard {
     return ++this.generation;
   }
 
+  captureAuthentication(): number {
+    return this.generation;
+  }
+
   isCurrentAuthentication(generation: number): boolean {
     return this.generation === generation;
   }

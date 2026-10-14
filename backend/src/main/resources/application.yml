@@ -1,5 +1,7 @@
 server:
   port: ${PORT:8080}
+  # Client identity comes from the socket or an explicitly trusted dedicated proxy header.
+  forward-headers-strategy: none
   servlet:
     session:
       timeout: ${SESSION_TIMEOUT:30m}
@@ -42,6 +44,16 @@ management:
     health:
       show-details: never
 app:
+  auth-rate-limit:
+    login-source-limit: ${AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT:60}
+    login-source-window-seconds: ${AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS:60}
+    login-pair-limit: ${AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT:10}
+    login-pair-window-seconds: ${AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS:60}
+    register-source-limit: ${AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT:5}
+    register-source-window-seconds: ${AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS:600}
+    max-buckets: ${AUTH_RATE_LIMIT_MAX_BUCKETS:10000}
+    namespace: ${AUTH_RATE_LIMIT_NAMESPACE:gather:auth-rate-limit}
+    trusted-proxy-ips: ${AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS:}
   instance-id: ${INSTANCE_ID:local}
   demo-seed-enabled: ${DEMO_SEED_ENABLED:true}
   demo-admin-password: ${DEMO_ADMIN_PASSWORD:Admin123!}

@@ -145,7 +145,7 @@ async function verifyAllApiDatabasesBeforeWrites(settings) {
   if (primaryError) throw primaryError;
 }
 
-class ApiClient {
+export class ApiClient {
   cookies = new Map();
   sessionCookiePolicy;
 

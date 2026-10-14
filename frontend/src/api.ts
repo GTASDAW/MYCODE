@@ -30,17 +30,21 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly requestId?: string;
+  readonly retryAfterSeconds?: number;
 
   constructor(
     status: number,
     message: string,
     code = "REQUEST_FAILED",
     requestId?: string,
+    retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    if (status === 429 && code === "AUTH_RATE_LIMITED")
+      this.retryAfterSeconds = validRetrySeconds(retryAfterSeconds);
     if (
       requestId &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -51,8 +55,39 @@ export class ApiError extends Error {
   }
 }
 
+// Only a bounded delta in seconds is accepted; HTTP dates and malformed values
+// must not keep an authentication form disabled indefinitely.
+function validRetrySeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) &&
+    value > 0 && value <= 86_400 ? value : undefined;
+}
+
+function authenticationRetrySeconds(body: unknown, header: string | null): number | undefined {
+  const details = body as { retryAfterSeconds?: unknown } | null;
+  const jsonSeconds = validRetrySeconds(details?.retryAfterSeconds);
+  const headerSeconds = header && /^[1-9]\d{0,4}$/.test(header)
+    ? validRetrySeconds(Number(header)) : undefined;
+  // Waiting for the longer valid value avoids retrying before either server
+  // representation permits it. The next attempt is always a user action.
+  if (jsonSeconds !== undefined && headerSeconds !== undefined)
+    return Math.max(jsonSeconds, headerSeconds);
+  return jsonSeconds ?? headerSeconds;
+}
+
 let csrf: CsrfToken | null = null;
-let csrfPromise: Promise<CsrfToken> | null = null;
+let csrfVersion = 0;
+let csrfPromise: {
+  version: number;
+  signal?: AbortSignal;
+  promise: Promise<CsrfToken>;
+} | null = null;
+
+function beginCsrfTransition(): number {
+  // The cached token can still authorize the login/logout POST. Any pending
+  // refresh belongs to the preceding transition and must not supply its token.
+  csrfPromise = null;
+  return ++csrfVersion;
+}
 
 async function request<T>(
   path: string,
@@ -112,6 +147,7 @@ async function request<T>(
       );
     }
   }
+  options.signal?.throwIfAborted();
   if (!response.ok) {
     const details = body as { message?: string; code?: string } | undefined;
     if (
@@ -121,7 +157,7 @@ async function request<T>(
       response.status === 403 &&
       details?.code === "CSRF_INVALID"
     ) {
-      await refreshCsrf();
+      await refreshCsrf(options.signal ?? undefined);
       return request<T>(path, options, false, responseType);
     }
     const fallback =
@@ -135,29 +171,50 @@ async function request<T>(
       details?.message || fallback,
       details?.code,
       requestId,
+      response.status === 429 && details?.code === "AUTH_RATE_LIMITED"
+        ? authenticationRetrySeconds(body, response.headers.get("Retry-After"))
+        : undefined,
     );
   }
   return body as T;
 }
 
-async function getCsrf(): Promise<CsrfToken> {
+async function getCsrf(signal?: AbortSignal): Promise<CsrfToken> {
+  signal?.throwIfAborted();
   if (csrf) return csrf;
+  if (csrfPromise && (csrfPromise.signal?.aborted || csrfPromise.version !== csrfVersion))
+    beginCsrfTransition();
   if (!csrfPromise) {
-    csrfPromise = request<CsrfToken>("/auth/csrf")
+    const version = csrfVersion;
+    const isCurrent = () => !signal?.aborted && version === csrfVersion;
+    const cancelled = () => new DOMException("CSRF refresh cancelled", "AbortError");
+    const promise = request<CsrfToken>("/auth/csrf", { signal })
       .then((token) => {
+        if (!isCurrent()) throw cancelled();
         csrf = token;
         return token;
       })
+      .catch((error: unknown) => {
+        if (!isCurrent()) throw cancelled();
+        throw error;
+      })
       .finally(() => {
-        csrfPromise = null;
+        // A stale refresh must not erase a newer refresh's shared promise.
+        if (csrfPromise?.promise === promise) csrfPromise = null;
       });
+    csrfPromise = { version, signal, promise };
   }
-  return csrfPromise;
+  return csrfPromise.promise;
 }
 
-async function refreshCsrf(): Promise<void> {
+async function refreshCsrf(signal?: AbortSignal, newSession = false): Promise<void> {
+  signal?.throwIfAborted();
   csrf = null;
-  await getCsrf();
+  if (newSession) beginCsrfTransition();
+  // Initialization and ordinary CSRF recovery share an unbound read. A
+  // successful authentication owns its new, cancellable refresh instead.
+  await getCsrf(newSession ? signal : undefined);
+  signal?.throwIfAborted();
 }
 
 export const api = {
@@ -177,18 +234,28 @@ export const api = {
       body: JSON.stringify({ displayName }),
       signal,
     }),
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    const version = beginCsrfTransition();
     const user = await request<User>("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ username, password }),
+      signal,
     });
-    await refreshCsrf();
+    signal?.throwIfAborted();
+    if (version !== csrfVersion)
+      throw new DOMException("Login refresh superseded", "AbortError");
+    await refreshCsrf(signal, true);
+    signal?.throwIfAborted();
     return user;
   },
   logout: async () => {
+    const version = beginCsrfTransition();
     await request("/auth/logout", { method: "POST" });
-    await refreshCsrf();
+    if (version !== csrfVersion)
+      throw new DOMException("Logout refresh superseded", "AbortError");
+    await refreshCsrf(undefined, true);
   },
   activities: (signal?: AbortSignal) =>
     request<Activity[]>("/activities", { signal }),

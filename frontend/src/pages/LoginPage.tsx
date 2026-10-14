@@ -8,6 +8,7 @@ import {
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../auth";
 import { errorMessage } from "../api";
+import { useAuthRateLimit } from "../useAuthRateLimit";
 import { BackLink, LoadingState } from "../components";
 import { safeReturnPath } from "./authNavigation";
 export function LoginPage() {
@@ -18,10 +19,14 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
-  const submitting = useRef(false);
+  const submission = useRef<AbortController | null>(null);
+  const { remaining, acceptRateLimit } = useAuthRateLimit(auth.isCurrentAuthenticationRequest);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      submission.current?.abort();
+    };
   }, []);
   const state = location.state as {
     from?: string;
@@ -40,19 +45,30 @@ export function LoginPage() {
   if (auth.user) return <Navigate to={destination} replace />;
 
   async function submit(values: { username: string; password: string }) {
-    if (submitting.current) return;
-    submitting.current = true;
+    if (submission.current || remaining > 0) return;
+    const controller = new AbortController();
+    submission.current = controller;
     setBusy(true);
     setError(null);
+    // login starts a new authentication generation synchronously. Capture that
+    // generation so a later login/expiry cannot display this attempt's error.
+    const pending = auth.login(values.username.trim(), values.password, controller.signal);
+    const generation = auth.captureAuthenticationRequest();
+    const isCurrent = () => mounted.current && !controller.signal.aborted &&
+      submission.current === controller && auth.isCurrentAuthenticationRequest(generation);
     try {
-      await auth.login(values.username.trim(), values.password);
-      if (!mounted.current) return;
+      await pending;
+      if (!isCurrent()) return;
       navigate(destination, { replace: true });
     } catch (err) {
-      if (mounted.current) setError(errorMessage(err));
+      if (isCurrent() && !(err instanceof DOMException && err.name === "AbortError")) {
+        if (!acceptRateLimit(err, generation)) setError(errorMessage(err));
+      }
     } finally {
-      submitting.current = false;
-      if (mounted.current) setBusy(false);
+      if (submission.current === controller) {
+        submission.current = null;
+        if (mounted.current) setBusy(false);
+      }
     }
   }
 
@@ -97,6 +113,11 @@ export function LoginPage() {
           {error && (
             <Alert className="form-alert" type="error" showIcon title={error} />
           )}
+          {remaining > 0 && (
+            <Alert className="form-alert" type="warning" showIcon
+              title={`请求过于频繁，请等待 ${remaining} 秒后再试。`}
+              description="等待期间可以修改输入，到期后请手动提交。" />
+          )}
           <Form
             form={form}
             layout="vertical"
@@ -131,8 +152,8 @@ export function LoginPage() {
                 maxLength={128}
               />
             </Form.Item>
-            <Button type="primary" block htmlType="submit" loading={busy} aria-label="登录" aria-busy={busy}>
-              登录 <ArrowRightOutlined aria-hidden="true" />
+            <Button type="primary" block htmlType="submit" loading={busy} disabled={remaining > 0} aria-label="登录" aria-busy={busy}>
+              {remaining > 0 ? `等待 ${remaining} 秒` : "登录"} <ArrowRightOutlined aria-hidden="true" />
             </Button>
           </Form>
           <p className="account-switch">还没有账号？<Link to="/register" state={{ from: destination }}>注册账号</Link></p>

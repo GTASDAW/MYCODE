@@ -458,3 +458,210 @@ test('cancelled CSV reads and check-in writes preserve AbortError without starti
   });
   await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }), error => error.name === 'AbortError');
 });
+
+test('authentication limits expose only validated retry seconds without retrying or refreshing CSRF', async () => {
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  for (const [jsonSeconds, header, expected] of [
+    [7, '7', 7], [7, '9', 9], [9, '7', 9], [7, undefined, 7],
+    [undefined, '8', 8], ['8', '6', 6], [0, '0', undefined],
+    [-1, '-1', undefined], [1.5, '1.5', undefined], ['8', '08', undefined],
+    [86_400, '86400', 86_400], [86_401, '86401', undefined],
+    [null, 'Wed, 21 Oct 2030 07:28:00 GMT', undefined], [null, 'Infinity', undefined],
+  ]) {
+    const { api, ApiError } = await freshApi();
+    const calls = [];
+    globalThis.fetch = async url => {
+      calls.push(url);
+      if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+      return response(429, { code: 'AUTH_RATE_LIMITED', message: '请求过于频繁', retryAfterSeconds: jsonSeconds }, {
+        'X-Request-Id': requestId, ...(header === undefined ? {} : { 'Retry-After': header }),
+      });
+    };
+    await assert.rejects(api.login('demo', 'wrong'), error => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, 429);
+      assert.equal(error.code, 'AUTH_RATE_LIMITED');
+      assert.equal(error.retryAfterSeconds, expected);
+      assert.equal(error.requestId, requestId);
+      return true;
+    });
+    assert.deepEqual(calls, ['/api/auth/csrf', '/api/auth/login']);
+  }
+});
+
+test('register limits and unavailable stores remain errors without writes being replayed', async () => {
+  for (const [status, code, expected] of [
+    [429, 'AUTH_RATE_LIMITED', 3], [429, 'UNKNOWN_LIMIT', undefined],
+    [403, 'AUTH_RATE_LIMITED', undefined], [503, 'AUTH_RATE_LIMIT_UNAVAILABLE', undefined],
+  ]) {
+    const { api } = await freshApi();
+    let tokenFetches = 0;
+    let writes = 0;
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/csrf') {
+        tokenFetches++;
+        return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+      }
+      writes++;
+      return response(status, { code, message: '稍后重试', retryAfterSeconds: 3 }, { 'Retry-After': '3' });
+    };
+    await assert.rejects(api.registerUser({ username: 'new_user', displayName: '昵称', password: 'Abc12345' }), error => {
+      assert.equal(error.status, status);
+      assert.equal(error.code, code);
+      assert.equal(error.retryAfterSeconds, expected);
+      return true;
+    });
+    assert.equal(writes, 1);
+    assert.equal(tokenFetches, 1);
+  }
+});
+
+test('cancelled successful login cannot refresh CSRF or publish an obsolete result', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  let tokenFetches = 0;
+  const user = { id: 1, username: 'demo', displayName: '参与者', role: 'USER' };
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      tokenFetches++;
+      return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    }
+    assert.equal(options.signal, controller.signal);
+    controller.abort();
+    return response(200, user);
+  };
+  await assert.rejects(api.login('demo', 'Demo123!', controller.signal), error => error.name === 'AbortError');
+  assert.equal(tokenFetches, 1);
+});
+
+function deferredResponse() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+test('a login cancelled after its CSRF refresh starts cannot cache that response or lend its promise to another write', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const oldRefresh = deferredResponse();
+  const refreshStarted = deferredResponse();
+  let tokenFetches = 0;
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      tokenFetches++;
+      if (tokenFetches === 2) {
+        assert.equal(options.signal, controller.signal);
+        refreshStarted.resolve();
+        // Deliberately return after cancellation, as an already delivered body
+        // or an intermediary may do. The cache still has to reject the result.
+        return oldRefresh.promise;
+      }
+      return response(200, { token: tokenFetches === 1 ? 'initial' : 'current', headerName: 'X-CSRF-TOKEN' });
+    }
+    writes.push({ url, token: options.headers.get('X-CSRF-TOKEN') });
+    return response(200, { id: 1, username: 'demo', role: 'USER' });
+  };
+  const rejectedLogin = assert.rejects(api.login('demo', 'Demo123!', controller.signal), error => error.name === 'AbortError');
+  await refreshStarted.promise;
+  controller.abort();
+  await api.register(25);
+  assert.equal(tokenFetches, 3);
+  oldRefresh.resolve(response(200, { token: 'obsolete', headerName: 'X-CSRF-TOKEN' }));
+  await rejectedLogin;
+  await api.register(26);
+  assert.deepEqual(writes.slice(1), [
+    { url: '/api/activities/25/registration', token: 'current' },
+    { url: '/api/activities/26/registration', token: 'current' },
+  ]);
+});
+
+test('a new login obtains its own CSRF refresh and a slower preceding refresh cannot replace the new session token', async () => {
+  const { api } = await freshApi();
+  const oldRefresh = deferredResponse();
+  const refreshStarted = deferredResponse();
+  let tokenFetches = 0;
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      tokenFetches++;
+      if (tokenFetches === 2) {
+        refreshStarted.resolve();
+        return oldRefresh.promise;
+      }
+      return response(200, { token: `token-${tokenFetches}`, headerName: 'X-CSRF-TOKEN' });
+    }
+    writes.push({ url, token: options.headers.get('X-CSRF-TOKEN') });
+    return response(200, { id: options.body?.get?.('username') === 'admin' ? 2 : 1 });
+  };
+  const rejectedOldLogin = assert.rejects(api.login('demo', 'Demo123!'), error => error.name === 'AbortError');
+  await refreshStarted.promise;
+  assert.equal((await api.login('admin', 'Admin123!')).id, 2);
+  assert.equal(tokenFetches, 4);
+  oldRefresh.resolve(response(200, { token: 'old-session-token', headerName: 'X-CSRF-TOKEN' }));
+  await rejectedOldLogin;
+  await api.register(25);
+  assert.deepEqual(writes.at(-1), { url: '/api/activities/25/registration', token: 'token-4' });
+  assert.equal(tokenFetches, 4);
+});
+
+test('a stale refresh failure cannot erase the newer shared promise or cause it to be fetched again', async () => {
+  const { api } = await freshApi();
+  const oldRefresh = deferredResponse();
+  const oldStarted = deferredResponse();
+  const newInitial = deferredResponse();
+  const newInitialStarted = deferredResponse();
+  const newRefresh = deferredResponse();
+  const newRefreshStarted = deferredResponse();
+  let tokenFetches = 0;
+  let writeToken;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      tokenFetches++;
+      if (tokenFetches === 2) { oldStarted.resolve(); return oldRefresh.promise; }
+      if (tokenFetches === 3) { newInitialStarted.resolve(); return newInitial.promise; }
+      if (tokenFetches === 4) { newRefreshStarted.resolve(); return newRefresh.promise; }
+      return response(200, { token: 'initial', headerName: 'X-CSRF-TOKEN' });
+    }
+    writeToken = options.headers.get('X-CSRF-TOKEN');
+    return response(200, { id: 2 });
+  };
+  const rejectedOldLogin = assert.rejects(api.login('demo', 'Demo123!'), error => error.name === 'AbortError');
+  await oldStarted.promise;
+  const newLogin = api.login('admin', 'Admin123!');
+  await newInitialStarted.promise;
+  oldRefresh.reject(new TypeError('late obsolete network failure'));
+  await rejectedOldLogin;
+  const joinedRefresh = api.refreshCsrf();
+  assert.equal(tokenFetches, 3);
+  newInitial.resolve(response(200, { token: 'before-new-login', headerName: 'X-CSRF-TOKEN' }));
+  await joinedRefresh;
+  await newRefreshStarted.promise;
+  assert.equal(tokenFetches, 4);
+  newRefresh.resolve(response(200, { token: 'new-session-token', headerName: 'X-CSRF-TOKEN' }));
+  await newLogin;
+  await api.register(25);
+  assert.equal(writeToken, 'new-session-token');
+  assert.equal(tokenFetches, 4);
+});
+
+test('concurrent initialization refreshes retain their shared CSRF fetch and supply the next write', async () => {
+  const { api } = await freshApi();
+  const initial = deferredResponse();
+  let tokenFetches = 0;
+  let writeToken;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') { tokenFetches++; return initial.promise; }
+    writeToken = options.headers.get('X-CSRF-TOKEN');
+    return response(200, { id: 25 });
+  };
+  const first = api.refreshCsrf();
+  const second = api.refreshCsrf();
+  assert.equal(tokenFetches, 1);
+  initial.resolve(response(200, { token: 'shared-initial', headerName: 'X-CSRF-TOKEN' }));
+  await Promise.all([first, second]);
+  await api.register(25);
+  assert.equal(writeToken, 'shared-initial');
+  assert.equal(tokenFetches, 1);
+});

@@ -96,7 +96,7 @@ jobs:
     name: Compose, restart and browser verification
     needs: [frontend, backend]
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       COMPOSE_PROJECT_NAME: gather-ci
       MYSQL_DATABASE: activity_platform_e2e
@@ -128,6 +128,7 @@ jobs:
           mkdir -p .runtime/ci
           npm ci 2>&1 | tee .runtime/ci/e2e-install.log
           npm run test:cleanup 2>&1 | tee .runtime/ci/cleanup-safety-tests.log
+          node --test scripts/auth-rate-limit-check.test.mjs 2>&1 | tee .runtime/ci/auth-rate-limit-safety.log
           npx playwright install --with-deps chromium 2>&1 | tee .runtime/ci/browser-install.log
       - name: Build and start isolated stack
         shell: bash
@@ -145,6 +146,11 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:e2e 2>&1 | tee .runtime/ci/browser-tests.log
+      - name: Verify strict in-memory auth limits and real browser recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUTH_RATE_LIMIT_TEST_MODE=memory node scripts/auth-rate-limit-check.mjs 2>&1 | tee .runtime/ci/auth-rate-limit-memory.log
       - name: Retry exact run cleanup if the browser step was interrupted
         if: always()
         shell: bash
@@ -181,7 +187,7 @@ jobs:
     name: Redis shared Session on two backends
     needs: [frontend, backend]
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       COMPOSE_PROJECT_NAME: gather-redis-ci
       MYSQL_DATABASE: activity_platform_e2e
@@ -219,6 +225,7 @@ jobs:
           npm ci 2>&1 | tee .runtime/ci/redis-install.log
           npm run test:cleanup 2>&1 | tee .runtime/ci/redis-cleanup-safety.log
           node --test scripts/redis-session-check.test.mjs 2>&1 | tee .runtime/ci/redis-lifecycle-safety.log
+          node --test scripts/auth-rate-limit-check.test.mjs 2>&1 | tee .runtime/ci/redis-auth-rate-limit-safety.log
           npx playwright install --with-deps chromium 2>&1 | tee .runtime/ci/redis-browser-install.log
       - name: Build and start two shared-session replicas
         shell: bash
@@ -236,6 +243,11 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:e2e 2>&1 | tee .runtime/ci/redis-browser-tests.log
+      - name: Verify strict shared auth limits on both replicas and real browser recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUTH_RATE_LIMIT_TEST_MODE=redis node scripts/auth-rate-limit-check.mjs 2>&1 | tee .runtime/ci/auth-rate-limit-redis.log
       - name: Retry only owned browser fixture cleanup
         if: always()
         shell: bash

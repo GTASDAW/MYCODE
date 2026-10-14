@@ -8,3 +8,8 @@ services:
     mem_limit: 1024m
     environment:
       INSTANCE_ID: gather-perf
+      # Preparing 100 distinct authenticated clients is outside the measured
+      # signup load; keep authentication limits enabled at explicit high values.
+      AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT: '10000'
+      AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT: '1000'
+      AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT: '10000'
