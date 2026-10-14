@@ -96,7 +96,9 @@ docker compose -f compose.yaml -f compose.redis.yaml up --build -d
 
 同样访问 [http://127.0.0.1:8088](http://127.0.0.1:8088)。Nginx 轮询两个后端，Session 身份和 CSRF 存入共享 Redis；会话未过期且 Redis 可用时，重启一个后端仍能继续登录。默认闲置时限为 30 分钟，退出会使共享会话失效。
 
-Redis 只用于共享会话，报名、候补、人数与通知继续由 MySQL 事务保证。Redis 密码样例、模式切换、停止命令和验证边界见 [共享 Session 指南](docs/shared-session.md)。网站仍只作本机演示。
+Redis 模式共享会话和登录/注册限流计数，报名、候补、人数与通知继续由 MySQL 事务保证。Redis 密码样例、模式切换、停止命令和验证边界见 [共享 Session 指南](docs/shared-session.md)。网站仍只作本机演示。
+
+登录和注册采用固定窗口限流：默认每个来源最多 60 次登录/60 秒，每个来源与规范提交账号最多 10 次登录/60 秒，注册最多 5 次/600 秒。通过 CSRF 的成功与失败尝试都计数，超限返回 429 与等待秒数；页面保留输入、等待结束后手动重试。默认内存计数，显式 Redis 模式原子共享；代理信任默认关闭，容量与异常有明确处理。配置、取舍与阅读路径见 [登录与注册限流](docs/auth-rate-limit.md)。
 
 ## 接口与业务规则
 
@@ -220,9 +222,10 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [项目讲解、简历素材与掌握自检](docs/interview-kit.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
 - [Redis 共享 Session 与双实例演示](docs/shared-session.md)
+- [登录与注册限流、可信来源与共享计数](docs/auth-rate-limit.md)
 - [请求追踪与运行指标](docs/observability.md)
 - [可复现报名性能评测](docs/performance-report.md)
 - [报名锁定查询优化与版本对照](docs/query-optimization-review.md)
 - [验证记录与当前部署边界](docs/verification.md)
 
-当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。Redis 可选方案用于共享 Session，默认本机启动保持简单；限流、名额缓存和 Redis 高可用未在本轮加入。
+当前实现重点是完整业务流程、数据库一致性和可以复现的验证结果。Redis 可选方案用于共享 Session 与认证入口限流，默认本机启动保持简单；名额缓存、报名接口限流和 Redis 高可用尚未实现。

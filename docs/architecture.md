@@ -21,7 +21,7 @@ flowchart LR
     B[浏览器 / React 页面] --> P[统一入口]
     P -->|静态文件| F[React 构建产物]
     P -->|/api 请求| O[请求观察 Filter：UUID / 日志 / 计时]
-    O --> S[Spring Security]
+    O --> S[Spring Security：CSRF / 入口限流 / 身份与权限]
     S --> C[Controller：参数与响应]
     C --> V[Service：业务规则与事务]
     V --> M[MyBatis：SQL]
@@ -167,8 +167,10 @@ Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保�
 
 默认 Redis Session 自动配置被明确关闭，仅 `redis` profile 手动启用 Spring Session；默认健康检查不连接 Redis，Redis 模式纳入 Redis 连接检查。连接、命名空间、Cookie 和实际验证方式见 [共享 Session 指南](shared-session.md)。
 
+登录与注册在 CSRF 之后进入限流 Filter，复用 Security 的 POST 路径匹配语义，编码路径同样受保护。登录同时检查来源及来源/规范用户名组合，注册只检查来源；获准后再执行原认证或 MVC 注册。默认内存存储，`redis` profile 用 HASH/ZSET 的一次 Lua 原子处理计数、过期和容量，命名空间独立于 Session。429 携带等待秒数，前端不自动重试；来源、参数及 503/500 边界见 [限流指南](auth-rate-limit.md)。
+
 ## 当前边界与后续演进
 
 默认本机和基础 Compose 运行单个 Java 服务和单个 MySQL 数据库；Java 重启后内存 Session 丢失，需要重新登录。可选 Redis 方案提供两个后端的共享会话演示，默认闲置时限为 30 分钟；Redis AOF 和数据卷不等于故障期间零会话丢失，也不提供高可用保证。
 
-同一个活动的报名、取消和候补递补通过 MySQL 行锁串行处理，不同活动可以并发处理。Redis 只保存 Session，不代替数据库约束、事务或候补排序。热门活动可能产生锁等待；当前请求指标和 [固定负载评测](performance-report.md) 用于收集证据，限流和容量优化根据实测另行评估。
+同一个活动的报名、取消和候补递补通过 MySQL 行锁串行处理，不同活动可以并发处理。Redis 保存 Session 与认证入口限流状态，不代替数据库约束、事务或候补排序。热门活动可能产生锁等待；当前请求指标和 [固定负载评测](performance-report.md) 用于收集证据，报名接口限流和容量优化仍需按实测另行评估。

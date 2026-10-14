@@ -12,8 +12,11 @@
 | 退出登录 | 当前会话失效 | 共享会话失效，两个实例都不再接受原登录 |
 | 数据库规则 | MySQL 行锁、事务、唯一约束 | 同一套 MySQL 规则 |
 | 必需环境 | Java、MySQL | Java、MySQL、Redis |
+| 登录/注册限流 | 当前进程内存计数，重启重新开始 | 同组实例通过独立 Redis 命名空间共享原子计数 |
 
 浏览器继续使用 `JSESSIONID` Cookie，路径 `/`、HttpOnly、SameSite=Lax，本机 HTTP 默认不设置 Secure；`SESSION_COOKIE_SECURE=true` 用于明确的 HTTPS 环境。Cookie 值是身份凭据，不能打印或提交。切换 Session 存储模式后需要重新登录，不迁移此前内存中的会话。
+
+认证入口同时启用 [登录与注册限流](auth-rate-limit.md)。限流与 Session 使用不同命名空间和生命周期；退出登录不会清除配额，两个实例必须使用相同限流参数和来源规则。测试只在独立 CI 的严格阶段缩短限流窗口，结束后恢复普通阈值，Session 闲置时限仍为 30 分钟。
 
 ## 本机容器演示
 
