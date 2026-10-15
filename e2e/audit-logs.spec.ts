@@ -159,6 +159,32 @@ async function detail(page: Page, id: number) {
   return page.getByTestId('audit-log-detail');
 }
 
+async function closeDetail(page: Page, id: number) {
+  const trigger = page.getByRole('button', { name: `查看操作记录 ${id} 详情`, exact: true });
+  const dialog = page.getByRole('dialog', { name: '操作记录详情', exact: true });
+  const drawer = await dialog.evaluateHandle(element => element.closest('.ant-drawer'));
+  try {
+    await page.getByRole('button', { name: '关闭详情', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.locator('.ant-drawer-mask:visible')).toHaveCount(0);
+    // rc-drawer calls afterOpenChange(false) and restores its captured focus
+    // before destroyOnHidden unmounts this root. The captured element can differ
+    // from the detail trigger, so observe completed destruction, not its identity.
+    await expect.poll(() => drawer.evaluate(element => !!element && !element.isConnected)).toBeTruthy();
+  } finally { await drawer.dispose(); }
+  await expect(trigger).toBeVisible();
+  await expect(page.getByTestId('audit-log-detail')).toHaveCount(0);
+}
+
+async function finishTest(primaryError: unknown, cleanup: Array<() => Promise<unknown>>) {
+  const errors = primaryError === undefined ? [] : [primaryError];
+  for (const operation of cleanup) {
+    try { await operation(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'The audit test and its cleanup failed; the first error is the original test failure.');
+}
+
 async function assertDetailId(page: Page, id: number) {
   await expect(page.getByTestId('audit-log-detail').locator('.ant-descriptions-item-content').first()).toHaveText(String(id));
 }
@@ -204,7 +230,7 @@ async function holdDetail(page: Page, id: number, status: 200 | 401, revokedCook
     return job;
   });
   return { ready, release, delivered: () => Promise.all(jobs), cleanup: async () => {
-    release(); await Promise.allSettled(jobs); await page.unroute(pattern);
+    release(); await finishTest(undefined, [() => Promise.all(jobs), () => page.unroute(pattern)]);
   } };
 }
 
@@ -248,6 +274,7 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
   const signed = await checkedIn.json();
   expect((await write(request, `/api/admin/activities/${attendance.id}/registrations/${attendance.registrationId}/check-in`)).status()).toBe(200);
   const participant = await playwright.request.newContext({ baseURL: info.project.use.baseURL });
+  let primaryError: unknown;
   try {
     await loginApi(participant, account);
     expect((await write(participant, '/api/me/profile', 'PATCH', { displayName: account.allowedDisplayNames[1] })).status()).toBe(200);
@@ -294,8 +321,7 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
         expect(await page.evaluate(() => Object.prototype.hasOwnProperty.call(window, '__gatherAuditInjection'))).toBeFalsy();
         await capture(page, info, 'audit-long-plaintext-detail');
       } else expect(await page.getByTestId('audit-after-cancellationReason').textContent()).toBe(reason);
-      await page.getByRole('button', { name: '关闭详情', exact: true }).click();
-      await expect(page.getByTestId('audit-log-detail')).toHaveCount(0);
+      await closeDetail(page, expected.items[0].id);
     }
     await choose(page, '操作类型', '管理员签到');
     await page.getByLabel('筛选活动 ID', { exact: true }).fill(String(attendance.id));
@@ -309,8 +335,10 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
     const actualDetail = await (await request.get(`${listApi}/${attendanceLogs.items[0].id}`)).json();
     expect(actualDetail.changes).toEqual([{ field: 'checkedInAt', before: null, after: signed.checkedInAt }]);
     await capture(page, info, 'audit-checkin-snapshot');
-  } finally {
-    await logoutApi(participant); await participant.dispose(); await logoutApi(page.request); await logoutApi(request);
+  } catch (error) { primaryError = error; }
+  finally {
+    await finishTest(primaryError, [() => logoutApi(participant), () => participant.dispose(),
+      () => logoutApi(page.request), () => logoutApi(request)]);
   }
 });
 
@@ -335,8 +363,7 @@ test('操作记录筛选分页和浏览器历史保留URL，刷新、数量变�
   const second = await list(request, activity.id, 'EDIT', 2);
   await assertList(page, second);
   await detail(page, second.items[0].id);
-  await page.getByRole('button', { name: '关闭详情', exact: true }).click();
-  await expect(page.getByTestId('audit-log-detail')).toHaveCount(0);
+  await closeDetail(page, second.items[0].id);
   await page.getByRole('button', { name: '刷新操作记录', exact: true }).click();
   await expect(page.getByTestId('audit-log-detail')).toHaveCount(0);
   await assertList(page, second);
@@ -431,6 +458,7 @@ for (const lateStatus of [200, 401]) {
       jobs.push(job);
       return job;
     });
+    let primaryError: unknown;
     try {
       await page.getByRole('button', { name: '刷新操作记录', exact: true }).click();
       await ready;
@@ -450,9 +478,11 @@ for (const lateStatus of [200, 401]) {
       expect(me.status()).toBe(200);
       expect(await me.json()).toMatchObject({ id: account.id, username: account.username, role: 'USER' });
       await capture(page, info, `audit-late-${lateStatus}-new-session`);
-    } finally {
-      release(); await Promise.allSettled(jobs); await page.unroute('**/api/admin/audit-logs?**');
-      await logoutApi(page.request); await logoutApi(request);
+    } catch (error) { primaryError = error; }
+    finally {
+      release();
+      await finishTest(primaryError, [() => Promise.all(jobs), () => page.unroute('**/api/admin/audit-logs?**'),
+        () => logoutApi(page.request), () => logoutApi(request)]);
     }
   });
 }
@@ -465,12 +495,12 @@ test('旧详情真实迟到401不退出同一管理员会话，也不覆盖另�
   const before = await (await page.request.get('/api/auth/me')).json();
   const expiredCookie = await revokedSessionCookie(request);
   const held = await holdDetail(page, older.id, 401, expiredCookie);
+  let primaryError: unknown;
   try {
     await page.getByRole('button', { name: `查看操作记录 ${older.id} 详情`, exact: true }).click();
     await held.ready;
     expect((await page.request.get('/api/auth/me')).status()).toBe(200);
-    await page.getByRole('button', { name: '关闭详情', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '操作记录详情', exact: true })).not.toBeVisible();
+    await closeDetail(page, older.id);
     await detail(page, newer.id);
     await assertDetailId(page, newer.id);
     held.release();
@@ -482,7 +512,8 @@ test('旧详情真实迟到401不退出同一管理员会话，也不覆盖另�
     expect(current.status()).toBe(200);
     expect(await current.json()).toMatchObject({ id: before.id, username: 'admin', role: 'ADMIN' });
     await capture(page, info, 'audit-old-detail-401-current-scope');
-  } finally { await held.cleanup(); await logoutApi(page.request); await logoutApi(request); }
+  } catch (error) { primaryError = error; }
+  finally { await finishTest(primaryError, [held.cleanup, () => logoutApi(page.request), () => logoutApi(request)]); }
 });
 
 for (const lateStatus of [200, 401] as const) {
@@ -494,11 +525,11 @@ for (const lateStatus of [200, 401] as const) {
     const initialUser = await (await page.request.get('/api/auth/me')).json();
     const expiredCookie = lateStatus === 401 ? await revokedSessionCookie(request) : undefined;
     const held = await holdDetail(page, older.id, lateStatus, expiredCookie);
+    let primaryError: unknown;
     try {
       await page.getByRole('button', { name: `查看操作记录 ${older.id} 详情`, exact: true }).click();
       await held.ready;
-      await page.getByRole('button', { name: '关闭详情', exact: true }).click();
-      await expect(page.getByRole('dialog', { name: '操作记录详情', exact: true })).not.toBeVisible();
+      await closeDetail(page, older.id);
       await logout(page);
       await page.getByRole('button', { name: '登录 / 体验', exact: true }).click();
       await loginForm(page); // Same administrator ID, new real Session and authentication generation.
@@ -517,6 +548,7 @@ for (const lateStatus of [200, 401] as const) {
       expect(await current.json()).toMatchObject({ id: initialUser.id, username: 'admin', role: 'ADMIN' });
       await expect(page.getByRole('button', { name: /账号菜单/ })).toBeVisible();
       await capture(page, info, `audit-detail-late-${lateStatus}-same-admin-new-session`);
-    } finally { await held.cleanup(); await logoutApi(page.request); await logoutApi(request); }
+    } catch (error) { primaryError = error; }
+    finally { await finishTest(primaryError, [held.cleanup, () => logoutApi(page.request), () => logoutApi(request)]); }
   });
 }
