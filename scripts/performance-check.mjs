@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
+import { verifyAuditRegistrationOwnership } from './e2e-cleanup.mjs';
 
 const RUN_PROJECT = 'gather-perf-ci';
 const RUN_DATABASE = 'activity_platform_perf';
@@ -271,7 +272,7 @@ async function parallelMap(items, concurrency, work) {
 
 async function snapshotDatabase(db, phase) {
   const tables = {};
-  const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications'] : ['users', 'activities', 'registrations'];
+  const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs'] : ['users', 'activities', 'registrations'];
   for (const table of names) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   // Kept only in memory: user password hashes must never enter an artifact.
   return JSON.stringify(tables);
@@ -281,14 +282,17 @@ async function verifyDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
     await db.query('SELECT user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
     await db.query('SELECT checked_in_at, checked_in_by FROM registrations LIMIT 0');
+    await db.query('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
     const [[notificationSeed]] = await db.query('SELECT COUNT(*) AS count FROM notifications');
     assert.equal(Number(notificationSeed.count), 0, 'Measurement requires a fresh notification baseline.');
+    const [[auditSeed]] = await db.query('SELECT COUNT(*) AS count FROM activity_audit_logs');
+    assert.equal(Number(auditSeed.count), 0, 'Measurement requires a fresh audit-log baseline.');
   }
   assert(migrations.every(row => row.success === 1), 'Failed Flyway migrations are not allowed.');
   const seedDeadline = Date.now() + 30000;
@@ -425,6 +429,7 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
     assert.equal(new Set(users.map(row => row.id)).size, users.length, 'Duplicate cleanup user IDs.');
     const userIds = new Set(users.map(row => row.id));
     const ownedActivityIds = new Set(activities.map(row => row.id));
+    if (manifest.phase === undefined) await verifyAuditRegistrationOwnership(db, [...ownedActivityIds]);
     // Validate every reference and ownership proof BEFORE the first DELETE.
     for (const row of activities) {
       const [children] = await db.execute('SELECT user_id FROM registrations WHERE activity_id = ? FOR UPDATE', [row.id]);
@@ -442,6 +447,8 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
         assert(noticeReferences.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user has an unowned notification reference. Cleanup refused.');
         const [checkInReferences] = await db.execute('SELECT activity_id FROM registrations WHERE checked_in_by = ? FOR UPDATE', [row.id]);
         assert(checkInReferences.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user has an unowned check-in reference. Cleanup refused.');
+        const [auditReferences] = await db.execute('SELECT activity_id FROM activity_audit_logs WHERE actor_user_id = ? FOR UPDATE', [row.id]);
+        assert(auditReferences.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user has an unowned audit-actor reference. Cleanup refused.');
       }
       const [created] = await db.execute('SELECT id FROM activities WHERE created_by = ? FOR UPDATE', [row.id]);
       assert.equal(created.length, 0, 'A synthetic user unexpectedly owns activities. Cleanup refused.');
@@ -456,8 +463,11 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
     await persistManifest(manifest);
     let registrationsRemoved = 0;
     let notificationsRemoved = 0;
+    let auditLogsRemoved = 0;
     for (const row of selectedActivities) {
       if (manifest.phase === undefined) {
+        const [audits] = await db.execute('DELETE FROM activity_audit_logs WHERE activity_id = ?', [row.id]);
+        auditLogsRemoved += audits.affectedRows;
         const [notices] = await db.execute('DELETE FROM notifications WHERE activity_id = ?', [row.id]);
         notificationsRemoved += notices.affectedRows;
       }
@@ -474,7 +484,10 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
     }
     await db.commit();
     const result = { activitiesRemoved: selectedActivities.length, usersRemoved: deleteUsers ? users.length : 0, registrationsRemoved };
-    if (manifest.phase === undefined) result.notificationsRemoved = notificationsRemoved;
+    if (manifest.phase === undefined) {
+      result.notificationsRemoved = notificationsRemoved;
+      result.auditLogsRemoved = auditLogsRemoved;
+    }
     return result;
   } catch (error) { await db.rollback(); throw error; }
 }
@@ -551,7 +564,18 @@ export function monitoringView(data) {
     javaVersion: data.javaVersion ?? null };
 }
 
-async function measureRound(admin, db, clients, activities, scenario, concurrency, repeat, recordRound) {
+export async function verifyCurrentAuditCreation(db, activities, adminId) {
+  const [rows] = await db.execute(`SELECT activity_id, activity_title, action, actor_user_id, registration_id FROM activity_audit_logs WHERE activity_id IN (${activities.map(() => '?').join(',')}) ORDER BY id`,
+    activities.map(activity => activity.id));
+  assert(rows.length === activities.length && activities.every(activity => {
+    const matches = rows.filter(row => row.activity_id === activity.id);
+    return matches.length === 1 && matches[0].activity_title === activity.title && matches[0].action === 'CREATE'
+      && matches[0].actor_user_id === adminId && matches[0].registration_id === null;
+  }), 'Measured signup must preserve exactly one initial administrator CREATE audit for each owned activity.');
+  return rows.length;
+}
+
+async function measureRound(admin, db, clients, activities, scenario, concurrency, repeat, recordRound, auditContext) {
   const before = monitoringView(await admin.json('/api/admin/monitoring'));
   assert([before.signupCount, before.lockCount, before.lockTotalMs, before.active, before.pending, before.max].every(Number.isFinite), 'Monitoring values must be finite.');
   let peakActive = before.active;
@@ -609,6 +633,7 @@ async function measureRound(admin, db, clients, activities, scenario, concurrenc
   }
   assert(active === expectedActive && waiting === expectedWaiting, 'Real MySQL ACTIVE/WAITING counts differ from the returned states.');
   stats.database = { active, waiting, registrations: active + waiting, invariantsPassed: true };
+  if (auditContext) stats.database.auditLogs = await verifyCurrentAuditCreation(db, activities, auditContext.adminId);
   return stats;
 }
 
@@ -721,14 +746,15 @@ export async function runPerformanceChecks() {
     const prepared = await prepareUsers(db, settings, seed, manifest, clients);
     const roundBaseline = await snapshotDatabase(db, settings.phase);
     report.environment.roundBaselineRows = { users: 102, activities: 4, registrations: 0 };
-    if (settings.phase === undefined) report.environment.roundBaselineRows.notifications = 0;
+    if (settings.phase === undefined) Object.assign(report.environment.roundBaselineRows, { notifications: 0, auditLogs: 0 });
     const warmup = new ApiClient(settings.base);
     for (let index = 0; index < 20; index++) await warmup.json('/api/activities');
     const startsAt = new Date(Date.parse(report.startedAt) + 48 * 3600000).toISOString();
     for (const concurrency of WARMUP_CONCURRENCIES) for (const scenario of ['same-activity', 'different-activities']) {
       const activities = await createActivities(admin, manifest, scenario === 'same-activity' ? 1 : REQUESTS, startsAt,
         scenario === 'same-activity' ? 10 : 1);
-      const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, 1, row => report.warmup.push(row));
+      const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, 1, row => report.warmup.push(row),
+        settings.phase === undefined ? { adminId: manifest.adminId } : undefined);
       if (settings.phase !== undefined && scenario === 'same-activity' && concurrency === 50) {
         report.queryEvidence = await collectQueryEvidence(db, activities[0].id);
       }
@@ -741,7 +767,8 @@ export async function runPerformanceChecks() {
     for (const concurrency of CONCURRENCIES) for (const scenario of ['same-activity', 'different-activities']) for (let repeat = 1; repeat <= REPEATS; repeat++) {
       const activities = await createActivities(admin, manifest, scenario === 'same-activity' ? 1 : REQUESTS, startsAt,
         scenario === 'same-activity' ? 10 : 1);
-      const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, repeat, row => report.rounds.push(row));
+      const round = await measureRound(admin, db, prepared, activities, scenario, concurrency, repeat, row => report.rounds.push(row),
+        settings.phase === undefined ? { adminId: manifest.adminId } : undefined);
       round.cleanup = await cleanupOwned(db, manifest, { activityIds: activities.map(activity => activity.id),
         deleteUsers: false, persistManifest: saveManifest });
       assert.equal(await snapshotDatabase(db, settings.phase), roundBaseline, 'Round cleanup must restore the exact prepared baseline before the next batch.');
@@ -760,11 +787,15 @@ export async function runPerformanceChecks() {
           assert.equal(await snapshotDatabase(db, settings.phase), baseline, 'Exact cleanup did not preserve every original seed database row.');
           const rounds = [...report.warmup, ...report.rounds].reduce((total, round) => ({ activities: total.activities + (round.cleanup?.activitiesRemoved ?? 0),
             registrations: total.registrations + (round.cleanup?.registrationsRemoved ?? 0),
-            notifications: total.notifications + (round.cleanup?.notificationsRemoved ?? 0) }), { activities: 0, registrations: 0, notifications: 0 });
+            notifications: total.notifications + (round.cleanup?.notificationsRemoved ?? 0),
+            auditLogs: total.auditLogs + (round.cleanup?.auditLogsRemoved ?? 0) }), { activities: 0, registrations: 0, notifications: 0, auditLogs: 0 });
           report.cleanup = { ...counts, roundActivitiesRemoved: rounds.activities, roundRegistrationsRemoved: rounds.registrations,
             totalActivitiesRemoved: counts.activitiesRemoved + rounds.activities,
             totalRegistrationsRemoved: counts.registrationsRemoved + rounds.registrations, completed: true, seedRowsPreserved: true };
-          if (settings.phase === undefined) report.cleanup.totalNotificationsRemoved = counts.notificationsRemoved + rounds.notifications;
+          if (settings.phase === undefined) {
+            report.cleanup.totalNotificationsRemoved = counts.notificationsRemoved + rounds.notifications;
+            report.cleanup.totalAuditLogsRemoved = counts.auditLogsRemoved + rounds.auditLogs;
+          }
           manifest.cleanup = report.cleanup;
           saveManifest(manifest);
         }

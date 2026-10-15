@@ -4,6 +4,7 @@ import com.example.gather.domain.ActivityLockRow;
 import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.ActivitySearchTotals;
 import com.example.gather.domain.NewActivity;
+import com.example.gather.domain.ActivityAuditText;
 import org.apache.ibatis.annotations.*;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -40,6 +41,9 @@ public interface ActivityMapper {
     // InnoDB serializes contenders for the same activity, keeping check + increment atomic.
     @Select("SELECT starts_at, capacity, registered_count, cancelled_at FROM activities WHERE id=#{id} FOR UPDATE")
     ActivityLockRow lockById(long id);
+
+    @Select("SELECT title, description, location FROM activities WHERE id=#{id}")
+    ActivityAuditText auditText(long id);
 
     @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy})")
     @Options(useGeneratedKeys = true, keyProperty = "id")

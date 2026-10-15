@@ -86,7 +86,8 @@ class AuthRateLimitIntegrationTest {
     void databaseIdentity() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("5");
+        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("6");
+        jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
     }
 
     @AfterEach
@@ -99,6 +100,7 @@ class AuthRateLimitIntegrationTest {
                 assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM registrations WHERE user_id=? OR checked_in_by=?", Integer.class, row.id(), row.id())).isZero();
                 assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM notifications WHERE user_id=?", Integer.class, row.id())).isZero();
                 assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activities WHERE created_by=? OR cancelled_by=?", Integer.class, row.id(), row.id())).isZero();
+                assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activity_audit_logs WHERE actor_user_id=?", Integer.class, row.id())).isZero();
                 jdbc.update("DELETE FROM users WHERE id=? AND username=? AND role='USER'", row.id(), username);
             }
         });

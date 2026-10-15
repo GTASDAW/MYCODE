@@ -139,15 +139,7 @@ class CheckInIntegrationTest {
                 assertThat(jdbc.queryForList("SELECT id FROM activities WHERE created_by IN (" + marks + ") OR cancelled_by IN (" + marks + ")",
                     Long.class, java.util.stream.Stream.concat(batch.stream(), batch.stream()).toArray())).allMatch(activityIds::contains);
             }
-            for (long id : activityIds) {
-                jdbc.update("DELETE FROM notifications WHERE activity_id=?", id);
-                jdbc.update("DELETE FROM registrations WHERE activity_id=?", id);
-                jdbc.update("DELETE FROM activities WHERE id=?", id);
-            }
-            for (int start = 0; start < userIds.size(); start += 500) {
-                var batch = userIds.subList(start, Math.min(start + 500, userIds.size()));
-                jdbc.update("DELETE FROM users WHERE id IN (" + String.join(",", Collections.nCopies(batch.size(), "?")) + ")", batch.toArray());
-            }
+            com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityIds, userIds);
         });
     }
 

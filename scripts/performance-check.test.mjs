@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { performanceSettings, performanceOutput, verifyApplicationArtifact, collectQueryEvidence, LOCK_QUERY_SQL, latencyStatistics, summarizeRequests,
-  verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView } from './performance-check.mjs';
+  verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView, verifyCurrentAuditCreation } from './performance-check.mjs';
 
 const isolated = {
   COMPOSE_PROJECT_NAME: 'gather-perf-ci', PERF_BASE_URL: 'http://127.0.0.1:18098',
@@ -248,13 +248,15 @@ test('manifest validation refuses changed UUID ownership, USER role and cleanup 
 });
 
 function fakeDatabase({ changedActivity = false, unownedReference = false, unownedActivityReference = false,
-  changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false, externalCheckIn = false } = {}) {
+  changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false, externalCheckIn = false,
+  externalAuditActor = false, crossAuditRegistration = false } = {}) {
   const calls = [];
   const proof = manifest();
   let activityDeleted = false;
   let userDeleted = false;
   let registrationDeleted = false;
   let notificationDeleted = false;
+  let auditDeleted = false;
   return {
     calls,
     async query(sql) {
@@ -267,6 +269,10 @@ function fakeDatabase({ changedActivity = false, unownedReference = false, unown
     async rollback() { calls.push('ROLLBACK'); },
     async execute(sql) {
       calls.push(sql);
+      if (sql.startsWith('SELECT a.activity_id')) return [auditDeleted ? [] : [{ activityId: crossAuditRegistration ? 99 : 4,
+        registrationId: crossAuditRegistration ? 8 : null, registrationActivityId: crossAuditRegistration ? 4 : null }]];
+      if (sql.startsWith('SELECT activity_id FROM activity_audit_logs')) return [auditDeleted ? [] : [{ activity_id: externalAuditActor ? 99 : 4 }]];
+      if (sql.startsWith('DELETE FROM activity_audit_logs')) { auditDeleted = true; return [{ affectedRows: 1 }]; }
       if (sql.startsWith('SELECT user_id FROM notifications')) return [notificationDeleted ? [] : [{ user_id: unownedNoticeRecipient ? 2 : 3 }]];
       if (sql.startsWith('SELECT activity_id FROM notifications')) return [notificationDeleted ? [] : [{ activity_id: externalNotice ? 99 : 4 }]];
       if (sql.startsWith('SELECT activity_id FROM registrations WHERE checked_in_by')) return [registrationDeleted ? [] : [{ activity_id: externalCheckIn ? 99 : 4 }]];
@@ -304,12 +310,13 @@ test('cleanup validates all exact activity ownership and references before any D
 
 test('verified cleanup removes children before exact activities and users in one transaction', async () => {
   const db = fakeDatabase();
-  assert.deepEqual(await cleanupOwned(db, manifest()), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1, notificationsRemoved: 1 });
+  assert.deepEqual(await cleanupOwned(db, manifest()), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1, notificationsRemoved: 1, auditLogsRemoved: 1 });
   const deletions = db.calls.filter(sql => sql.startsWith('DELETE '));
-  assert.match(deletions[0], /^DELETE FROM notifications WHERE activity_id = \?/);
-  assert.match(deletions[1], /^DELETE FROM registrations WHERE activity_id = \?/);
-  assert.match(deletions[2], /^DELETE FROM activities WHERE id = \?.*created_by = \?/);
-  assert.match(deletions[3], /^DELETE FROM users WHERE id = \?.*role = 'USER'/);
+  assert.match(deletions[0], /^DELETE FROM activity_audit_logs WHERE activity_id = \?/);
+  assert.match(deletions[1], /^DELETE FROM notifications WHERE activity_id = \?/);
+  assert.match(deletions[2], /^DELETE FROM registrations WHERE activity_id = \?/);
+  assert.match(deletions[3], /^DELETE FROM activities WHERE id = \?.*created_by = \?/);
+  assert.match(deletions[4], /^DELETE FROM users WHERE id = \?.*role = 'USER'/);
   assert.equal(db.calls.at(-1), 'COMMIT');
 });
 
@@ -321,12 +328,12 @@ test('round cleanup preserves synthetic users, persists exact IDs before DELETE 
     assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
     persisted = structuredClone(value.cleanupIntent);
   } });
-  assert.deepEqual(round, { activitiesRemoved: 1, usersRemoved: 0, registrationsRemoved: 1, notificationsRemoved: 1 });
+  assert.deepEqual(round, { activitiesRemoved: 1, usersRemoved: 0, registrationsRemoved: 1, notificationsRemoved: 1, auditLogsRemoved: 1 });
   assert.deepEqual(persisted, { activityIds: [4], userIds: [] });
   assert(!db.calls.some(sql => sql.startsWith('DELETE FROM users')));
-  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 1, registrationsRemoved: 0, notificationsRemoved: 0 });
+  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 1, registrationsRemoved: 0, notificationsRemoved: 0, auditLogsRemoved: 0 });
   const deletionCount = db.calls.filter(sql => sql.startsWith('DELETE ')).length;
-  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 0, registrationsRemoved: 0, notificationsRemoved: 0 });
+  assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 0, usersRemoved: 0, registrationsRemoved: 0, notificationsRemoved: 0, auditLogsRemoved: 0 });
   assert.equal(db.calls.filter(sql => sql.startsWith('DELETE ')).length, deletionCount);
 });
 
@@ -358,6 +365,7 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert.deepEqual(await cleanupOwned(db, proof), { activitiesRemoved: 1, usersRemoved: 1, registrationsRemoved: 1 });
   assert(!db.calls.some(sql => sql.includes('notifications')));
   assert(!db.calls.some(sql => sql.includes('checked_in')));
+  assert(!db.calls.some(sql => sql.includes('activity_audit_logs')));
 });
 
 test('external check-in audit references reject performance cleanup before any deletion', async () => {
@@ -365,4 +373,30 @@ test('external check-in audit references reject performance cleanup before any d
   await assert.rejects(cleanupOwned(db, manifest()), /unowned check-in reference/);
   assert(db.calls.includes('ROLLBACK'));
   assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
+});
+
+test('external audit actors and cross-activity audit registrations refuse current performance cleanup before deletion', async () => {
+  for (const options of [{ externalAuditActor: true }, { crossAuditRegistration: true }]) {
+    const db = fakeDatabase(options);
+    await assert.rejects(cleanupOwned(db, manifest()), /Cleanup refused|cleanup refused/);
+    assert(db.calls.includes('ROLLBACK'));
+    assert(!db.calls.some(sql => sql.startsWith('DELETE ')));
+  }
+});
+
+test('current signup measurement preserves one exact CREATE snapshot and cannot add administrator audit actions', async () => {
+  const activities = [{ id: 4, title: 'Exact owned title' }, { id: 5, title: 'Another owned title' }];
+  const rows = activities.map(activity => ({ activity_id: activity.id, activity_title: activity.title,
+    action: 'CREATE', actor_user_id: 1, registration_id: null }));
+  const db = values => ({ async execute(sql, parameters) {
+    assert(sql.startsWith('SELECT activity_id, activity_title, action, actor_user_id, registration_id FROM activity_audit_logs WHERE activity_id IN (?,?)'));
+    assert.deepEqual(parameters, [4, 5]);
+    return [values];
+  } });
+  assert.equal(await verifyCurrentAuditCreation(db(rows), activities, 1), 2);
+  for (const malformed of [rows.slice(1), [...rows, rows[0]], [{ ...rows[0], actor_user_id: 99 }, rows[1]],
+    [{ ...rows[0], action: 'EDIT' }, rows[1]], [{ ...rows[0], activity_title: 'current mutable title' }, rows[1]],
+    [{ ...rows[0], registration_id: 9 }, rows[1]]]) {
+    await assert.rejects(verifyCurrentAuditCreation(db(malformed), activities, 1), /exactly one initial administrator CREATE audit/);
+  }
 });

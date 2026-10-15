@@ -149,7 +149,7 @@ async function healthy(settings) {
 
 async function snapshot(db) {
   const tables = {};
-  for (const table of ['users', 'activities', 'registrations', 'notifications']) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs']) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   return JSON.stringify(tables); // In-memory comparison only; never log database contents.
 }
 
@@ -205,7 +205,7 @@ export async function runRateLimitChecks() {
   const passed = name => { checks.push(name); console.log(`PASS: ${name}`); };
   const previousEnvironment = new Map(rateKeys.map(key => [key, process.env[key]]));
   const previousManifest = process.env.E2E_RUN_MANIFEST;
-  let db, baseline, manifestPath, primaryError;
+  let db, baseline, manifestPath, primaryError, cleanupCounts;
   let strictChanged = false;
   const strictNamespace = `gather:auth-rate-limit-ci-${randomUUID()}`;
   const newClient = () => new ApiClient();
@@ -239,7 +239,7 @@ export async function runRateLimitChecks() {
       assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description,
         'A rate-limit API endpoint differs from the UUID SQL proof; authentication writes refused.');
     }
-    passed('owned Docker containers, exact ports, profile, MySQL V5 and UUID API/database identity verified before authentication writes');
+    passed('owned Docker containers, exact ports, profile, MySQL V6 and UUID API/database identity verified before authentication writes');
     Object.assign(process.env, {
       AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT: '6', AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT: '3', AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT: '2',
       AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS: String(windowSeconds), AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS: String(windowSeconds),
@@ -391,7 +391,7 @@ export async function runRateLimitChecks() {
       try { await recreate(); passed('normal authentication limits restored and verified on the owned stack; Session timeout remains unchanged'); }
       catch (caught) { primaryError = primaryError ? new AggregateError([primaryError, caught], 'Rate-limit checks and ordinary-limit restoration failed.') : caught; }
     }
-    try { if (manifestPath) await cleanupRun(manifestPath); }
+    try { if (manifestPath) cleanupCounts = await cleanupRun(manifestPath); }
     catch (caught) { primaryError = primaryError ? new AggregateError([primaryError, caught], 'Rate-limit checks and exact owned fixture cleanup failed.') : caught; }
     if (db) {
       try { if (baseline !== undefined) { assert(await snapshot(db) === baseline, 'Rate-limit cleanup did not preserve the exact database baseline.'); passed('exact owned accounts and UUID probe removed; all pre-existing database records preserved'); } }
@@ -402,7 +402,7 @@ export async function runRateLimitChecks() {
     else process.env.E2E_RUN_MANIFEST = previousManifest;
     await mkdir('.runtime/ci', { recursive: true });
     await writeFile(`.runtime/ci/auth-rate-limit-${settings.mode}.json`, `${JSON.stringify({ success: !primaryError, mode: settings.mode,
-      windowSeconds, loginPairLimit: 3, loginSourceLimit: 6, registerSourceLimit: 2, checks }, null, 2)}\n`);
+      windowSeconds, loginPairLimit: 3, loginSourceLimit: 6, registerSourceLimit: 2, checks, cleanup: cleanupCounts }, null, 2)}\n`);
   }
   if (primaryError) throw primaryError;
   console.log(`Authentication rate-limit verification completed (${checks.length} checks, ${settings.mode}).`);

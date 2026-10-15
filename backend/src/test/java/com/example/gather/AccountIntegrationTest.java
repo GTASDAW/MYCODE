@@ -88,13 +88,18 @@ class AccountIntegrationTest {
     @AfterEach
     void deleteOnlyOwnedFixtures() {
         for (long id : activityIds) {
-            jdbc.update("DELETE FROM registrations WHERE activity_id=?", id);
-            jdbc.update("DELETE FROM activities WHERE id=? AND description=?", id, "Account integration fixture");
+            assertThat(jdbc.queryForObject("SELECT description FROM activities WHERE id=?", String.class, id))
+                .isEqualTo("Account integration fixture");
         }
+        var ownedIds = new ArrayList<Long>();
         for (String username : usernames) {
-            // Exact names are registered before each write, including a response lost to a failing assertion.
-            jdbc.update("DELETE FROM users WHERE username=? AND role='USER'", username);
+            var row = users.findByUsername(username);
+            if (row == null) continue;
+            assertThat(row.username()).isEqualTo(username);
+            assertThat(row.role()).isEqualTo("USER");
+            ownedIds.add(row.id());
         }
+        com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityIds, ownedIds);
     }
 
     @Test

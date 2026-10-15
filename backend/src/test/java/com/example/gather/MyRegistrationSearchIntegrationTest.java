@@ -141,7 +141,8 @@ class MyRegistrationSearchIntegrationTest {
     void verifyDedicatedCurrentSchemaBeforeFixtureWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class))
-            .isEqualTo("5");
+            .isEqualTo("6");
+        jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
     }
 
     @AfterEach
@@ -158,12 +159,7 @@ class MyRegistrationSearchIntegrationTest {
                     assertThat(jdbc.queryForList(query, Long.class, id)).allMatch(activityFixtures::containsKey);
                 }
             }
-            for (long id : activityFixtures.keySet()) {
-                jdbc.update("DELETE FROM notifications WHERE activity_id=?", id);
-                jdbc.update("DELETE FROM registrations WHERE activity_id=?", id);
-                jdbc.update("DELETE FROM activities WHERE id=?", id);
-            }
-            for (long id : userFixtures.keySet()) jdbc.update("DELETE FROM users WHERE id=?", id);
+            com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityFixtures.keySet(), userFixtures.keySet());
         });
     }
 
@@ -442,7 +438,8 @@ class MyRegistrationSearchIntegrationTest {
     private Map<String, Object> fixtureState(long activity) {
         return Map.of("activity", jdbc.queryForMap("SELECT * FROM activities WHERE id=?", activity),
             "registrations", jdbc.queryForList("SELECT * FROM registrations WHERE activity_id=? ORDER BY id", activity),
-            "notifications", jdbc.queryForList("SELECT * FROM notifications WHERE activity_id=? ORDER BY id", activity));
+            "notifications", jdbc.queryForList("SELECT * FROM notifications WHERE activity_id=? ORDER BY id", activity),
+            "audit", jdbc.queryForList("SELECT * FROM activity_audit_logs WHERE activity_id=? ORDER BY id", activity));
     }
     private long createActivity(int capacity) {
         String title = "MyRegistration " + UUID.randomUUID();

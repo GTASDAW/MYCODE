@@ -101,12 +101,7 @@ class ActivityLifecycleIntegrationTest {
     @AfterEach
     void cleanOnlyCreatedFixtures() {
         clock.set(NOW);
-        for (long id : activityIds) {
-            jdbc.update("DELETE FROM notifications WHERE activity_id=?", id);
-            jdbc.update("DELETE FROM registrations WHERE activity_id=?", id);
-            jdbc.update("DELETE FROM activities WHERE id=?", id);
-        }
-        for (long id : userIds) jdbc.update("DELETE FROM users WHERE id=?", id);
+        com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityIds, userIds);
     }
 
     @Test

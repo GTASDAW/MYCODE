@@ -252,7 +252,7 @@ function recreateBackends(timeout) {
 
 async function databaseSnapshot(db) {
   const rows = {};
-  for (const table of ['users', 'activities', 'registrations', 'notifications']) [rows[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs']) [rows[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   return JSON.stringify(rows);
 }
 
@@ -282,7 +282,7 @@ export async function runRedisSessionChecks() {
   let fixture;
   let timeoutChanged = false;
   let primaryError;
-  let removed = { activities: 0, registrations: 0, users: 0, notifications: 0 };
+  let removed = { activities: 0, registrations: 0, users: 0, notifications: 0, auditLogs: 0 };
   const passed = name => { checks.push(name); console.log(`PASS: ${name}`); };
   const client = () => { const created = new ApiClient(); clients.push(created); return created; };
 
@@ -466,10 +466,17 @@ export async function runRedisSessionChecks() {
     }
     await expectedError(await accountClient.response(settings.web, exportPath, { headers: { Accept: 'text/csv, application/json' } }), 403, 'FORBIDDEN');
     const afterAttendanceOnly = JSON.parse(await databaseSnapshot(db));
+    const oldAuditIds = new Set(beforeAttendanceOnly.activity_audit_logs.map(row => row.id));
+    const newAudits = afterAttendanceOnly.activity_audit_logs.filter(row => !oldAuditIds.has(row.id));
+    assert.equal(newAudits.length, 1, 'Cross-instance first check-in appends exactly one audit and all repeated writes append none.');
+    assert(newAudits[0].action === 'CHECK_IN' && newAudits[0].activity_id === ownedCheckInFixture.id
+      && newAudits[0].registration_id === checkedIn.id && newAudits[0].actor_user_id === user.id
+      && newAudits[0].target_username === ownedAccount.username && newAudits[0].target_display_name === ownedAccount.allowedDisplayNames[1]);
+    afterAttendanceOnly.activity_audit_logs = afterAttendanceOnly.activity_audit_logs.filter(row => oldAuditIds.has(row.id));
     for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
       state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
     }
-    assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Cross-instance check-in/export must only change check-in fields.');
+    assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Cross-instance check-in/export must preserve old business rows and audit snapshots apart from check-in fields and one new audit.');
     const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [ownedCheckInFixture.id]);
     assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
     assert.equal(Number(attendanceTruth.active), 2);
@@ -542,6 +549,24 @@ export async function runRedisSessionChecks() {
     const repeatedActivity = await admin.write(settings.a, `/api/admin/activities/${fixture.id}/cancel`, token, 'POST', { reason: 'Ignored repeated reason' });
     assert(repeatedActivity.cancelledAt === cancelledActivity.cancelledAt && repeatedActivity.cancellationReason === cancelledActivity.cancellationReason,
       'Repeating cancellation must preserve the first cancellation metadata.');
+    const auditPage = await admin.json(settings.a, `/api/admin/audit-logs?activityId=${fixture.id}`);
+    assert.equal(auditPage.total, 3);
+    assert.deepEqual(auditPage.items.map(row => row.action), ['CANCEL', 'EDIT', 'CREATE']);
+    assert(auditPage.items.every(row => row.actorUserId === user.id && row.actorUsername === 'admin'
+      && row.activityId === fixture.id && row.activityTitle === ownedFixture.title && !Object.hasOwn(row, 'changes')));
+    for (const base of [settings.a, settings.b, settings.web]) {
+      assert.deepEqual(await admin.json(base, `/api/admin/audit-logs?activityId=${fixture.id}`), auditPage);
+      const editAudit = await admin.json(base, `/api/admin/audit-logs/${auditPage.items[1].id}`);
+      assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Redis isolated lifecycle verification', after: edited.location }]);
+      const attendanceAudit = await admin.json(base, `/api/admin/audit-logs?activityId=${ownedCheckInFixture.id}&action=CHECK_IN`);
+      assert.equal(attendanceAudit.total, 1);
+      const detail = await admin.json(base, `/api/admin/audit-logs/${attendanceAudit.items[0].id}`);
+      assert.deepEqual(detail.changes, [{ field: 'checkedInAt', before: null, after: checkedIn.checkedInAt }]);
+      assert(detail.targetUsername === ownedAccount.username && detail.targetDisplayName === ownedAccount.allowedDisplayNames[1]);
+    }
+    await expectedError(await accountClient.response(settings.b, '/api/admin/audit-logs'), 403, 'FORBIDDEN');
+    await expectedError(await new ApiClient().response(settings.web, `/api/admin/audit-logs/${auditPage.items[0].id}`), 401, 'UNAUTHENTICATED');
+    passed('CREATE, EDIT, first CANCEL and CHECK_IN audit snapshots and full changes agree on both replicas and Nginx; non-administrators are denied');
     await expectedError(await accountClient.response(settings.b, `/api/activities/${fixture.id}/registration`, {
       method: 'POST', headers: { [signupToken.headerName]: signupToken.token },
     }), 409, 'ACTIVITY_CANCELLED');
@@ -661,7 +686,7 @@ export async function runRedisSessionChecks() {
                 activityIds: activities.map(activity => activity.id), userIds: accounts.map(account => account.id),
               } }, null, 2)}\n`);
           }, { accounts: accountAttempted ? [ownedAccount] : [] });
-          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations, users: result.deletedUsers, notifications: result.deletedNotifications };
+          removed = { activities: result.deletedActivities, registrations: result.deletedRegistrations, users: result.deletedUsers, notifications: result.deletedNotifications, auditLogs: result.deletedAuditLogs };
           assert(await databaseSnapshot(db) === baseline, 'Exact Redis fixture cleanup did not preserve the database baseline.');
           passed('only the exact UUID fixture and its registrations removed; existing database records preserved');
         }
@@ -671,7 +696,7 @@ export async function runRedisSessionChecks() {
     await mkdir('.runtime/ci', { recursive: true });
     await writeFile(reportPath, `${JSON.stringify({ success: !primaryError, checks, counts: { checksPassed: checks.length,
       activitiesRemoved: removed.activities, registrationsRemoved: removed.registrations, usersRemoved: removed.users,
-      notificationsRemoved: removed.notifications } }, null, 2)}\n`);
+      notificationsRemoved: removed.notifications, auditLogsRemoved: removed.auditLogs } }, null, 2)}\n`);
   }
   if (primaryError) throw primaryError;
   console.log(`Redis session verification completed (${checks.length} checks); report: ${reportPath}`);

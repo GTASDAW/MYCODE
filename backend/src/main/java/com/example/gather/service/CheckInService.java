@@ -18,11 +18,13 @@ import java.time.temporal.ChronoUnit;
 public class CheckInService {
     private final ActivityMapper activities;
     private final AdminMapper admin;
+    private final AuditLogService audit;
     private final Clock clock;
 
-    public CheckInService(ActivityMapper activities, AdminMapper admin, Clock clock) {
+    public CheckInService(ActivityMapper activities, AdminMapper admin, AuditLogService audit, Clock clock) {
         this.activities = activities;
         this.admin = admin;
+        this.audit = audit;
         this.clock = clock;
     }
 
@@ -47,6 +49,7 @@ public class CheckInService {
         if (admin.checkIn(registrationId, now, adminId) != 1) {
             throw new IllegalStateException("Locked registration check-in was not saved");
         }
+        audit.checkedIn(activityId, adminId, registrationId, now);
         return RosterView.from(admin.findRosterRegistration(activityId, registrationId));
     }
 }

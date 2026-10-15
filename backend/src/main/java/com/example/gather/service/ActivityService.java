@@ -25,12 +25,15 @@ public class ActivityService {
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
     private final NotificationService notifications;
+    private final AuditLogService audit;
     private final Clock clock;
 
-    public ActivityService(ActivityMapper activities, RegistrationMapper registrations, NotificationService notifications, Clock clock) {
+    public ActivityService(ActivityMapper activities, RegistrationMapper registrations, NotificationService notifications,
+                           AuditLogService audit, Clock clock) {
         this.activities = activities;
         this.registrations = registrations;
         this.notifications = notifications;
+        this.audit = audit;
         this.clock = clock;
     }
 
@@ -71,12 +74,15 @@ public class ActivityService {
 
     @Transactional
     public ActivityView create(CreateActivityRequest request, long creatorId) {
-        if (!request.startsAt().isAfter(clock.instant())) {
+        Instant now = clock.instant();
+        Instant startsAt = request.startsAt().truncatedTo(ChronoUnit.MICROS);
+        if (!startsAt.isAfter(now)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "开始时间必须在未来");
         }
         NewActivity row = new NewActivity(request.title().strip(), request.description().strip(), request.location().strip(),
-            LocalDateTime.ofInstant(request.startsAt(), ZoneOffset.UTC), request.capacity(), creatorId);
+            LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId);
         activities.insert(row);
+        audit.created(row, creatorId, now);
         return get(row.id, creatorId);
     }
 
@@ -84,9 +90,16 @@ public class ActivityService {
     public ActivityView edit(long id, EditActivityRequest request, long adminId) {
         ActivityLockRow activity = lockActivity(id);
         if (activity.cancelledAt() != null) cancelled();
-        ensureNotStarted(activity, clock.instant());
-        activities.edit(id, editText(request.title(), 100, "标题"),
-            editText(request.description(), 10000, "介绍"), editText(request.location(), 200, "地点"));
+        Instant now = clock.instant();
+        ensureNotStarted(activity, now);
+        String title = editText(request.title(), 100, "标题");
+        String description = editText(request.description(), 10000, "介绍");
+        String location = editText(request.location(), 200, "地点");
+        var before = activities.auditText(id);
+        if (!before.title().equals(title) || !before.description().equals(description) || !before.location().equals(location)) {
+            activities.edit(id, title, description, location);
+            audit.edited(id, adminId, before, title, description, location, now);
+        }
         return get(id, adminId);
     }
 
@@ -102,6 +115,7 @@ public class ActivityService {
         notifications.activityCancelled(id, reason, cancelledAt);
         registrations.cancelForActivity(id, cancelledAt);
         activities.cancel(id, cancelledAt, reason, adminId);
+        audit.cancelled(id, adminId, reason, cancelledAt);
         return get(id, adminId);
     }
 

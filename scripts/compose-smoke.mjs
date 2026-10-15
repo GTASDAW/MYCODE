@@ -20,6 +20,7 @@ const checks = [];
 let fixture;
 let db;
 let baseline;
+let cleanupCounts;
 let primaryError;
 const runId = randomUUID();
 const title = `Compose 验证 ${runId}`;
@@ -161,13 +162,14 @@ async function snapshot() {
   const [activities] = await db.query('SELECT id, title, description, location, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
-  return JSON.stringify({ activities, registrations, notifications });
+  const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
+  return JSON.stringify({ activities, registrations, notifications, auditLogs });
 }
 
 async function removeFixture() {
   // Exact intent can recover a created row even if its HTTP response was interrupted.
   const proofs = [{ key: runId, id: fixture?.id ?? null, title, description }, startedFixture];
-  await deleteOwnedFixtures(db, proofs, new Set(), async (activities) => {
+  cleanupCounts = await deleteOwnedFixtures(db, proofs, new Set(), async (activities) => {
     await writeFile(fixtureIntentPath, JSON.stringify({ runId, proofs, cleanupIntent: { activityIds: activities.map(row => row.id), userIds: [] } }, null, 2));
   });
   assert.equal(await snapshot(), baseline, 'Existing database records changed during smoke checks.');
@@ -190,9 +192,9 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6']);
   assert(migrations.every(row => row.success === 1));
-  check('fresh MySQL schema contains successful Flyway V1, V2, V3, V4 and V5');
+  check('fresh MySQL schema contains successful Flyway V1 through V6');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -211,7 +213,7 @@ try {
   assert.equal(discovery.summary.availableSeats, activities.filter(activity => !activity.closed)
     .reduce((sum, activity) => sum + activity.capacity - activity.registeredCount, 0));
   check('anonymous discovery pagination and matching-set statistics preserve the legacy list contract');
-  for (const path of ['/', `/activities/${activities[0].id}`, '/admin/dashboard', '/notifications']) {
+  for (const path of ['/', `/activities/${activities[0].id}`, '/admin/dashboard', '/admin/audit-logs', '/notifications']) {
     const page = await fetch(new URL(path, baseUrl), { signal: AbortSignal.timeout(10000) });
     assert(page.ok && page.headers.get('Content-Type')?.includes('text/html'), `SPA deep link ${path} is unavailable.`);
     const html = await page.text();
@@ -289,6 +291,19 @@ try {
   const repeatedCancellation = await admin.write(`/api/admin/activities/${fixture.id}/cancel`, 'POST', { reason: 'Ignored repeated reason' });
   assert.equal(repeatedCancellation.cancelledAt, cancelledActivity.cancelledAt);
   assert.equal(repeatedCancellation.cancellationReason, cancelledActivity.cancellationReason);
+  assert.equal((await anonymous.response('/api/admin/audit-logs')).status, 401);
+  assert.equal((await demo.response('/api/admin/audit-logs')).status, 403);
+  const activityAuditPage = await admin.json(`/api/admin/audit-logs?activityId=${fixture.id}`);
+  assert.equal(activityAuditPage.total, 3);
+  assert.deepEqual(activityAuditPage.items.map(row => row.action), ['CANCEL', 'EDIT', 'CREATE']);
+  assert(activityAuditPage.items.every(row => row.activityId === fixture.id && row.activityTitle === title
+    && row.actorUserId === adminIdentity.id && row.actorUsername === 'admin' && !Object.hasOwn(row, 'changes')));
+  const editAudit = await admin.json(`/api/admin/audit-logs/${activityAuditPage.items[1].id}`);
+  assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Compose isolated validation', after: edited.location }]);
+  const filteredAudit = await admin.json(`/api/admin/audit-logs?activityId=${fixture.id}&action=CANCEL&pageSize=1`);
+  assert.equal(filteredAudit.total, 1);
+  assert.deepEqual(filteredAudit.items, [activityAuditPage.items[0]]);
+  check('administrator-only CREATE, EDIT and first CANCEL audit snapshots and complete detail changes are persisted');
   const cancelledSearch = await anonymous.json(`/api/activities/search?${new URLSearchParams({
     keyword: title, status: 'CANCELLED', page: '1', pageSize: '1',
   })}`);
@@ -344,10 +359,23 @@ try {
   assert(new TextDecoder().decode(csvBytes).includes('"\tadmin"'));
   const beforeAttendanceOnly = JSON.parse(beforeCheckIn);
   const afterAttendanceOnly = JSON.parse(await snapshot());
+  const oldAuditIds = new Set(beforeAttendanceOnly.auditLogs.map(row => row.id));
+  const newAudits = afterAttendanceOnly.auditLogs.filter(row => !oldAuditIds.has(row.id));
+  assert.equal(newAudits.length, 1, 'First check-in must append exactly one audit and repeats must append none.');
+  assert.equal(newAudits[0].action, 'CHECK_IN');
+  assert.equal(newAudits[0].activity_id, startedFixture.id);
+  assert.equal(newAudits[0].registration_id, signed.id);
+  assert.equal(newAudits[0].actor_user_id, adminIdentity.id);
+  assert.equal(newAudits[0].target_username, 'admin');
+  const checkInAuditPage = await admin.json(`/api/admin/audit-logs?activityId=${startedFixture.id}&action=CHECK_IN`);
+  assert.equal(checkInAuditPage.total, 1);
+  const checkInAudit = await admin.json(`/api/admin/audit-logs/${checkInAuditPage.items[0].id}`);
+  assert.deepEqual(checkInAudit.changes, [{ field: 'checkedInAt', before: null, after: signed.checkedInAt }]);
+  afterAttendanceOnly.auditLogs = afterAttendanceOnly.auditLogs.filter(row => oldAuditIds.has(row.id));
   for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
     state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
   }
-  assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Check-in/export must preserve every other business field and notification.');
+  assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Check-in/export must preserve every previous business field, notification and audit snapshot apart from check-in fields and its one new audit.');
   const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [startedFixture.id]);
   assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
   assert.equal(Number(attendanceTruth.checked), 1);
@@ -403,6 +431,8 @@ try {
     assert.deepEqual(await admin.json('/api/me/notifications'), persistedNotices, 'Notification history and first-read time must survive restart.');
     assert.deepEqual((await admin.json(`/api/admin/activities/${startedFixture.id}/registrations`)).items, [signed], 'First check-in metadata must survive restart.');
     assert.deepEqual(await admin.json(minePath), personal, 'Personal attendance and whole-account statistics must survive restart.');
+    assert.deepEqual(await admin.json(`/api/admin/audit-logs?activityId=${fixture.id}`), activityAuditPage, 'Activity audit snapshots must survive restart.');
+    assert.deepEqual(await admin.json(`/api/admin/audit-logs?activityId=${startedFixture.id}&action=CHECK_IN`), checkInAuditPage);
     check('backend restart preserves database data and expires the documented in-memory Session');
   }
 } catch (error) {
@@ -416,7 +446,7 @@ try {
     await db.end();
   }
   await mkdir('.runtime/ci', { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ success: !primaryError, checks, fixtureId: fixture?.id ?? null, runId }, null, 2));
+  await writeFile(reportPath, JSON.stringify({ success: !primaryError, checks, fixtureId: fixture?.id ?? null, runId, cleanup: cleanupCounts }, null, 2));
 }
 
 if (primaryError) throw primaryError;
