@@ -32,6 +32,18 @@ export function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+const preciseTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: zone, hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+});
+
+export function formatPreciseDateTime(value: string): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "时间不可用";
+  // Date keeps milliseconds only; retain the original UTC microseconds.
+  const fraction = value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] ?? "";
+  return `${formatDate(value)} ${preciseTimeFormatter.format(date)}.${fraction.padEnd(6, "0").slice(0, 6)}`;
+}
+
 // datetime-local represents the entered wall clock time; always interpret it as Beijing time.
 export function beijingInputToIso(value: string) {
   const date = new Date(`${value}:00+08:00`);

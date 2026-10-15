@@ -432,6 +432,12 @@ export async function runRedisSessionChecks() {
     await db.execute("INSERT INTO registrations(activity_id,user_id,status,created_at,updated_at) VALUES (?,?,'ACTIVE',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY),(?,?,'ACTIVE',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY),(?,?,'WAITING',UTC_TIMESTAMP(6) - INTERVAL 2 DAY,UTC_TIMESTAMP(6) - INTERVAL 2 DAY)",
       [ownedCheckInFixture.id, user.id, ownedCheckInFixture.id, ownedAccount.id, ownedCheckInFixture.id, demoIdentity.id]);
     const initialCheckInRoster = await admin.json(settings.a, `/api/admin/activities/${ownedCheckInFixture.id}/registrations`);
+    const initialAttendance = await admin.json(settings.a, '/api/admin/attendance');
+    assert.equal(initialAttendance.total, 1);
+    assert.equal(initialAttendance.items[0].id, ownedCheckInFixture.id);
+    assert.deepEqual(initialAttendance.summary, { totalActivities: 1, activeRegistrations: 2,
+      checkedInRegistrations: 0, notCheckedInRegistrations: 2, checkInRate: 0 });
+    const attendancePath = `/api/admin/attendance?${new URLSearchParams({ from: initialAttendance.from, to: initialAttendance.to })}`;
     const beforeAttendanceOnly = JSON.parse(await databaseSnapshot(db));
     assert.deepEqual(initialCheckInRoster.summary, { activeRegistrations: 2, checkedInRegistrations: 0, notCheckedInRegistrations: 2 });
     const checkInRegistration = initialCheckInRoster.items.find(row => row.userId === ownedAccount.id);
@@ -482,6 +488,25 @@ export async function runRedisSessionChecks() {
     assert.equal(Number(attendanceTruth.active), 2);
     assert.equal(Number(attendanceTruth.waiting), 1);
     assert.equal(Number(attendanceTruth.checked), 1);
+    const signedAttendance = await admin.json(settings.a, attendancePath);
+    assert.deepEqual(signedAttendance.summary, { totalActivities: 1, activeRegistrations: 2,
+      checkedInRegistrations: 1, notCheckedInRegistrations: 1, checkInRate: 50 });
+    assert(signedAttendance.items.length === 1 && signedAttendance.items[0].id === ownedCheckInFixture.id
+      && signedAttendance.items[0].activeRegistrations === 2 && signedAttendance.items[0].checkedInRegistrations === 1
+      && signedAttendance.items[0].checkInRate === 50);
+    const { asOf: signedAttendanceTime, ...stableAttendance } = signedAttendance;
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const { asOf, ...view } = await admin.json(base, attendancePath);
+      assert.deepEqual(view, stableAttendance);
+      assert(Date.parse(asOf) >= Date.parse(signedAttendanceTime));
+      const outside = await admin.json(base, `${attendancePath}&page=2&pageSize=1`);
+      assert.equal(outside.total, 1);
+      assert.deepEqual(outside.items, []);
+      assert.deepEqual(outside.summary, signedAttendance.summary);
+    }
+    await expectedError(await accountClient.response(settings.b, attendancePath), 403, 'FORBIDDEN');
+    await expectedError(await new ApiClient().response(settings.web, attendancePath), 401, 'UNAUTHENTICATED');
+    passed('attendance analysis and weighted full summary refresh after check-in and agree on A/B/Nginx; user/anonymous access is denied');
     passed('trusted check-in and complete filtered UTF-8 CSV agree on A/B/Nginx; repeat keeps first metadata and role/CSRF denial holds');
 
     const beforeRestart = await databaseSnapshot(db);
@@ -499,6 +524,9 @@ export async function runRedisSessionChecks() {
       const response = await admin.response(base, exportPath, { headers: { Accept: 'text/csv, application/json' } });
       assert.equal(response.status, 200);
       assert.equal(await response.text(), checkInCsv);
+      const { asOf, ...attendanceAfterRestart } = await admin.json(base, attendancePath);
+      assert.deepEqual(attendanceAfterRestart, stableAttendance, 'Attendance summary and rows must survive replica restart.');
+      assert(Date.parse(asOf) >= Date.parse(signedAttendanceTime));
     }
     passed('restarting only A preserves shared login, existing CSRF and exact database data');
 

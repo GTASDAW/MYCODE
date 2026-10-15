@@ -334,6 +334,15 @@ try {
     [startedFixture.id, adminIdentity.id]);
   const checkInPath = `/api/admin/activities/${startedFixture.id}/registrations/${registrationInsert.insertId}/check-in`;
   const initialSignedRoster = await admin.json(`/api/admin/activities/${startedFixture.id}/registrations`);
+  assert.equal((await anonymous.response('/api/admin/attendance')).status, 401);
+  assert.equal((await demo.response('/api/admin/attendance')).status, 403);
+  const initialAttendance = await admin.json('/api/admin/attendance');
+  assert.equal(initialAttendance.total, 1);
+  assert.equal(initialAttendance.items[0].id, startedFixture.id);
+  assert.deepEqual(initialAttendance.summary, { totalActivities: 1, activeRegistrations: 1,
+    checkedInRegistrations: 0, notCheckedInRegistrations: 1, checkInRate: 0 });
+  assert.match(initialAttendance.asOf, /^\d{4}-\d{2}-\d{2}T.*Z$/);
+  const attendancePath = `/api/admin/attendance?${new URLSearchParams({ from: initialAttendance.from, to: initialAttendance.to })}`;
   const beforeCheckIn = await snapshot();
   assert.equal((await admin.response(checkInPath, { method: 'POST' })).status, 403);
   const demoCheckToken = await demo.json('/api/auth/csrf');
@@ -380,6 +389,17 @@ try {
   assert.equal(Number(attendanceTruth.registeredCount), Number(attendanceTruth.active));
   assert.equal(Number(attendanceTruth.checked), 1);
   assert.equal(Number(attendanceTruth.waiting), 0);
+  const signedAttendance = await admin.json(attendancePath);
+  assert.equal(signedAttendance.total, 1);
+  assert.deepEqual(signedAttendance.summary, { totalActivities: 1, activeRegistrations: 1,
+    checkedInRegistrations: 1, notCheckedInRegistrations: 0, checkInRate: 100 });
+  assert(signedAttendance.items[0].id === startedFixture.id && signedAttendance.items[0].activeRegistrations === 1
+    && signedAttendance.items[0].checkedInRegistrations === 1 && signedAttendance.items[0].checkInRate === 100);
+  const outsideAttendance = await admin.json(`${attendancePath}&page=2&pageSize=1`);
+  assert.equal(outsideAttendance.total, 1);
+  assert.deepEqual(outsideAttendance.items, []);
+  assert.deepEqual(outsideAttendance.summary, signedAttendance.summary);
+  check('administrator attendance analysis reads the started fixture, refreshes after real check-in and retains global summary on an empty page');
   check('check-in preserves first trusted actor/time; filtered summary and protected UTF-8 CSV are real');
 
   assert.equal((await anonymous.response('/api/me/registrations/search')).status, 401);
@@ -433,6 +453,10 @@ try {
     assert.deepEqual(await admin.json(minePath), personal, 'Personal attendance and whole-account statistics must survive restart.');
     assert.deepEqual(await admin.json(`/api/admin/audit-logs?activityId=${fixture.id}`), activityAuditPage, 'Activity audit snapshots must survive restart.');
     assert.deepEqual(await admin.json(`/api/admin/audit-logs?activityId=${startedFixture.id}&action=CHECK_IN`), checkInAuditPage);
+    const { asOf: previousAttendanceTime, ...previousAttendance } = signedAttendance;
+    const { asOf: restartedAttendanceTime, ...restartedAttendance } = await admin.json(attendancePath);
+    assert.deepEqual(restartedAttendance, previousAttendance, 'Attendance rows, date range and full summary must survive restart.');
+    assert(Date.parse(restartedAttendanceTime) >= Date.parse(previousAttendanceTime));
     check('backend restart preserves database data and expires the documented in-memory Session');
   }
 } catch (error) {

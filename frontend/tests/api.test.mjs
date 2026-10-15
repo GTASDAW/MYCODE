@@ -716,3 +716,41 @@ test('audit authentication, permission and missing-record errors retain request 
   await assert.rejects(api.adminAuditLog(81, controller.signal), error => error.name === 'AbortError');
   await assert.rejects(api.adminAuditLogs({ action: 'ALL', page: 1, pageSize: 10, activityId: null }, controller.signal), error => error.name === 'AbortError');
 });
+
+test('attendance uses only committed date and page criteria and preserves full weighted statistics independently of the returned page', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const query = { from: '2026-09-16', to: '2026-10-15', page: 2, pageSize: 10, userId: 999, includeCancelled: true };
+  const page = { items: [{ id: 42, title: '已开始活动', location: '北京', startsAt: '2026-10-15T00:00:00Z', capacity: 1,
+    activeRegistrations: 1, checkedInRegistrations: 1, notCheckedInRegistrations: 0, checkInRate: 100 }],
+    total: 11, page: 2, pageSize: 10, from: query.from, to: query.to, asOf: '2026-10-15T08:00:00.123456Z',
+    summary: { totalActivities: 11, activeRegistrations: 100, checkedInRegistrations: 25, notCheckedInRegistrations: 75, checkInRate: 25 } };
+  const calls = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response(200, page); };
+  assert.deepEqual(await api.adminAttendance(query, controller.signal), page);
+  const path = new URL(calls[0].url, 'http://localhost');
+  assert.equal(path.pathname, '/api/admin/attendance');
+  assert.deepEqual(Object.fromEntries(path.searchParams), { from: query.from, to: query.to, page: '2', pageSize: '10' });
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.equal(calls[0].options.headers.get('X-CSRF-TOKEN'), null);
+  assert.equal(calls[0].options.body, undefined);
+  assert.equal(calls.length, 1);
+});
+
+test('attendance errors preserve authentication, validation and incident codes without a read retry or CSRF request', async () => {
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  for (const [status, code] of [[400, 'VALIDATION_ERROR'], [401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [500, 'INTERNAL_ERROR']]) {
+    const { api } = await freshApi();
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return response(status, { code, message: '签到分析读取失败' }, { 'X-Request-Id': requestId }); };
+    await assert.rejects(api.adminAttendance({ from: '2026-09-16', to: '2026-10-15', page: 1, pageSize: 10 }),
+      error => error.status === status && error.code === code && error.requestId === requestId);
+    assert.equal(calls, 1);
+  }
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  controller.abort();
+  globalThis.fetch = async () => assert.fail('obsolete attendance read must not start');
+  await assert.rejects(api.adminAttendance({ from: '2026-09-16', to: '2026-10-15', page: 1, pageSize: 10 }, controller.signal), error => error.name === 'AbortError');
+});

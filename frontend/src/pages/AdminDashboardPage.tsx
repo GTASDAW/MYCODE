@@ -2,21 +2,20 @@ import { Button, Card, Statistic } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { Link } from "react-router";
 import { api } from "../api";
-import { useAuth } from "../auth";
 import { ErrorState, PageHeading } from "../components";
-import { useAuthenticatedResource } from "./useAuthenticatedResource";
+import { useAdminRead } from "./useAdminRead";
 import { AdminActivityTable } from "./AdminActivityTable";
+import { AttendancePanel } from "./AttendancePanel";
 
 export function AdminDashboardPage() {
-  const { user } = useAuth();
-  const overview = useAuthenticatedResource(api.adminOverview, [user?.id]);
-  const upcoming = useAuthenticatedResource(
+  const overview = useAdminRead(api.adminOverview, "dashboard-overview");
+  const upcoming = useAdminRead(
     (signal) =>
       api.adminActivities(
         { page: 1, pageSize: 5, keyword: "", status: "UPCOMING" },
         signal,
       ),
-    [user?.id],
+    "dashboard-upcoming",
   );
   const indicators = [
     {
@@ -92,6 +91,7 @@ export function AdminDashboardPage() {
           ))}
         </div>
       )}
+      <AttendancePanel />
       <Card
         title="近期活动"
         extra={<Link to="/admin/activities">查看全部活动</Link>}

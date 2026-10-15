@@ -4,9 +4,9 @@ import { useAuth } from "../auth";
 import { readAccountResource } from "../authRequestGuard";
 import { useResource } from "../useResource";
 
-// Each list/detail owns its request scope. The render-time key protects the
-// interval before effect cleanup, including a queued 401 from an old drawer.
-export function useAdminAuditRead<T>(loader: (signal: AbortSignal) => Promise<T>, scope: string) {
+// Each admin read owns its request scope. The render-time key protects the
+// interval before effect cleanup, including a queued 401 from an old page.
+export function useAdminRead<T>(loader: (signal: AbortSignal) => Promise<T>, scope: string) {
   const auth = useAuth();
   const [revision, setRevision] = useState(0);
   const account = auth.captureAccountRequest();

@@ -10,7 +10,7 @@ import { EmptyState, ErrorState, LoadingState, PageHeading } from "../components
 import type { AdminAuditLogQuery, AuditLogActionFilter } from "../types";
 import { AdminAuditLogDetail } from "./AdminAuditLogDetail";
 import { AdminAuditLogList } from "./AdminAuditLogList";
-import { useAdminAuditRead } from "./useAdminAuditRead";
+import { useAdminRead } from "./useAdminRead";
 import "../adminAudit.css";
 
 export function AdminAuditLogsPage() {
@@ -25,7 +25,7 @@ export function AdminAuditLogsPage() {
   const [activityDraft, setActivityDraft] = useState(query.activityId === null ? "" : String(query.activityId));
   const [draftError, setDraftError] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ id: number; scope: string } | null>(null);
-  const resource = useAdminAuditRead(signal => api.adminAuditLogs(query, signal), `list:${pageKey}`);
+  const resource = useAdminRead(signal => api.adminAuditLogs(query, signal), `audit-list:${pageKey}`);
   const total = resource.data?.total ?? 0;
   const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
   const correctingPage = !!resource.data && !resource.loading && !resource.error && query.page > lastPage;

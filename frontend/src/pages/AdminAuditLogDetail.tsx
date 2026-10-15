@@ -2,10 +2,10 @@ import { Button, Descriptions, Drawer } from "antd";
 import { api, ApiError } from "../api";
 import { auditActionLabels, auditChangeText, auditFieldLabels, formatAuditDateTime } from "../auditLogPresentation";
 import { ErrorState, LoadingState } from "../components";
-import { useAdminAuditRead } from "./useAdminAuditRead";
+import { useAdminRead } from "./useAdminRead";
 
 function DetailContent({ id, scope }: { id: number; scope: string }) {
-  const resource = useAdminAuditRead(signal => api.adminAuditLog(id, signal), `${scope}:detail:${id}`);
+  const resource = useAdminRead(signal => api.adminAuditLog(id, signal), `${scope}:detail:${id}`);
   if (resource.loading) return <LoadingState />;
   if (resource.error) return resource.error instanceof ApiError && resource.error.status === 404
     ? <div role="alert"><p>操作记录不存在或已不可用。</p><Button onClick={resource.retry}>重新加载详情</Button></div>

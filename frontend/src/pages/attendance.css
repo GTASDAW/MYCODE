@@ -1,0 +1,162 @@
+.attendance-panel {
+  margin-bottom: 20px;
+}
+.attendance-panel h2 {
+  font-size: 18px;
+}
+.attendance-filter-form {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.attendance-filter-form .filter-field {
+  flex: 0 1 210px;
+  min-width: 180px;
+}
+.attendance-filter-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 1px;
+}
+.attendance-guidance {
+  margin: 16px 0 20px;
+  line-height: 1.7;
+}
+.attendance-statistics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.attendance-statistics .ant-statistic-title {
+  margin-bottom: 8px;
+}
+.attendance-statistics .ant-statistic-content {
+  font-size: 26px;
+}
+.attendance-statistics .ant-statistic-content-suffix {
+  font-size: 12px;
+}
+.attendance-summary-rate {
+  margin-bottom: 16px;
+}
+.attendance-summary-rate .attendance-rate > span {
+  font-size: 25px;
+  font-weight: 600;
+}
+.attendance-summary-rate .metadata {
+  margin-top: 8px;
+}
+.attendance-rate {
+  min-width: 0;
+}
+.attendance-rate .ant-progress {
+  margin: 6px 0 0;
+}
+.attendance-asof {
+  margin-bottom: 24px;
+  overflow-wrap: anywhere;
+}
+.attendance-effective-range {
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+}
+.attendance-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+}
+.attendance-list-heading h3 {
+  font-size: 16px;
+}
+.attendance-cell {
+  overflow-wrap: anywhere;
+}
+.attendance-pagination {
+  margin-top: 20px;
+}
+.attendance-mobile-list {
+  display: grid;
+  gap: 16px;
+}
+.attendance-mobile-list .ant-card-head-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.attendance-mobile-list p {
+  margin-bottom: 10px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.attendance-mobile-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0;
+}
+.attendance-mobile-counts dt {
+  color: #595959;
+}
+.attendance-mobile-counts dd {
+  margin: 6px 0 0;
+}
+.attendance-mobile-rate > span {
+  display: block;
+  color: #595959;
+  margin-bottom: 8px;
+}
+.attendance-mobile-actions {
+  margin-top: 16px;
+}
+@media (max-width: 1000px) {
+  .attendance-statistics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 767px) {
+  .attendance-panel > .ant-card > .ant-card-head {
+    padding: 0 16px;
+  }
+  .attendance-panel > .ant-card > .ant-card-body {
+    padding: 20px 16px;
+  }
+  .attendance-panel .ant-card-head-title {
+    white-space: normal;
+  }
+  .attendance-panel .ant-card-extra .ant-btn {
+    padding: 4px 8px;
+    font-size: 13px;
+  }
+  .attendance-filter-form .filter-field {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .attendance-filter-actions {
+    width: 100%;
+  }
+  .attendance-filter-actions .ant-btn {
+    flex: 1;
+  }
+  .attendance-statistics {
+    gap: 12px;
+  }
+  .attendance-statistics .ant-card-body {
+    padding: 14px 12px;
+  }
+  .attendance-statistics .ant-statistic-content {
+    font-size: 23px;
+  }
+  .attendance-pagination {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 0;
+  }
+  .attendance-pagination .ant-pagination-options {
+    display: inline-block;
+    margin-inline-start: 0;
+  }
+}

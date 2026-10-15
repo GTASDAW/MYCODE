@@ -99,6 +99,40 @@ export interface AdminOverview {
   availableSeats: number;
 }
 
+export interface AttendanceQuery {
+  from: string;
+  to: string;
+  page: number;
+  pageSize: number;
+}
+
+export interface AttendanceSummary {
+  totalActivities: number;
+  activeRegistrations: number;
+  checkedInRegistrations: number;
+  notCheckedInRegistrations: number;
+  checkInRate: number | null;
+}
+
+export interface AttendanceActivity {
+  id: number;
+  title: string;
+  location: string;
+  startsAt: string;
+  capacity: number;
+  activeRegistrations: number;
+  checkedInRegistrations: number;
+  notCheckedInRegistrations: number;
+  checkInRate: number | null;
+}
+
+export interface AttendancePage extends PageResult<AttendanceActivity> {
+  from: string;
+  to: string;
+  asOf: string;
+  summary: AttendanceSummary;
+}
+
 export interface PageResult<T> {
   items: T[];
   total: number;

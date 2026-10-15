@@ -22,6 +22,8 @@ import type {
   AdminAuditLog,
   AdminAuditLogDetail,
   AdminAuditLogQuery,
+  AttendancePage,
+  AttendanceQuery,
 } from "./types";
 
 interface CsrfToken {
@@ -304,6 +306,10 @@ export const api = {
     request<NotificationItem>(`/me/notifications/${id}/read`, { method: "POST", signal }),
   adminOverview: (signal?: AbortSignal) =>
     request<AdminOverview>("/admin/overview", { signal }),
+  adminAttendance: (query: AttendanceQuery, signal?: AbortSignal) =>
+    request<AttendancePage>(`/admin/attendance?${new URLSearchParams({
+      from: query.from, to: query.to, page: String(query.page), pageSize: String(query.pageSize),
+    })}`, { signal }),
   adminMonitoring: (signal?: AbortSignal) =>
     request<AdminMonitoring>("/admin/monitoring", { signal }),
   adminAuditLogs: (query: AdminAuditLogQuery, signal?: AbortSignal) => {

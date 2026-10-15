@@ -1,4 +1,4 @@
-import { formatDate } from "./date.ts";
+import { formatPreciseDateTime } from "./date.ts";
 import type { AuditLogAction, AuditLogField } from "./types";
 
 export const auditActionLabels: Record<AuditLogAction, string> = {
@@ -12,17 +12,8 @@ export const auditFieldLabels: Record<AuditLogField, string> = {
   checkedInAt: "签到时间（北京时间）",
 };
 
-const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
-  timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-});
-
 export function formatAuditDateTime(value: string): string {
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "时间不可用";
-  // Date preserves milliseconds only. Keep the server's original six decimal
-  // places so distinct operations within the same millisecond stay visible.
-  const fraction = value.match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] ?? "";
-  return `${formatDate(value)} ${timeFormatter.format(date)}.${fraction.padEnd(6, "0").slice(0, 6)}`;
+  return formatPreciseDateTime(value);
 }
 
 export function auditChangeText(field: AuditLogField, value: string | null): string {
