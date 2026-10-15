@@ -53,6 +53,7 @@ flowchart LR
 | `GET /api/activities/search` | 搜索、状态筛选、分页与匹配集合统计 | 可匿名调用，个人状态来自可信当前身份 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
+| `GET /api/admin/attendance` | 按北京时间开始日期筛选的当前签到分析，全量统计与逐场分页 | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/audit-logs` | 动作/活动筛选分页，只返回记录元数据 | 管理员 |
 | `GET /api/admin/audit-logs/{id}` | 操作快照与完整字段前后值 | 管理员 |
@@ -165,6 +166,12 @@ flowchart LR
 `ActivityService.create/edit/cancel` 和 `CheckInService.checkIn` 在原写事务调用 `AuditLogService`，追加使用 `MANDATORY`，失败使业务与记录一起回滚。每个新活动一条 `CREATE`；无变化编辑、重复取消和重复签到不追加，旧历史不回填。名称从事务内数据库取得并保存快照，白名单变化为完整 `string|null` 前后值，不保存请求体、密码或 Cookie。发布开始时间先规范为微秒，再验证落库值仍在未来。
 
 两个 GET 只允许 ADMIN。列表只查元数据，总数与分页共用只读 `REPEATABLE_READ` 快照，按操作时间与 ID 降序；详情才读取变化 JSON。页面将筛选分页写入 URL、按需打开只读抽屉，并以认证代次、请求作用域和取消信号保护成功与错误。记录没有更新或删除 API。V6 约束、独立外键边界、精确清理及源码验证路径见 [管理员操作记录指南](audit-log-guide.md)。
+
+## 活动签到分析
+
+管理概览保留原统计与近期活动，新增按北京时间开始日期筛选的当前签到进度。`AttendanceController → AttendanceService → AttendanceMapper` 在一次 UTC 微秒时刻和只读 `REPEATABLE_READ` 快照中执行全量聚合与当前页联表两次业务 SELECT；日期先转换为 UTC 半开区间，再对 `starts_at` 作范围比较，同时排除未开始和已取消活动。
+
+总量与每场的有效报名取真实 `ACTIVE` 记录，签到是其中的非空时间子集。整体比例按总签到除以总有效报名计算，零分母为 `null`，不平均各场百分比；没有有效报名的活动仍纳入活动场次。当前没有结束时间，未签到不能当作最终缺席，也不从复用的报名记录生成历史每日新增。参数、URL、真实查询证据与阅读路径见 [签到分析指南](attendance-guide.md)。
 
 ## Cookie Session 与 CSRF
 

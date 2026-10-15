@@ -86,9 +86,17 @@
 
 先沿 `SecurityConfiguration → AuditLogController → AuditLogService.search/detail → AuditLogMapper → V6` 说明仅 ADMIN、列表不读取长 JSON、总数和当前页共用只读快照。再沿 `ActivityService/CheckInService → AuditLogService → context/insert` 说明可信 ID、当前数据库名称快照、白名单字段、`MANDATORY` 与失败全部回滚；数据库三条独立外键不自动保证签到报名与活动相同，须指出业务归属查询。
 
-前端沿 `auditLogQuery → AdminAuditLogsPage → useAdminAuditRead → AdminAuditLogDetail` 跟踪 URL、抽屉、微秒时间与认证代次保护。对照 `AuditLogIntegrationTest` 的无变化/重复、长文快照、微秒未来边界、四类回滚及并发快照用例，以及 `e2e/audit-logs.spec.ts` 的真实读取和迟到成功/401 保护；实际执行结果仍看验证记录。
+前端沿 `auditLogQuery → AdminAuditLogsPage → useAdminRead → AdminAuditLogDetail` 跟踪 URL、抽屉、微秒时间与认证代次保护。对照 `AuditLogIntegrationTest` 的无变化/重复、长文快照、微秒未来边界、四类回滚及并发快照用例，以及 `e2e/audit-logs.spec.ts` 的真实读取和迟到成功/401 保护；实际执行结果仍看验证记录。
 
 **完成标准：** 能解释成功事件与请求日志的区别，说明旧记录为什么不随改名变化、失败为什么没有半条历史、为什么没有删除 API，以及测试清理为何先核对外部 actor 与报名归属，再按操作记录→通知→报名→活动→用户删除。
+
+## 补充：读懂签到分析与聚合口径
+
+先沿 `AttendanceController → AttendanceService → AttendanceMapper` 跟踪日期校验、北京时间到 UTC 半开区间、同一次 Clock 和只读快照，再比较全量聚合与分页联表。只有 `ACTIVE` 构成签到分母，没有有效报名的活动仍计入活动场次；整体比例按总签到除以总有效报名，不平均逐场百分比。
+
+从概览的独立签到分析模块跟踪日期草稿、URL、刷新和名单返回，确认加载/失败不伪装为 0，以及旧成功和旧 401 不能污染新认证代次。对照真实 MySQL 的北京跨日边界、并发签到快照、两次业务 SELECT 与实际计划；语句少不等于成本恒定或已测性能收益。详细阅读路径见 [签到分析指南](attendance-guide.md)。
+
+**完成标准：** 能解释当前签到进度与最终出勤结算的区别，说明为什么不从可变报名状态推造历史每日新增，以及 1/1 与 1/9 两场活动的整体比例为何为 20%。
 
 ## 检查点六：交付一个可以演示的作品
 

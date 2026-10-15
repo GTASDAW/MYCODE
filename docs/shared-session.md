@@ -77,6 +77,8 @@ V5 的签到时间与操作人在 MySQL 报名记录中保存，不使用 Sessio
 
 V6 操作记录同样存于共享 MySQL。A 成功发布、真实编辑、首次取消或签到后，B 可按 ADMIN 权限读取相同名称快照和完整字段变化；无变化、重复取消和重复签到不追加。操作人与目标名称从写事务中的数据库读取，不复制 Redis Session 中可能过期的昵称；记录与业务一起提交或回滚。重启保留历史不依赖登录是否仍有效，两个只读接口也不存 Redis 缓存。字段、MANDATORY 传播与独立外键边界见 [管理员操作记录指南](audit-log-guide.md)。
 
+`GET /api/admin/attendance` 也按 ADMIN 权限从共享 MySQL 聚合当前签到进度。A、B 与 Nginx 使用同一显式日期范围时可比较活动及全量统计；每次请求各有自己的 UTC `asOf` 和只读快照，不能把不同请求说成同一固定时刻。签到后重新读取可看到变化，重启不影响数据库记录；计算不依赖 Redis 缓存，详细口径见 [签到分析指南](attendance-guide.md)。
+
 ## 从代码中学习
 
 1. `backend/src/main/resources/application.yml` 保留默认 Cookie/闲置时限，关闭默认的 Redis Session 自动配置和 Redis 健康检查，避免本机默认模式依赖 Redis。

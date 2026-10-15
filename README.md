@@ -68,6 +68,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 
 后台“操作记录”按活动 ID 与操作类型筛选，支持分页、刷新、URL 条件与详情抽屉。成功创建、实际编辑、首次取消和首次签到与业务一起提交；详情完整展示字段前后值，活动标题与人员名称保留操作时快照。重复取消、重复签到或无变化编辑不新增，每次创建新活动各记一条；历史事件不补造，也没有修改或删除记录接口。事务、白名单和精确清理见 [管理员操作记录](docs/audit-log-guide.md)。
 
+管理概览的“活动签到分析”按北京时间开始日期筛选已开始、未取消的活动，展示全量有效报名、已签到、未签到与加权签到比例，并逐场比较和进入名单。筛选分页保存在 URL，没有有效报名时比例不适用；支持补录的当前进度不代表最终出勤结算。口径、查询快照和演示路径见 [活动签到分析](docs/attendance-guide.md)。
+
 ## Docker Compose 部署
 
 安装并启动 Docker 后，在项目根目录运行：
@@ -115,6 +117,7 @@ Redis 模式共享会话和登录/注册限流计数，报名、候补、人数�
 | `GET /api/activities`、`GET /api/activities/{id}` | 保留原数组列表、详情 | 公开 |
 | `GET /api/activities/search` | 搜索、状态筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
+| `GET /api/admin/attendance` | 按北京时间活动开始日期查看当前签到分析，全量统计与分页对比 | 管理员 |
 | `GET /api/admin/monitoring` | 当前实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/audit-logs` | 操作类型、活动 ID 筛选与分页，不返回长文本变更 | 管理员 |
 | `GET /api/admin/audit-logs/{id}` | 操作时快照与完整字段变更，缺失返回 404 | 管理员 |
@@ -222,6 +225,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [站内通知、事务事件与首次已读时间](docs/notification-guide.md)
 - [管理员签到、整场统计与 CSV 导出](docs/checkin-export-guide.md)
 - [管理员操作记录、字段快照与事务追溯](docs/audit-log-guide.md)
+- [活动签到分析、加权比例与日期快照](docs/attendance-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [真实桌面与手机界面展示](docs/showcase.md)
