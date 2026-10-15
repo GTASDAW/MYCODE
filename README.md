@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GTASDAW/MYCODE/actions/workflows/ci.yml)
 
-一个使用 **React + TypeScript 与 Java / Spring Boot** 的活动报名平台，覆盖管理员发布活动、用户报名与候补、站内通知、到场签到和名单导出。界面参考 Ant Design Pro，页面数据来自真实 Java 接口与 MySQL；当前仅在本地运行和演示。
+一个使用 **React + TypeScript 与 Java / Spring Boot** 的活动报名平台，覆盖管理员发布活动、用户报名与候补、站内通知、到场签到、名单导出和管理员操作追溯。界面参考 Ant Design Pro，页面数据来自真实 Java 接口与 MySQL；当前仅在本地运行和演示。
 
 快速了解：[真实界面展示](docs/showcase.md) · [项目讲解与简历素材](docs/interview-kit.md) · [五分钟业务演示](docs/demo-guide.md) · [架构与请求流程](docs/architecture.md)
 
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人；旧报名的签到字段为空，不补发旧事件或重置已有数据。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间与签到历史仍保留。
+脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录；不补造历史事件或重置已有数据。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
 
 ## 演示账号
 
@@ -52,7 +52,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 | 管理员 | `admin` | `Admin123!` |
 | 普通用户 | `demo` | `Demo123!` |
 
-管理员可以使用概览、活动管理、发布活动、报名名单和运行指标页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
+管理员可以使用概览、活动管理、发布活动、报名名单、操作记录和运行指标页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
 
 活动开始前，管理员可在详情或管理列表编辑标题、介绍和地点，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
 
@@ -65,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 管理员在活动报名名单中查看整场有效报名、已签到和未签到人数，按报名与签到状态共同筛选。活动开始后可手工确认有效报名者到场，首次时间和操作人保留，不提供撤销或自动截止。导出 CSV 包含全部符合条件的记录，最多 20,000 条，采用 UTF-8 BOM、北京时间与面向 Excel 查看用途的文本保护；空集合仅有表头。合同、事务、下载安全与演示见 [签到与 CSV 导出指南](docs/checkin-export-guide.md)。
 
 也可以从登录页进入“注册账号”，创建自己的普通用户。注册成功后需要登录；账号菜单中的“个人中心”可以修改昵称，登录名保持固定。昵称修改后当前页面同步更新，其他独立会话在下一次读取当前用户时取得最新资料。接口、安全规则和面试阅读路径见 [用户注册与个人中心](docs/account-guide.md)。
+
+后台“操作记录”按活动 ID 与操作类型筛选，支持分页、刷新、URL 条件与详情抽屉。成功创建、实际编辑、首次取消和首次签到与业务一起提交；详情完整展示字段前后值，活动标题与人员名称保留操作时快照。重复取消、重复签到或无变化编辑不新增，每次创建新活动各记一条；历史事件不补造，也没有修改或删除记录接口。事务、白名单和精确清理见 [管理员操作记录](docs/audit-log-guide.md)。
 
 ## Docker Compose 部署
 
@@ -114,6 +116,8 @@ Redis 模式共享会话和登录/注册限流计数，报名、候补、人数�
 | `GET /api/activities/search` | 搜索、状态筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
 | `GET /api/admin/monitoring` | 当前实例的请求、耗时和连接池快照 | 管理员 |
+| `GET /api/admin/audit-logs` | 操作类型、活动 ID 筛选与分页，不返回长文本变更 | 管理员 |
+| `GET /api/admin/audit-logs/{id}` | 操作时快照与完整字段变更，缺失返回 404 | 管理员 |
 | `GET /api/admin/activities` | 搜索、状态筛选、分页管理列表 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 分页、按报名与签到状态查看名单及整场签到统计 | 管理员 |
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 确认已开始活动的有效报名者签到，保留首次记录 | 管理员且需要 CSRF |
@@ -141,6 +145,7 @@ Redis 模式共享会话和登录/注册限流计数，报名、候补、人数�
 - 重复报名、重复取消在活动开放期间返回当前结果，不会重复改变人数。
 - 实际候补递补生成一条本人通知；整场取消只通知当时有效报名者与候补者，和业务变更在同一事务内提交或回滚。再次真正递补产生新事件，重复请求不增加消息；标记已读保留首次时间。
 - 签到在独立 `READ_COMMITTED` 事务中先锁同一活动，再核对报名归属、活动与有效状态；只保存首次签到时间和可信管理员 ID，不改变人数、报名更新时间、候补排序或通知。名单与导出使用只读快照；未签到筛选仅包含 `ACTIVE`，候补和已取消记录显示“不适用”。
+- 四类管理员操作通过业务事务追加审计，失败一同回滚；身份来自可信 Session，名称从数据库读取并保存快照。编辑在原活动锁后精确比较规范化 Java 字符串，无变化不更新；报名热路径仍用原精简锁定投影。
 - 个人报名分页的 `total` 按状态筛选，四项 `summary` 统计本人全部历史；列表、总数和统计共用只读 `REPEATABLE_READ` 快照与一次 UTC 微秒时刻。每项的报名 ID 与内嵌活动 ID 不同，本人签到时间来自 V5，查询不改变业务写流程。
 - 时间在接口中使用 UTC，在页面中按北京时间显示。
 
@@ -197,7 +202,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
-这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，当前 V5 再增加签到审计字段，脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V5 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
+这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V6 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -205,7 +210,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看四张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史及 V5 签到审计的增量迁移；个人报名查询复用 V5，不新增迁移。
+3. 从 `backend/src/main/resources/db/migration` 看五张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段及 V6 管理员操作记录的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [四阶段学习指南](docs/learning-guide.md)
@@ -216,6 +221,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [我的报名、本人签到与联表查询](docs/my-registrations-guide.md)
 - [站内通知、事务事件与首次已读时间](docs/notification-guide.md)
 - [管理员签到、整场统计与 CSV 导出](docs/checkin-export-guide.md)
+- [管理员操作记录、字段快照与事务追溯](docs/audit-log-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [真实桌面与手机界面展示](docs/showcase.md)

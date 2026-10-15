@@ -12,7 +12,7 @@
 4. 只有 `ACTIVE` 有效报名可签到；`WAITING`、`CANCELLED` 不适用。
 5. 首次请求保存 `checked_in_at` 与可信的 `checked_in_by`，随后读取名单行返回。重复或并发请求保留首次时间、操作人 ID，不覆盖为后来的管理员。
 
-签到只更新两个审计字段，保留报名状态、`created_at`、`updated_at`、人数、候补队列及通知。它与报名、用户取消、组织者取消和编辑共享同一活动主键锁，不额外锁不存在的报名键。任何数据库失败回滚本次写入。管理员昵称是当前数据库资料，可能随资料修改变化；审计身份由保存的用户 ID 指向，不能把昵称当成永久身份快照。
+签到在报名表只更新两个签到字段，并在同一事务追加 V6 的首次 `CHECK_IN` 操作记录；保留报名状态、`created_at`、`updated_at`、人数、候补队列及通知。它与报名、用户取消、组织者取消和编辑共享同一活动主键锁，不额外锁不存在的报名键。包括操作记录插入在内的任何数据库失败都回滚本次写入。名单和 CSV 中管理员昵称是当前数据库资料，可能随资料修改变化，首次身份由保存的用户 ID 指向；V6 操作记录另保存当时的操作人与目标用户名称快照，不随之后改名变化。两者不能混为同一种昵称口径，详见 [管理员操作记录指南](audit-log-guide.md)。
 
 V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DATETIME(6)` 和用户外键。CHECK 要求两字段同时为空，或同时非空且状态为 `ACTIVE`；外键 `ON DELETE RESTRICT` 防止删除被签到历史引用的用户。旧记录保持两个字段为空，没有补签到或覆盖旧迁移。约束不负责验证管理员角色或开始时间，这些业务判断由可信服务层完成。
 
@@ -89,13 +89,13 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 
 ## 阅读、验证与面试演示
 
-按一次签到请求阅读 `AdminRegistrationsPage → AdminRegistrationTable/useRosterActions → api.ts → AdminController → CheckInService → ActivityMapper/AdminMapper → V5`。随后沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 比较同快照的统计、过滤、排序和完整导出。
+按一次签到请求阅读 `AdminRegistrationsPage → AdminRegistrationTable/useRosterActions → api.ts → AdminController → CheckInService → ActivityMapper/AdminMapper → V5`，再沿 `CheckInService → AuditLogService.checkedIn → AuditLogMapper → V6` 查看首次事件、当前数据库名称快照与 `MANDATORY` 同事务回滚；重复签到在追加之前返回首次结果。随后沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 比较同快照的统计、过滤、排序和完整导出。
 
 `CheckInIntegrationTest` 使用真实 MySQL，覆盖开始时间边界、等待活动锁期间越过开始时间、可信身份与 CSRF、跨活动报名 ID、重复与并发首次信息、异常回滚、V5 约束、两类筛选、整场统计及并发中的读取快照。`RegistrationCsvTest` 验证编码、字段转义与文本保护；导出边界检查 20,000 条成功和超限拒绝，不用 H2 替代锁或快照行为。
 
 前端 `api.test.mjs` 验证文件响应、错误编号、身份与分页剔除、CSRF 重试边界和取消信号；`checkin.test.mjs` 验证资格、对象 URL 清理和同账号重登后的旧下载阻断。`e2e/checkin.spec.ts` 用本轮准确归属记录覆盖桌面/手机真实签到、筛选统计、末页修正、下载内容、网络失败、迟到成功/错误与账号切换。默认 Compose 与 Redis 双实例验证针对真实服务及数据库，不以模拟序列化代替跨实例行为。
 
-清理先核对活动归属和账号外部引用，包含 `checked_in_by`；若本轮账号为外部活动执行过签到，拒绝整次清理。仅通过证明后在同一事务按通知、报名、活动、用户顺序删除本轮记录。当前环境核验 V5；历史 V2 性能实验保留独立合同，不把新增签到/通知业务写成历史 SQL 优化收益。
+清理先核对活动归属和账号外部引用，包含 `checked_in_by` 与操作记录 `actor_user_id`；若本轮账号为外部活动执行过签到或留有操作记录，拒绝整次清理。另检查操作记录的报名与所属活动一致，异常跨活动绑定在任何 DELETE 前拒绝；原管理员作为本轮活动 actor 是合法引用，原账号与其他历史保留。仅通过证明后在同一事务按操作记录、通知、报名、活动、用户顺序删除本轮记录。当前环境核验 V1–V6、五张业务表与签到列；历史 V2 性能实验只查询原三表，不读取新增签到、通知或操作记录，独立合同保持，不把当前业务写成历史 SQL 优化收益。归属保护与阅读路径见 [管理员操作记录指南](audit-log-guide.md)。
 
 具体执行数量、浏览器下载是否通过及 CI 结果统一见 [验证记录](verification.md)。复现与精确清理见 [交付指南](delivery-guide.md)，跨实例身份及持久化见 [共享 Session 指南](shared-session.md)。测试代码存在与实际运行通过需要分别说明。
 

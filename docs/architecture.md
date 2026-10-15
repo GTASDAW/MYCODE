@@ -1,6 +1,6 @@
 # 活动报名平台：架构与请求流程
 
-这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，活动开始后管理员确认到场并导出名单。系统在并发请求下维护正确人数、递补队列、取消历史、站内通知与首次签到信息。
+这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，活动开始后管理员确认到场并导出名单。系统在并发请求下维护正确人数、递补队列、取消历史、站内通知、首次签到和管理员操作记录。
 
 ## 技术分工
 
@@ -13,7 +13,7 @@
 | 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
 | 业务与事务 | Java 服务层、Spring 事务 | 报名规则、取消规则、事务边界 |
 | 数据访问 | MyBatis Spring Boot Starter 4.0.0 | 执行明确的 SQL，包括行锁查询 |
-| 数据存储 | MySQL 8.4、InnoDB | 用户、活动、报名记录、通知历史以及约束 |
+| 数据存储 | MySQL 8.4、InnoDB | 用户、活动、报名记录、通知与管理员操作历史以及约束 |
 | 运行环境 | Maven Wrapper、npm、Docker Compose、Nginx | 构建、启动、同源部署 |
 
 ```mermaid
@@ -31,12 +31,13 @@ flowchart LR
 
 开发时，统一入口是 Vite：页面发出相对路径的 `/api` 请求，由 Vite 代理到 Java 服务。部署时，统一入口是 Nginx：它提供前端静态文件，并把 `/api` 请求转发给后端。两种方式都让浏览器通过同一个来源访问页面和接口。
 
-## 四张业务表
+## 五张业务表
 
 - **用户**：保存唯一登录名、密码哈希、展示名和角色。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名和昵称修改请求不能自行指定操作人。
 - **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
 - **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5 增加成对的可空签到时间、操作人；非空时必须为 `ACTIVE`，操作人关联用户且外键限制删除。
 - **站内通知**：V4 保存收件人、活动、事件类型、当时标题、公开取消原因、UTC 创建与首次已读时间。只在实际递补或首次活动取消时写入，同业务事务提交；外键保留历史，真正再次递补可产生新记录。
+- **管理员操作记录**：V6 保存发布、真实编辑、首次取消和首次签到的动作、活动与名称快照、可信操作人、可空签到目标、UTC 微秒时间和完整字段变化。与业务同事务追加，不回填旧历史；活动、操作人、报名分别为限制删除的独立外键，签到同活动归属由业务查询检查。
 
 需要始终满足：活动的当前人数等于该活动的 `ACTIVE` 报名记录数，并且在 `0` 到总名额之间；`WAITING` 记录不占用名额。唯一约束保证同一个用户不会有两条报名记录；事务和行锁保证并发操作下人数正确，候补记录按排队顺序递补。
 
@@ -53,6 +54,8 @@ flowchart LR
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
+| `GET /api/admin/audit-logs` | 动作/活动筛选分页，只返回记录元数据 | 管理员 |
+| `GET /api/admin/audit-logs/{id}` | 操作快照与完整字段前后值 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 两类状态筛选分页与整场签到统计 | 管理员 |
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 活动开始后为有效报名者保存首次签到 | 管理员，需 CSRF |
@@ -102,7 +105,7 @@ flowchart LR
 
 ## 管理查询与统计口径
 
-管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
+管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations`、操作记录 `/admin/audit-logs` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
 
 `GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）和 `status`（默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。
 
@@ -151,11 +154,17 @@ flowchart LR
 
 ## 管理员签到与 CSV
 
-`AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务。先锁活动主键，普通读取该活动内的报名，再核对取消状态、取得锁后的 UTC 微秒时间与 `ACTIVE` 资格。活动开始时即开放签到，没有结束时间或自动截止；重复请求保留首次时间和可信管理员 ID。签到只写 V5 的两个审计字段，不增减人数、不修改报名状态或更新时间、不递补或写通知，第一版不提供撤销。
+`AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务。先锁活动主键，普通读取该活动内的报名，再核对取消状态、取得锁后的 UTC 微秒时间与 `ACTIVE` 资格。活动开始时即开放签到，没有结束时间或自动截止；重复请求保留首次时间和可信管理员 ID。报名表只改 V5 的两个签到字段，并在同事务追加首次 `CHECK_IN` 操作记录；不增减人数、不修改报名状态或更新时间、不递补或写通知，第一版不提供撤销。
 
 名单导出复用两类筛选与原排序，在只读快照内先计数、再取全部匹配记录；超过 20,000 条返回 413 `EXPORT_TOO_LARGE`，不会截断。响应为 UTF-8 BOM、CRLF、双引号转义的 `text/csv;charset=UTF-8`，文件名 `activity-{id}-registrations.csv`，`Cache-Control: no-store`；空集合仅表头。时间转换为北京时间，自由文本及 ID 在引号内加 Tab，面向 Excel 人工查看而非无损原始数据导入。
 
 前端统一 `api.ts` 增加文件响应分支：非成功响应仍解析 JSON 与请求编号，成功文件仅接受 CSV MIME。页面读取、签到和下载复用认证代次与取消信号，进一步核对当前筛选、页码及刷新版本，旧响应不能下载文件、显示旧提示或使新会话退出；临时链接与对象 URL 最终清理。具体错误、输入边界和阅读路径见 [签到与导出指南](checkin-export-guide.md)。两个新接口使用固定日志/指标路由，名单和文件内容不进入请求日志。
+
+## 管理员操作记录
+
+`ActivityService.create/edit/cancel` 和 `CheckInService.checkIn` 在原写事务调用 `AuditLogService`，追加使用 `MANDATORY`，失败使业务与记录一起回滚。每个新活动一条 `CREATE`；无变化编辑、重复取消和重复签到不追加，旧历史不回填。名称从事务内数据库取得并保存快照，白名单变化为完整 `string|null` 前后值，不保存请求体、密码或 Cookie。发布开始时间先规范为微秒，再验证落库值仍在未来。
+
+两个 GET 只允许 ADMIN。列表只查元数据，总数与分页共用只读 `REPEATABLE_READ` 快照，按操作时间与 ID 降序；详情才读取变化 JSON。页面将筛选分页写入 URL、按需打开只读抽屉，并以认证代次、请求作用域和取消信号保护成功与错误。记录没有更新或删除 API。V6 约束、独立外键边界、精确清理及源码验证路径见 [管理员操作记录指南](audit-log-guide.md)。
 
 ## Cookie Session 与 CSRF
 
