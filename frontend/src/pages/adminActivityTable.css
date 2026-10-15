@@ -1,0 +1,26 @@
+.admin-activity-mobile-list {
+  display: grid;
+  gap: 16px;
+}
+.admin-activity-mobile-list .ant-card-head-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.admin-activity-mobile-list p {
+  margin-bottom: 10px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.admin-activity-mobile-actions {
+  margin-top: 8px;
+}
+.admin-activity-mobile-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
+  margin-top: 20px;
+}
+.admin-activity-mobile-pagination .ant-pagination-options {
+  display: inline-block;
+  margin-inline-start: 0;
+}

@@ -106,6 +106,37 @@ export interface PageResult<T> {
   pageSize: number;
 }
 
+export type AuditLogAction = "CREATE" | "EDIT" | "CANCEL" | "CHECK_IN";
+export type AuditLogActionFilter = "ALL" | AuditLogAction;
+
+export interface AdminAuditLogQuery {
+  action: AuditLogActionFilter;
+  activityId: number | null;
+  page: number;
+  pageSize: number;
+}
+
+export interface AdminAuditLog {
+  id: number;
+  action: AuditLogAction;
+  activityId: number;
+  activityTitle: string;
+  actorUserId: number;
+  actorUsername: string;
+  actorDisplayName: string;
+  registrationId: number | null;
+  targetUsername: string | null;
+  targetDisplayName: string | null;
+  occurredAt: string;
+}
+
+export type AuditLogField = "title" | "description" | "location" | "startsAt" | "capacity" |
+  "cancelledAt" | "cancellationReason" | "checkedInAt";
+
+export interface AdminAuditLogDetail extends AdminAuditLog {
+  changes: { field: AuditLogField; before: string | null; after: string | null }[];
+}
+
 export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING" | "CANCELLED";
 export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";
 export type CheckInFilter = "ALL" | "CHECKED_IN" | "NOT_CHECKED_IN";

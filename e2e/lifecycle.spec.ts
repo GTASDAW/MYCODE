@@ -199,7 +199,7 @@ test('管理员发布编辑并取消活动，有效报名与候补成为保留�
     const onlyCancelled = managementResponse(page, edit.title, 'CANCELLED');
     await selectOption(page, '活动状态', '已取消');
     expect((await (await onlyCancelled).json()).items[0]).toMatchObject({ id: original.id, cancelled: true });
-    const row = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: edit.title });
+    const row = page.locator('[data-activity-id]').filter({ hasText: edit.title });
     await expect(row).toContainText('已取消');
     await expect(row.getByRole('link', { name: '编辑活动', exact: true })).toHaveCount(0);
     await page.goto(`/admin/activities/${original.id}/registrations`);

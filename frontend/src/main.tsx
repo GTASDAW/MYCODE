@@ -20,6 +20,7 @@ import { AdminDashboardPage } from "./pages/AdminDashboardPage";
 import { AdminActivitiesPage } from "./pages/AdminActivitiesPage";
 import { AdminRegistrationsRoute } from "./pages/AdminRegistrationsPage";
 import { AdminMonitoringPage } from "./pages/AdminMonitoringPage";
+import { AdminAuditLogsPage } from "./pages/AdminAuditLogsPage";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -89,6 +90,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                     </ProtectedRoute>
                   }
                 />
+                <Route path="admin/audit-logs" element={
+                  <ProtectedRoute admin><AdminAuditLogsPage /></ProtectedRoute>
+                } />
                 <Route
                   path="admin/activities"
                   element={

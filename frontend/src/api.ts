@@ -19,6 +19,9 @@ import type {
   NotificationQuery,
   NotificationPage,
   NotificationItem,
+  AdminAuditLog,
+  AdminAuditLogDetail,
+  AdminAuditLogQuery,
 } from "./types";
 
 interface CsrfToken {
@@ -303,6 +306,16 @@ export const api = {
     request<AdminOverview>("/admin/overview", { signal }),
   adminMonitoring: (signal?: AbortSignal) =>
     request<AdminMonitoring>("/admin/monitoring", { signal }),
+  adminAuditLogs: (query: AdminAuditLogQuery, signal?: AbortSignal) => {
+    const params = new URLSearchParams({
+      page: String(query.page), pageSize: String(query.pageSize), action: query.action,
+    });
+    if (query.activityId !== null && query.activityId !== undefined)
+      params.set("activityId", String(query.activityId));
+    return request<PageResult<AdminAuditLog>>(`/admin/audit-logs?${params}`, { signal });
+  },
+  adminAuditLog: (id: number, signal?: AbortSignal) =>
+    request<AdminAuditLogDetail>(`/admin/audit-logs/${encodeURIComponent(id)}`, { signal }),
   adminActivities: (query: AdminActivityQuery, signal?: AbortSignal) =>
     request<PageResult<Activity>>(
       `/admin/activities?${new URLSearchParams({

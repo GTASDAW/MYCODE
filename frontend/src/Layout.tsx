@@ -16,6 +16,7 @@ import {
   DashboardOutlined,
   DownOutlined,
   FileAddOutlined,
+  HistoryOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -66,6 +67,11 @@ export function Layout() {
             to: "/admin/monitoring",
             label: "运行指标",
             icon: <AreaChartOutlined aria-hidden="true" />,
+          },
+          {
+            to: "/admin/audit-logs",
+            label: "操作记录",
+            icon: <HistoryOutlined aria-hidden="true" />,
           },
         ]
       : []),

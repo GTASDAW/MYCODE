@@ -665,3 +665,54 @@ test('concurrent initialization refreshes retain their shared CSRF fetch and sup
   assert.equal(writeToken, 'shared-initial');
   assert.equal(tokenFetches, 1);
 });
+
+test('audit list and detail reads send only approved criteria, preserve their metadata and never request CSRF', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const item = { id: 81, action: 'CHECK_IN', activityId: 42, activityTitle: '活动当时名称', actorUserId: 1,
+    actorUsername: 'admin', actorDisplayName: '当时昵称', registrationId: 101, targetUsername: 'demo',
+    targetDisplayName: '参与者当时昵称', occurredAt: '2030-01-01T08:00:00.123456Z' };
+  const page = { items: [item], total: 23, page: 2, pageSize: 10 };
+  const detail = { ...item, changes: [{ field: 'checkedInAt', before: null, after: item.occurredAt }] };
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url.includes('/81') ? detail : page);
+  };
+  assert.deepEqual(await api.adminAuditLogs({ action: 'CHECK_IN', page: 2, pageSize: 10, activityId: 42, userId: 999, actorId: 888 }, controller.signal), page);
+  assert.deepEqual(await api.adminAuditLog(81, controller.signal), detail);
+  assert.deepEqual(Object.fromEntries(new URL(calls[0].url, 'http://localhost').searchParams),
+    { page: '2', pageSize: '10', action: 'CHECK_IN', activityId: '42' });
+  assert.equal(calls[1].url, '/api/admin/audit-logs/81');
+  await api.adminAuditLogs({ action: 'ALL', page: 1, pageSize: 10, activityId: null });
+  assert.equal(new URL(calls[2].url, 'http://localhost').searchParams.has('activityId'), false);
+  assert.equal(calls.length, 3);
+  for (const { options } of calls) {
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(options.headers.get('X-CSRF-TOKEN'), null);
+    assert.equal(options.body, undefined);
+    assert.equal(options.method, undefined);
+  }
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[1].options.signal, controller.signal);
+});
+
+test('audit authentication, permission and missing-record errors retain request IDs without replaying reads', async () => {
+  const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+  for (const [status, code] of [[401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [404, 'AUDIT_LOG_NOT_FOUND'], [500, 'INTERNAL_ERROR']]) {
+    const { api } = await freshApi();
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return response(status, { code, message: '记录读取失败' }, { 'X-Request-Id': requestId });
+    };
+    await assert.rejects(api.adminAuditLog(81), error => error.status === status && error.code === code && error.requestId === requestId);
+    assert.equal(calls, 1);
+  }
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  controller.abort();
+  globalThis.fetch = async () => assert.fail('cancelled audit request must not start');
+  await assert.rejects(api.adminAuditLog(81, controller.signal), error => error.name === 'AbortError');
+  await assert.rejects(api.adminAuditLogs({ action: 'ALL', page: 1, pageSize: 10, activityId: null }, controller.signal), error => error.name === 'AbortError');
+});

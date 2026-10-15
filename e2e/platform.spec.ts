@@ -396,9 +396,9 @@ test('管理概览显示真实统计，桌面侧栏和手机抽屉导航可用�
     await expect.poll(async () => (await value.innerText()).replace(/[\s,]/g, '')).toBe(String(overview[key]));
   }
   const upcoming = await (await page.request.get('/api/admin/activities?page=1&pageSize=5&keyword=&status=UPCOMING')).json();
-  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(upcoming.items.length);
+  await expect(page.locator('[data-activity-id]')).toHaveCount(upcoming.items.length);
   for (const activity of upcoming.items) {
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: activity.title })).toBeVisible();
+    await expect(page.locator('[data-activity-id]').filter({ hasText: activity.title })).toBeVisible();
   }
   await noDocumentOverflow(page);
   await capture(page, testInfo, 'admin-dashboard');
@@ -452,9 +452,9 @@ test('活动管理使用真实字面搜索、状态和分页，筛选回到第�
     expect(response.ok()).toBeTruthy();
     const result = await response.json();
     expect(result.page).toBe(1);
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(result.items.length);
+    await expect(page.locator('[data-activity-id]')).toHaveCount(result.items.length);
     for (const activity of result.items) {
-      await expect(page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: activity.title })).toBeVisible();
+      await expect(page.locator('[data-activity-id]').filter({ hasText: activity.title })).toBeVisible();
     }
     return result;
   }
@@ -469,8 +469,8 @@ test('活动管理使用真实字面搜索、状态和分页，筛选回到第�
   expect(second.page).toBe(2);
   expect(second.items).toHaveLength(1);
   expect(first.items.map((item: ActivityResponse) => item.id).includes(second.items[0].id)).toBeFalsy();
-  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(1);
-  await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toContainText(second.items[0].title);
+  await expect(page.locator('[data-activity-id]')).toHaveCount(1);
+  await expect(page.locator('[data-activity-id]')).toContainText(second.items[0].title);
 
   const filters = [
     { status: 'FULL', label: '已满员', total: 1 },
@@ -487,7 +487,7 @@ test('活动管理使用真实字面搜索、状态和分页，筛选回到第�
     const result = await response.json();
     expect(result.page).toBe(1);
     expect(result.total).toBe(filter.total);
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(result.items.length);
+    await expect(page.locator('[data-activity-id]')).toHaveCount(result.items.length);
     if (filter.total === 0) await expect(page.getByText('暂无符合条件的活动', { exact: true })).toBeVisible();
   }
   const byLocation = await search(location);
@@ -588,20 +588,20 @@ test('相同条件查询刷新真实人数，结果减少时自动回到有效�
     await page.getByRole('textbox', { name: '搜索活动', exact: true }).fill(prefix);
     await page.getByRole('button', { name: '查询', exact: true }).click();
     expect((await (await initial).json()).total).toBe(11);
-    const firstRow = page.locator('.ant-table-tbody tr.ant-table-row').filter({ hasText: fixtures[0].title });
-    await expect(firstRow.getByRole('cell', { name: '0 / 1', exact: true })).toBeVisible();
+    const firstRow = page.locator('[data-activity-id]').filter({ hasText: fixtures[0].title });
+    await expect(firstRow.getByText(/^(?:有效报名：)?0 \/ 1$/)).toBeVisible();
     await writeApi(participant, `/api/activities/${fixtures[0].id}/registration`, 'POST');
     const joined = managementResponse(page, prefix);
     await page.getByRole('button', { name: '查询', exact: true }).click();
     const joinedResult = await (await joined).json();
     expect(joinedResult.page).toBe(1);
     expect(joinedResult.items.find((activity: ActivityResponse) => activity.id === fixtures[0].id).registeredCount).toBe(1);
-    await expect(firstRow.getByRole('cell', { name: '1 / 1', exact: true })).toBeVisible();
+    await expect(firstRow.getByText(/^(?:有效报名：)?1 \/ 1$/)).toBeVisible();
     await writeApi(participant, `/api/activities/${fixtures[0].id}/registration`, 'DELETE');
     const cancelled = managementResponse(page, prefix);
     await page.getByRole('button', { name: '查询', exact: true }).click();
     expect((await (await cancelled).json()).page).toBe(1);
-    await expect(firstRow.getByRole('cell', { name: '0 / 1', exact: true })).toBeVisible();
+    await expect(firstRow.getByText(/^(?:有效报名：)?0 \/ 1$/)).toBeVisible();
 
     const open = managementResponse(page, prefix, 'OPEN');
     await selectOption(page, '活动状态', '报名中');
@@ -611,14 +611,14 @@ test('相同条件查询刷新真实人数，结果减少时自动回到有效�
     const last = await (await lastPage).json();
     expect(last.items).toHaveLength(1);
     expect(last.items[0].id).toBe(fixtures[10].id);
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(1);
+    await expect(page.locator('[data-activity-id]')).toHaveCount(1);
 
     // Retain the real total=11 in the browser, then remove the last OPEN result
     // through an isolated user's real API call before requesting the old page 2.
     const back = managementResponse(page, prefix, 'OPEN', 1);
     await page.locator('.ant-pagination-item[title="1"]').click();
     expect((await (await back).json()).total).toBe(11);
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(10);
+    await expect(page.locator('[data-activity-id]')).toHaveCount(10);
     await writeApi(participant, `/api/activities/${fixtures[10].id}/registration`, 'POST');
     const outsidePage = managementResponse(page, prefix, 'OPEN', 2);
     const correctedPage = managementResponse(page, prefix, 'OPEN', 1);
@@ -631,7 +631,7 @@ test('相同条件查询刷新真实人数，结果减少时自动回到有效�
     expect(corrected.page).toBe(1);
     expect(corrected.total).toBe(10);
     expect(corrected.items).toHaveLength(10);
-    await expect(page.locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(10);
+    await expect(page.locator('[data-activity-id]')).toHaveCount(10);
     await expect(page.locator('.ant-pagination-item-active')).toHaveAttribute('title', '1');
     const browserUser = await (await page.request.get('/api/auth/me')).json();
     expect(browserUser.role).toBe('ADMIN');
