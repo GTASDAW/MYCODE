@@ -92,8 +92,25 @@ async function choose(page: Page, label: string, option: string) {
 
 async function capture(page: Page, info: TestInfo, name: string) {
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+  const dialog = page.getByRole('dialog', { name: '操作记录详情', exact: true });
+  const hasDialog = await dialog.isVisible();
+  if (hasDialog) {
+    await expect.poll(() => dialog.evaluate(element => {
+      const wrapper = element.closest('.ant-drawer-content-wrapper') ?? element;
+      const rect = wrapper.getBoundingClientRect();
+      const running = wrapper.getAnimations({ subtree: true }).some(animation => animation.playState === 'running');
+      return !running && rect.x >= -1 && rect.y >= -1 && rect.right <= innerWidth + 1 && rect.bottom <= innerHeight + 1
+        && rect.width > 0 && rect.height > 0;
+    })).toBeTruthy();
+    await expect.poll(() => dialog.evaluate(element => {
+      const body = element.querySelector('.ant-drawer-body') ?? element;
+      return body.scrollWidth <= body.clientWidth + 1;
+    })).toBeTruthy();
+  }
   const path = info.outputPath(`${name}.png`);
-  await page.screenshot({ path, fullPage: true });
+  // A fixed drawer belongs to the visible viewport; full-page screenshots can
+  // stitch it onto a scrolled background and create a misleading position.
+  await page.screenshot({ path, fullPage: !hasDialog });
   await info.attach(name, { path, contentType: 'image/png' });
 }
 
