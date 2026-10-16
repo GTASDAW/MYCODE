@@ -42,6 +42,8 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -169,10 +171,15 @@ class PasswordChangeIntegrationTest {
             long id = createUser(role, PASSWORD); long other = createUser("USER", PASSWORD);
             var before = users.findById(id); var otherBefore = accountState(other);
             var session = login(id, PASSWORD);
+            String originalSessionId = session.getId();
+            var admittedContext = (org.springframework.security.core.context.SecurityContext) session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
+            var admittedAuthentication = admittedContext.getAuthentication();
             var response = mvc.perform(at(post(PATH).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("currentPassword", PASSWORD, "newPassword", NEXT, "userId", other, "id", other, "role", "ADMIN"))), source()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true)).andReturn().getResponse();
-            assertThat(session.isInvalid()).isTrue();
+            assertAnonymousSession(session);
+            assertThat(admittedContext.getAuthentication() == admittedAuthentication)
+                .as("Already admitted requests retain their original authentication object").isTrue();
             assertThat(response.getHeaders("Set-Cookie").stream().noneMatch(value -> value.contains("JSESSIONID=") && value.contains("Max-Age=0")))
                 .as("Password change must not send a session cookie deletion").isTrue();
             var after = users.findById(id);
@@ -180,7 +187,12 @@ class PasswordChangeIntegrationTest {
             assertThat(after.passwordHash().equals(before.passwordHash())).isFalse(); assertThat(encoder.matches(NEXT, after.passwordHash())).isTrue();
             assertThat(after.username()).isEqualTo(before.username()); assertThat(after.displayName()).isEqualTo(before.displayName()); assertThat(after.role()).isEqualTo(role);
             assertThat(accountState(other)).isEqualTo(otherBefore);
-            login(id, NEXT);
+            mvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+            var loggedInAgain = mvc.perform(at(post("/api/auth/login").session(session).with(csrf())
+                .param("username", ownedUsers.get(id)).param("password", NEXT), source())).andExpect(status().isOk()).andReturn();
+            assertThat(loggedInAgain.getRequest().getSession(false).getId().equals(originalSessionId))
+                .as("Reauthentication rotates the retained anonymous session ID").isFalse();
             mvc.perform(at(post("/api/auth/login").with(csrf()).param("username", ownedUsers.get(id)).param("password", PASSWORD), source()))
                 .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
             assertSafeOutput(output, PASSWORD, NEXT, after.passwordHash());
@@ -234,11 +246,11 @@ class PasswordChangeIntegrationTest {
         jdbc.update("UPDATE activities SET registered_count=1 WHERE id=?", activity.id);
         passwords.change(principal(id), new ChangePasswordRequest(PASSWORD, NEXT));
         mvc.perform(get("/api/auth/me").session(first)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("SESSION_REVOKED"));
-        assertThat(first.isInvalid()).isTrue();
+        assertAnonymousSession(first);
         mvc.perform(get("/api/me/registrations").session(second)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("SESSION_REVOKED"));
         mvc.perform(get("/api/activities/" + activity.id).session(publicSession)).andExpect(status().isOk())
             .andExpect(jsonPath("$.registrationStatus").value(org.hamcrest.Matchers.nullValue()));
-        assertThat(publicSession.isInvalid()).isTrue();
+        assertAnonymousSession(publicSession);
     }
 
     @Test void legacySerializedNullVersionSessionCannotEnterProtectedBusinessCode() throws Exception {
@@ -249,7 +261,7 @@ class PasswordChangeIntegrationTest {
         var session = new MockHttpSession();
         session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, new SecurityContextImpl(authentication));
         mvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("SESSION_REVOKED"));
-        assertThat(session.isInvalid()).isTrue(); assertThat(users.findById(id).credentialVersion()).isZero();
+        assertAnonymousSession(session); assertThat(users.findById(id).credentialVersion()).isZero();
     }
 
     @Test void staleSessionCsrfReadReturnsRevokedWithoutCookieAndExplicitAnonymousReadCreatesFreshToken() throws Exception {
@@ -258,7 +270,8 @@ class PasswordChangeIntegrationTest {
         passwords.change(principal(id), new ChangePasswordRequest(PASSWORD, NEXT));
         var revoked = mvc.perform(get("/api/auth/csrf").session(session)).andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value("SESSION_REVOKED")).andReturn();
-        assertThat(revoked.getRequest().getSession(false) == null).as("Revoked CSRF read must not create a session").isTrue();
+        assertThat(revoked.getRequest().getSession(false) == session).as("Revoked CSRF read retains only the existing anonymous session").isTrue();
+        assertAnonymousSession(session);
         assertThat(revoked.getResponse().getHeaders("Set-Cookie").isEmpty()).as("Revoked CSRF read must not set any cookie").isTrue();
         var refreshed = mvc.perform(get("/api/auth/csrf")).andExpect(status().isOk()).andReturn();
         var next = json.readTree(refreshed.getResponse().getContentAsString());
@@ -389,6 +402,14 @@ class PasswordChangeIntegrationTest {
         long id = users.findByUsername(username).id(); ownedUsers.put(id, username); return id;
     }
     private AppUserDetails principal(long id) { return new AppUserDetails(users.findById(id)); }
+    private static void assertAnonymousSession(MockHttpSession session) {
+        assertThat(session.isInvalid()).as("Logical revocation retains the anonymous HTTP session").isFalse();
+        assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY) == null)
+            .as("Revoked session must not retain a server security context").isTrue();
+        var request = new MockHttpServletRequest(); request.setSession(session);
+        assertThat(new HttpSessionCsrfTokenRepository().loadToken(request) == null)
+            .as("Revoked session must not retain the previous CSRF token").isTrue();
+    }
     private static void assertSafeOutput(CapturedOutput output, String... secrets) {
         String captured = output.getAll();
         assertThat(Arrays.stream(secrets).noneMatch(captured::contains))

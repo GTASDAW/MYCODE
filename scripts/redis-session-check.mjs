@@ -264,28 +264,36 @@ async function expectedError(response, status, code) {
   assert((await response.json()).code === code, `Expected ${code} response.`);
 }
 
-export async function withActivityTableLock(connection, action, settle = async () => {}, beforeLock = async () => {}) {
-  let locked = false;
+export async function withActivityRowLock(connection, activityId, action, settle = async () => {}, beforeLock = async () => {}) {
+  let transactionStarted = false;
   let result;
   const errors = [];
   try {
+    assert(Number.isSafeInteger(activityId) && activityId > 0, 'The isolated activity row lock requires one exact positive activity ID.');
     await beforeLock();
-    // MySQL cannot prepare LOCK/UNLOCK TABLES. These fixed control statements
-    // use text protocol; identity and parameterized COUNT reads stay prepared.
-    await connection.query('SET SESSION lock_wait_timeout=5');
-    await connection.query('LOCK TABLES activities WRITE');
-    locked = true;
+    await connection.execute('SET SESSION innodb_lock_wait_timeout=5');
+    await connection.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+    await connection.beginTransaction();
+    transactionStarted = true;
+    const [rows] = await connection.execute('SELECT id FROM activities WHERE id=? FOR UPDATE', [activityId]);
+    assert(rows.length === 1 && Number(rows[0].id) === activityId, 'The exact owned activity row was not found before holding the admitted request.');
     result = await action();
   } catch (error) { errors.push(error); }
   finally {
-    if (locked) try { await connection.query('UNLOCK TABLES'); } catch (error) { errors.push(error); }
-    // Closing the owning connection also releases locks if UNLOCK itself failed.
+    if (transactionStarted) try { await connection.rollback(); } catch (error) { errors.push(error); }
+    // Closing the owning connection also releases the row lock if rollback failed.
     try { await connection.end(); } catch (error) { errors.push(error); }
     try { await settle(); } catch (error) { errors.push(error); }
   }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, 'The isolated held-session verification and lock cleanup failed; first error is preserved.');
   return result;
+}
+
+export function settleImmediately(promise) {
+  // Attach the rejection handler at dispatch, before waiting on another request.
+  // A held request can time out first and must still reach lock/session cleanup.
+  return promise.then(value => ({ status: 'fulfilled', value }), reason => ({ status: 'rejected', reason }));
 }
 
 export async function runRedisSessionChecks() {
@@ -297,6 +305,9 @@ export async function runRedisSessionChecks() {
   const checkInKey = randomUUID();
   const ownedCheckInFixture = { key: checkInKey, id: null, title: `Redis 签到验证 ${checkInKey}`,
     description: `gather-redis-checkin:${runId}:${checkInKey}` };
+  const passwordKey = randomUUID();
+  const ownedPasswordFixture = { key: passwordKey, id: null, title: `Redis 改密验证 ${passwordKey}`,
+    description: `gather-redis-password:${runId}:${passwordKey}` };
   const accountKey = randomUUID();
   const ownedAccount = { key: accountKey, id: null, username: `redis_${accountKey.replaceAll('-', '').slice(0, 24)}`,
     displayName: `e2e-${accountKey}`, allowedDisplayNames: [`e2e-${accountKey}`, `改名-${accountKey}`], role: 'USER' };
@@ -396,6 +407,7 @@ export async function runRedisSessionChecks() {
     await mkdir('.runtime/ci', { recursive: true });
     const saveAccountManifest = async () => writeFile(accountManifestPath, `${JSON.stringify({
       runId, database: settings.database.database, account: ownedAccount, fixture: ownedFixture, checkInFixture: ownedCheckInFixture,
+      passwordFixture: ownedPasswordFixture,
     }, null, 2)}\n`);
     await saveAccountManifest();
     accountAttempted = true;
@@ -705,39 +717,76 @@ export async function runRedisSessionChecks() {
     await publicPasswordSession.login(settings.b, ownedAccount.username, 'LocalAccount123!');
     const publicOldCookie = publicPasswordSession.clone();
     const currentPasswordToken = await accountClient.csrf(settings.a);
+    // The original waiting/cancellation/check-in flows above retain their exact
+    // fixtures. This separately recorded future activity admits an idempotent
+    // ACTIVE signup without modifying those scenarios or any published samples.
+    await saveAccountManifest();
+    const passwordActivity = await admin.write(settings.a, '/api/admin/activities', token, 'POST', {
+      title: ownedPasswordFixture.title, description: ownedPasswordFixture.description,
+      location: 'Isolated password in-flight verification', capacity: 1,
+      startsAt: new Date(Date.now() + 48 * 3600000).toISOString(),
+    });
+    assert(Number.isSafeInteger(passwordActivity.id) && passwordActivity.id > 0, 'Password fixture creation returned an invalid activity ID.');
+    ownedPasswordFixture.id = passwordActivity.id;
+    await saveAccountManifest();
+    const admittedRegistration = await accountClient.write(settings.b,
+      `/api/activities/${ownedPasswordFixture.id}/registration`, currentPasswordToken);
+    assert(admittedRegistration.id === ownedPasswordFixture.id && admittedRegistration.registrationStatus === 'ACTIVE'
+      && admittedRegistration.registeredCount === 1 && admittedRegistration.waitingCount === 0,
+    'The exact owned user must hold the sole seat before the in-flight duplicate signup experiment.');
     const beforePassword = JSON.parse(await databaseSnapshot(db));
     // The fixed isolated project/ports/database/UUID probe above authorize this
-    // short table lock only in this CI database. It holds an existing read after
-    // its credential check so the real Java Session can save after password change.
-    const lateCookie = accountClient.clone();
+    // short primary-key row lock only in this CI database. Unlike a table lock,
+    // it does not acquire foreign-key-related read locks on users. The duplicate
+    // signup passes credential validation before waiting on this exact row.
+    const oldInFlightCookie = accountClient.clone();
+    const lateCookie = oldInFlightCookie.clone();
     const lockConnection = await mysql.createConnection({ ...settings.database, timezone: 'Z', dateStrings: true });
     let changedPassword;
-    let lateRead;
-    let completedLateRead;
-    await withActivityTableLock(lockConnection, async () => {
-      lateRead = lateCookie.response(settings.b, '/api/me/registrations/search?page=1&pageSize=10&status=ALL');
+    let lateSignup;
+    let lateOutcome;
+    let completedLateSignup;
+    await withActivityRowLock(lockConnection, ownedPasswordFixture.id, async () => {
+      lateSignup = settleImmediately(lateCookie.response(settings.b, `/api/activities/${ownedPasswordFixture.id}/registration`, {
+        method: 'POST', headers: { [currentPasswordToken.headerName]: currentPasswordToken.token },
+      })).then(outcome => { lateOutcome = outcome; return outcome; });
       const deadline = Date.now() + 4000;
       let waiting = false;
       while (Date.now() < deadline) {
         // Never return or print PROCESSLIST.INFO, connection IDs or credentials.
-        const [[state]] = await db.execute("SELECT COUNT(*) AS total FROM information_schema.PROCESSLIST WHERE DB=? AND USER=? AND COMMAND='Query' AND STATE='Waiting for table metadata lock' AND INFO LIKE '%registrations%' AND INFO LIKE '%activities%'",
-          [settings.database.database, settings.database.user]);
+        // This serial phase owns the exact exclusive primary-key row lock. The
+        // sole pending Java FOR UPDATE on the same bound ID therefore proves a
+        // row-lock wait, without PROCESS privilege or exposing statement text.
+        const [[state]] = await db.execute("SELECT COUNT(*) AS total FROM information_schema.PROCESSLIST WHERE DB=? AND USER=? AND COMMAND IN ('Query','Execute') AND INFO REGEXP ?",
+          [settings.database.database, settings.database.user,
+            `FROM[[:space:]]+activities[[:space:]]+WHERE[[:space:]]+id[[:space:]]*=[[:space:]]*${ownedPasswordFixture.id}[[:space:]]+FOR[[:space:]]+UPDATE[[:space:]]*$`]);
+        assert(lateOutcome === undefined, 'The admitted duplicate signup finished before the owned activity row was released.');
         if (Number(state.total) === 1) { waiting = true; break; }
         await delay(50);
       }
-      assert(waiting, 'The owned old-session Java read did not demonstrably pass credential validation and wait on its activity SELECT.');
+      assert(waiting, 'The owned old-session duplicate signup did not demonstrably pass credential validation and wait on its exact activity row.');
       changedPassword = await accountClient.write(settings.a, '/api/me/password', currentPasswordToken, 'POST', {
         currentPassword: 'LocalAccount123!', newPassword: 'UpdatedAccount123!',
       });
-    }, async () => { if (lateRead) completedLateRead = await lateRead; }, async () => {
+    }, async () => {
+      if (!lateSignup) return;
+      const outcome = await lateSignup;
+      if (outcome.status === 'rejected') throw outcome.reason;
+      completedLateSignup = outcome.value;
+    }, async () => {
       const [[identity]] = await db.execute('SELECT @@server_uuid AS serverUuid');
       await verifyDatabase(lockConnection, settings.database, { ...settings.database, serverUuid: identity.serverUuid });
+      const [ownedRows] = await lockConnection.execute('SELECT id, title, description FROM activities WHERE id=?', [ownedPasswordFixture.id]);
+      assert(ownedRows.length === 1 && Number(ownedRows[0].id) === ownedPasswordFixture.id
+        && ownedRows[0].title === ownedPasswordFixture.title && ownedRows[0].description === ownedPasswordFixture.description,
+      'Password row-lock fixture ownership changed.');
     });
-    assert.equal(completedLateRead.status, 200, 'The admitted in-flight read may finish after password change.');
-    const latePage = await completedLateRead.json();
-    assert.equal(latePage.total, 2, 'The held Java read must still belong to the exact existing owned user.');
+    assert.equal(completedLateSignup.status, 200, 'The admitted in-flight duplicate signup must finish after password change.');
+    assert.equal(lateCookie.lastResponseDeletedSession, false, 'The in-flight response must not erase a newer login Cookie.');
+    assert.deepEqual(await completedLateSignup.json(), admittedRegistration,
+      'The real held duplicate signup must preserve the exact ACTIVE response and all activity counts.');
     for (const base of [settings.a, settings.b, settings.web]) {
-      const afterLateSave = await lateCookie.clone().response(base, '/api/auth/me');
+      const afterLateSave = await oldInFlightCookie.clone().response(base, '/api/auth/me');
       assert.equal(afterLateSave.status, 401, 'Late saving the old real Java Session must never restore authenticated access.');
       await afterLateSave.arrayBuffer();
     }
@@ -745,6 +794,9 @@ export async function runRedisSessionChecks() {
     assert.deepEqual(changedPassword, { success: true });
     assert.equal(accountClient.lastResponseDeletedSession, false, 'Password change must not send a late Cookie deletion that could erase a new login.');
     await expectedError(await accountClient.response(settings.b, '/api/auth/me'), 401, 'UNAUTHENTICATED');
+    await expectedError(await accountClient.response(settings.b, '/api/me/profile', { method: 'PATCH',
+      headers: { [currentPasswordToken.headerName]: currentPasswordToken.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: ownedAccount.allowedDisplayNames[1] }) }), 403, 'CSRF_INVALID');
     const revokedPasswordClient = savedOldSession.clone();
     await expectedError(await revokedPasswordClient.response(settings.b, '/api/me/profile'), 401, 'SESSION_REVOKED');
     assert.equal(revokedPasswordClient.lastResponseDeletedSession, false, 'Credential-version rejection must not expire a newly logged-in Cookie.');
@@ -812,9 +864,9 @@ export async function runRedisSessionChecks() {
     if (db) {
       try {
         if (baseline !== undefined) {
-          const result = await deleteOwnedFixtures(db, [ownedFixture, ownedCheckInFixture], new Set(), async (activities, accounts) => {
+          const result = await deleteOwnedFixtures(db, [ownedFixture, ownedCheckInFixture, ownedPasswordFixture], new Set(), async (activities, accounts) => {
             if (accountAttempted) await writeFile(accountManifestPath, `${JSON.stringify({ runId, database: settings.database.database,
-              account: ownedAccount, fixture: ownedFixture, checkInFixture: ownedCheckInFixture, cleanupIntent: {
+              account: ownedAccount, fixture: ownedFixture, checkInFixture: ownedCheckInFixture, passwordFixture: ownedPasswordFixture, cleanupIntent: {
                 activityIds: activities.map(activity => activity.id), userIds: accounts.map(account => account.id),
               } }, null, 2)}\n`);
           }, { accounts: accountAttempted ? [ownedAccount] : [] });

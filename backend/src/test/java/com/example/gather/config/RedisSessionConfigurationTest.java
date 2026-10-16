@@ -4,6 +4,7 @@ import com.example.gather.domain.UserRow;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.security.CurrentSessionLogout;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.AfterEach;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.session.autoconfigure.SessionAutoConfiguration;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
@@ -28,10 +29,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
+import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
+import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 class RedisSessionConfigurationTest {
+    @AfterEach void clearThreadAuthentication() { SecurityContextHolder.clearContext(); }
     private final WebApplicationContextRunner context = new WebApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(SessionAutoConfiguration.class))
         .withUserConfiguration(RedisSessionConfiguration.class)
@@ -104,18 +112,24 @@ class RedisSessionConfigurationTest {
     }
 
     @Test
-    void springSessionOuterCommitPreservesCookieForRevocationButExplicitLogoutStillExpires() {
+    void logicalRevocationClearsServerCredentialsPreservesAdmittedContextAndSessionKeyWhileExplicitLogoutExpires() {
         context.run(application -> {
             assertThat(application).hasNotFailed().hasSingleBean(CookieSerializer.class);
             var repository = new MapSessionRepository(new ConcurrentHashMap<>());
             var resolver = new CookieHttpSessionIdResolver();
             resolver.setCookieSerializer(application.getBean(CookieSerializer.class));
             for (boolean passwordRevocation : new boolean[] {true, false}) {
-                MapSession session = repository.createSession(); session.setAttribute("trusted", "identity"); repository.save(session);
+                var principal = new AppUserDetails(new UserRow(42, "test", "dummy-hash", "测试", "USER", 0));
+                var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities());
+                var admitted = new SecurityContextImpl(authentication);
+                MapSession session = repository.createSession();
+                session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, admitted);
+                repository.save(session);
                 var cookieResponse = new MockHttpServletResponse();
                 resolver.setSessionId(new MockHttpServletRequest(), cookieResponse, session.getId());
                 String header = cookieResponse.getHeader("Set-Cookie");
-                assertThat(header).startsWith("JSESSIONID=").contains("Path=/", "HttpOnly", "SameSite=Lax");
+                assertThat(header.startsWith("JSESSIONID=") && header.contains("Path=/") && header.contains("HttpOnly") && header.contains("SameSite=Lax"))
+                    .as("Boot session cookie settings remain intact").isTrue();
                 String cookie = header.substring("JSESSIONID=".length(), header.indexOf(';'));
                 var request = new MockHttpServletRequest("POST", passwordRevocation ? "/api/me/password" : "/api/auth/logout");
                 request.setCookies(new Cookie("JSESSIONID", cookie));
@@ -123,13 +137,32 @@ class RedisSessionConfigurationTest {
                 var filter = new SessionRepositoryFilter<MapSession>(repository); filter.setHttpSessionIdResolver(resolver);
                 filter.doFilter(request, response, (incoming, outgoing) -> {
                     var sessionRequest = (HttpServletRequest) incoming;
-                    assertThat(sessionRequest.getSession(false).getAttribute("trusted")).isEqualTo("identity");
-                    if (passwordRevocation) incoming.setAttribute(CurrentSessionLogout.PRESERVE_BROWSER_COOKIE, true);
-                    sessionRequest.getSession(false).invalidate();
+                    var tokenRepository = new HttpSessionCsrfTokenRepository();
+                    tokenRepository.saveToken(tokenRepository.generateToken(sessionRequest), sessionRequest, (HttpServletResponse) outgoing);
+                    SecurityContextHolder.setContext(admitted);
+                    new RequestAttributeSecurityContextRepository().saveContext(admitted, sessionRequest, (HttpServletResponse) outgoing);
+                    if (passwordRevocation) {
+                        new CurrentSessionLogout().logout(sessionRequest, (HttpServletResponse) outgoing, authentication);
+                        assertThat(SecurityContextHolder.getContext().getAuthentication() == null).as("Current request loses authentication").isTrue();
+                        assertThat(admitted.getAuthentication() == authentication).as("Other admitted requests retain their original context").isTrue();
+                        var requestContext = (org.springframework.security.core.context.SecurityContext) sessionRequest
+                            .getAttribute(RequestAttributeSecurityContextRepository.DEFAULT_REQUEST_ATTR_NAME);
+                        assertThat(requestContext.getAuthentication() == null).as("Current request dispatch cannot reuse old authentication").isTrue();
+                        assertThat(sessionRequest.getSession(false).getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY) == null)
+                            .as("Server session no longer contains authentication").isTrue();
+                        assertThat(tokenRepository.loadToken(sessionRequest) == null).as("Previous CSRF token is removed").isTrue();
+                    } else new SecurityContextLogoutHandler().logout(sessionRequest, (HttpServletResponse) outgoing, authentication);
                 });
-                assertThat(repository.findById(session.getId())).isNull();
-                if (passwordRevocation) assertThat(response.getHeader("Set-Cookie")).isNull();
-                else assertThat(response.getHeader("Set-Cookie")).contains("JSESSIONID=", "Max-Age=0");
+                if (passwordRevocation) {
+                    assertThat(repository.findById(session.getId()) != null).as("Anonymous session key remains available for admitted late saves").isTrue();
+                    assertThat(repository.findById(session.getId()).getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY) == null).isTrue();
+                    assertThat(response.getHeader("Set-Cookie") == null).as("Logical revocation does not change the browser cookie").isTrue();
+                } else {
+                    assertThat(repository.findById(session.getId()) == null).as("Explicit logout still removes the session").isTrue();
+                    assertThat(response.getHeader("Set-Cookie").contains("JSESSIONID=") && response.getHeader("Set-Cookie").contains("Max-Age=0"))
+                        .as("Explicit logout still expires its cookie").isTrue();
+                }
+                SecurityContextHolder.clearContext();
             }
         });
     }

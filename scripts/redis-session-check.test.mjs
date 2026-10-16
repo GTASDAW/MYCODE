@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, withActivityTableLock } from './redis-session-check.mjs';
+import { isolatedSettings, withActivityRowLock, settleImmediately } from './redis-session-check.mjs';
 
 const isolatedEnvironment = {
   COMPOSE_PROJECT_NAME: 'gather-redis-ci',
@@ -36,45 +36,91 @@ test('Redis lifecycle requires normal timeout/namespace and explicit isolated pa
   ]) assert.throws(() => isolatedSettings({ ...isolatedEnvironment, ...override }));
 });
 
-test('isolated held-session verification always releases the activity lock, closes its connection and settles the admitted read', async () => {
+function rowLockConnection(events, { rows = [{ id: 7 }], failLock, failRollback, failClose } = {}) {
+  return {
+    async execute(sql, values) {
+      events.push({ sql, values });
+      if (sql.endsWith('FOR UPDATE')) {
+        if (failLock) throw failLock;
+        return [rows];
+      }
+      return [];
+    },
+    async query() { assert.fail('The owned row-lock experiment must never use broad text-protocol table locks.'); },
+    async beginTransaction() { events.push('BEGIN'); },
+    async rollback() { events.push('ROLLBACK'); if (failRollback) throw failRollback; },
+    async end() { events.push('CLOSE'); if (failClose) throw failClose; },
+  };
+}
+
+test('isolated held-session verification locks only the bound activity primary key and rolls back before settling the admitted signup', async () => {
   const events = [];
-  const connection = { async query(sql) { events.push(sql); },
-    async execute() { assert.fail('Fixed table-lock control statements cannot use prepared-statement execute.'); },
-    async end() { events.push('CLOSE'); } };
-  const result = await withActivityTableLock(connection, async () => { events.push('CHANGE'); return 'changed'; }, async () => { events.push('SETTLED'); });
+  const result = await withActivityRowLock(rowLockConnection(events), 7,
+    async () => { events.push('CHANGE'); return 'changed'; }, async () => { events.push('SETTLED'); });
   assert.equal(result, 'changed');
-  assert.deepEqual(events, ['SET SESSION lock_wait_timeout=5', 'LOCK TABLES activities WRITE', 'CHANGE', 'UNLOCK TABLES', 'CLOSE', 'SETTLED']);
+  assert.deepEqual(events, [
+    { sql: 'SET SESSION innodb_lock_wait_timeout=5', values: undefined },
+    { sql: 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED', values: undefined }, 'BEGIN',
+    { sql: 'SELECT id FROM activities WHERE id=? FOR UPDATE', values: [7] },
+    'CHANGE', 'ROLLBACK', 'CLOSE', 'SETTLED',
+  ]);
 });
 
 test('failure before or after locking preserves the original error and still closes and settles safely', async () => {
   for (const failLock of [false, true]) {
     const events = [];
     const original = new Error(failLock ? 'lock refused' : 'password verification failed');
-    const connection = { async query(sql) { events.push(sql); if (failLock && sql.startsWith('LOCK')) throw original; },
-      async end() { events.push('CLOSE'); } };
-    await assert.rejects(withActivityTableLock(connection, async () => { throw original; }, async () => { events.push('SETTLED'); }), error => error === original);
-    assert.equal(events.includes('UNLOCK TABLES'), !failLock);
+    const connection = rowLockConnection(events, { failLock: failLock ? original : undefined });
+    await assert.rejects(withActivityRowLock(connection, 7, async () => { throw original; },
+      async () => { events.push('SETTLED'); }), error => error === original);
+    assert(events.includes('ROLLBACK'));
     assert.deepEqual(events.slice(-2), ['CLOSE', 'SETTLED']);
   }
 });
 
-test('unlock and late-response failures are reported with the primary error instead of masking it or swallowing cleanup failure', async () => {
+test('rollback, connection-close and late-response failures retain the primary error and attempt every cleanup', async () => {
   const original = new Error('primary verification failed');
-  const unlock = new Error('unlock failed');
-  const late = new Error('late read failed');
-  let closed = false;
-  const connection = { async query(sql) { if (sql === 'UNLOCK TABLES') throw unlock; }, async end() { closed = true; } };
-  await assert.rejects(withActivityTableLock(connection, async () => { throw original; }, async () => { throw late; }), error => {
-    assert(error instanceof AggregateError); assert.deepEqual(error.errors, [original, unlock, late]); return true;
+  const rollback = new Error('rollback failed');
+  const close = new Error('connection close failed');
+  const late = new Error('late signup failed');
+  const events = [];
+  const connection = rowLockConnection(events, { failRollback: rollback, failClose: close });
+  await assert.rejects(withActivityRowLock(connection, 7, async () => { throw original; },
+    async () => { events.push('SETTLED'); throw late; }), error => {
+    assert(error instanceof AggregateError); assert.deepEqual(error.errors, [original, rollback, close, late]); return true;
   });
-  assert(closed);
+  assert.deepEqual(events.slice(-3), ['ROLLBACK', 'CLOSE', 'SETTLED']);
 });
 
-test('changed lock-connection identity is refused before acquiring a table lock and the connection is closed', async () => {
+test('changed lock-connection identity is refused before starting a transaction and the connection is closed', async () => {
   const events = [];
   const original = new Error('database identity changed');
-  const connection = { async query(sql) { events.push(sql); }, async end() { events.push('CLOSE'); } };
-  await assert.rejects(withActivityTableLock(connection, async () => { events.push('ACTION'); }, async () => { events.push('SETTLED'); },
+  const connection = rowLockConnection(events);
+  await assert.rejects(withActivityRowLock(connection, 7, async () => { events.push('ACTION'); }, async () => { events.push('SETTLED'); },
     async () => { throw original; }), error => error === original);
   assert.deepEqual(events, ['CLOSE', 'SETTLED']);
+});
+
+test('invalid or missing activity IDs never admit the held request, and existing transactions always roll back', async () => {
+  for (const id of [0, -1, '7', 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const events = [];
+    await assert.rejects(withActivityRowLock(rowLockConnection(events), id,
+      async () => { assert.fail('Invalid activity ID admitted a request.'); }, async () => { events.push('SETTLED'); }));
+    assert.deepEqual(events, ['CLOSE', 'SETTLED']);
+  }
+  for (const rows of [[], [{ id: 8 }], [{ id: 7 }, { id: 8 }]]) {
+    const events = [];
+    await assert.rejects(withActivityRowLock(rowLockConnection(events, { rows }), 7,
+      async () => { assert.fail('Missing exact activity row admitted a request.'); }, async () => { events.push('SETTLED'); }));
+    assert.deepEqual(events.slice(-3), ['ROLLBACK', 'CLOSE', 'SETTLED']);
+  }
+});
+
+test('an early rejected held request is observed immediately and remains available for final cleanup error reporting', async () => {
+  const original = new Error('held request timed out before password response');
+  const pending = settleImmediately(Promise.reject(original));
+  await new Promise(resolve => setImmediate(resolve));
+  const outcome = await pending;
+  assert.equal(outcome.status, 'rejected');
+  assert.equal(outcome.reason, original);
 });

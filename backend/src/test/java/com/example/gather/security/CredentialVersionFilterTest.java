@@ -11,6 +11,8 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import tools.jackson.databind.ObjectMapper;
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,13 +37,23 @@ class CredentialVersionFilterTest {
     }
 
     @Test
-    void staleOrMissingVersionsInvalidateTheCurrentSessionAndReturn401() throws Exception {
+    void staleOrMissingVersionsClearServerAuthenticationAndCsrfWithoutMutatingAdmittedContext() throws Exception {
         for (Long current : new Long[] {5L, null}) {
             authenticate(4L); when(versions.findByUserId(42)).thenReturn(current);
             var request = request("/api/auth/me"); var session = new MockHttpSession(); request.setSession(session);
+            var admitted = SecurityContextHolder.getContext(); var authentication = admitted.getAuthentication();
+            session.setAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY, admitted);
+            new RequestAttributeSecurityContextRepository().saveContext(admitted, request, new MockHttpServletResponse());
+            tokens.saveToken(tokens.generateToken(request), request, new MockHttpServletResponse());
             var response = new MockHttpServletResponse(); var called = new AtomicBoolean();
             filter.doFilter(request, response, (value, result) -> called.set(true));
-            assertThat(called).isFalse(); assertThat(session.isInvalid()).isTrue();
+            assertThat(called).isFalse(); assertThat(session.isInvalid()).isFalse();
+            assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY) == null).isTrue();
+            assertThat(tokens.loadToken(request) == null).isTrue();
+            assertThat(admitted.getAuthentication() == authentication).as("Other admitted requests retain their old context").isTrue();
+            var requestContext = (org.springframework.security.core.context.SecurityContext) request
+                .getAttribute(RequestAttributeSecurityContextRepository.DEFAULT_REQUEST_ATTR_NAME);
+            assertThat(requestContext.getAuthentication() == null).as("Error dispatch sees the new empty request context").isTrue();
             assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
             assertThat(response.getStatus()).isEqualTo(401);
             assertThat(json.readTree(response.getContentAsString()).get("code").asString()).isEqualTo("SESSION_REVOKED");
@@ -63,7 +75,8 @@ class CredentialVersionFilterTest {
         var request = request("/api/admin/overview"); var session = new MockHttpSession(); request.setSession(session);
         var response = new MockHttpServletResponse();
         filter.doFilter(request, response, (value, result) -> fail("Unknown authenticated identity must not enter business code"));
-        assertThat(response.getStatus()).isEqualTo(401); assertThat(session.isInvalid()).isTrue();
+        assertThat(response.getStatus()).isEqualTo(401); assertThat(session.isInvalid()).isFalse();
+        assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY) == null).isTrue();
         verifyNoInteractions(versions);
     }
 
@@ -78,9 +91,11 @@ class CredentialVersionFilterTest {
         authenticate(4L);
         var request = request("/api/auth/csrf"); var response = new MockHttpServletResponse();
         var old = tokens.generateToken(request); tokens.saveToken(old, request, response);
+        var existingSession = request.getSession(false);
         filter.doFilter(request, response, (value, result) -> fail("Stale CSRF request must not create a replacement anonymous Session"));
         assertThat(response.getStatus()).isEqualTo(401);
-        assertThat(request.getSession(false)).isNull();
+        assertThat(request.getSession(false) == existingSession).as("No replacement session is created").isTrue();
+        assertThat(tokens.loadToken(request) == null).isTrue();
         assertThat(response.getHeader("Set-Cookie")).isNull();
     }
 
