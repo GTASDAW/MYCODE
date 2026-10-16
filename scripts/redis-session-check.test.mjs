@@ -38,7 +38,9 @@ test('Redis lifecycle requires normal timeout/namespace and explicit isolated pa
 
 test('isolated held-session verification always releases the activity lock, closes its connection and settles the admitted read', async () => {
   const events = [];
-  const connection = { async execute(sql) { events.push(sql); }, async end() { events.push('CLOSE'); } };
+  const connection = { async query(sql) { events.push(sql); },
+    async execute() { assert.fail('Fixed table-lock control statements cannot use prepared-statement execute.'); },
+    async end() { events.push('CLOSE'); } };
   const result = await withActivityTableLock(connection, async () => { events.push('CHANGE'); return 'changed'; }, async () => { events.push('SETTLED'); });
   assert.equal(result, 'changed');
   assert.deepEqual(events, ['SET SESSION lock_wait_timeout=5', 'LOCK TABLES activities WRITE', 'CHANGE', 'UNLOCK TABLES', 'CLOSE', 'SETTLED']);
@@ -48,7 +50,7 @@ test('failure before or after locking preserves the original error and still clo
   for (const failLock of [false, true]) {
     const events = [];
     const original = new Error(failLock ? 'lock refused' : 'password verification failed');
-    const connection = { async execute(sql) { events.push(sql); if (failLock && sql.startsWith('LOCK')) throw original; },
+    const connection = { async query(sql) { events.push(sql); if (failLock && sql.startsWith('LOCK')) throw original; },
       async end() { events.push('CLOSE'); } };
     await assert.rejects(withActivityTableLock(connection, async () => { throw original; }, async () => { events.push('SETTLED'); }), error => error === original);
     assert.equal(events.includes('UNLOCK TABLES'), !failLock);
@@ -61,7 +63,7 @@ test('unlock and late-response failures are reported with the primary error inst
   const unlock = new Error('unlock failed');
   const late = new Error('late read failed');
   let closed = false;
-  const connection = { async execute(sql) { if (sql === 'UNLOCK TABLES') throw unlock; }, async end() { closed = true; } };
+  const connection = { async query(sql) { if (sql === 'UNLOCK TABLES') throw unlock; }, async end() { closed = true; } };
   await assert.rejects(withActivityTableLock(connection, async () => { throw original; }, async () => { throw late; }), error => {
     assert(error instanceof AggregateError); assert.deepEqual(error.errors, [original, unlock, late]); return true;
   });
@@ -71,7 +73,7 @@ test('unlock and late-response failures are reported with the primary error inst
 test('changed lock-connection identity is refused before acquiring a table lock and the connection is closed', async () => {
   const events = [];
   const original = new Error('database identity changed');
-  const connection = { async execute(sql) { events.push(sql); }, async end() { events.push('CLOSE'); } };
+  const connection = { async query(sql) { events.push(sql); }, async end() { events.push('CLOSE'); } };
   await assert.rejects(withActivityTableLock(connection, async () => { events.push('ACTION'); }, async () => { events.push('SETTLED'); },
     async () => { throw original; }), error => error === original);
   assert.deepEqual(events, ['CLOSE', 'SETTLED']);

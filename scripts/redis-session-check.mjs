@@ -270,13 +270,15 @@ export async function withActivityTableLock(connection, action, settle = async (
   const errors = [];
   try {
     await beforeLock();
-    await connection.execute('SET SESSION lock_wait_timeout=5');
-    await connection.execute('LOCK TABLES activities WRITE');
+    // MySQL cannot prepare LOCK/UNLOCK TABLES. These fixed control statements
+    // use text protocol; identity and parameterized COUNT reads stay prepared.
+    await connection.query('SET SESSION lock_wait_timeout=5');
+    await connection.query('LOCK TABLES activities WRITE');
     locked = true;
     result = await action();
   } catch (error) { errors.push(error); }
   finally {
-    if (locked) try { await connection.execute('UNLOCK TABLES'); } catch (error) { errors.push(error); }
+    if (locked) try { await connection.query('UNLOCK TABLES'); } catch (error) { errors.push(error); }
     // Closing the owning connection also releases locks if UNLOCK itself failed.
     try { await connection.end(); } catch (error) { errors.push(error); }
     try { await settle(); } catch (error) { errors.push(error); }
