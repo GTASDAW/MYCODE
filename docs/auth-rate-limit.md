@@ -1,6 +1,6 @@
-# 登录与注册限流：规则、存储与验证
+# 登录、注册与改密限流：规则、存储与验证
 
-登录和注册是公开入口，密码校验和密码哈希需要计算资源。本轮在原有 Cookie Session、CSRF 与服务端权限检查上，增加有限次数的尝试窗口。限流只覆盖 `POST /api/auth/login` 和 `POST /api/auth/register`，不改变活动报名、签到或通知事务，也不承担整个网站的流量防护。
+登录和注册是公开入口，密码校验和密码哈希需要计算资源。现有 Cookie Session、CSRF 与权限检查之外，登录、注册和本人改密使用有限次数的尝试窗口。入口为 `POST /api/auth/login`、`POST /api/auth/register` 与 `POST /api/me/password`，不改变活动报名、签到或通知事务，也不承担整个网站的流量防护。
 
 ## 哪些请求计数
 
@@ -9,8 +9,12 @@
 | 登录：同一来源 | 60 | 60 秒 |
 | 登录：同一来源与规范提交用户名的组合 | 10 | 60 秒 |
 | 注册：同一来源 | 5 | 600 秒 |
+| 本人改密：可信用户 ID | 5 | 600 秒 |
+| 本人改密：同一来源 | 20 | 600 秒 |
 
 Security Filter 位于 CSRF 校验之后、表单认证之前。通过 CSRF 的尝试都计数，包括登录成功、密码错误、注册成功和注册参数错误；CSRF 拒绝不会消费次数。登录同时检查两个桶，全部允许时才消费，任一超限则都不消费。注册过滤器不读取 JSON 正文，原有 Controller 和 Service 继续完成验证与写入。
+
+上段过滤器负责登录和注册。改密另用 `PasswordChangeRateLimitFilter`，位于 CSRF、凭据版本及授权检查之后；只从可信身份取得用户 ID，不解析 JSON。账号和来源两桶同样全部通过才消费，成功、原密码错误和参数错误都计数；匿名与无效 CSRF 不计数。账号桶跨 Session、来源独立，来源桶跨账号独立；因此重新登录或换来源不能清空账号配额。版本校验失败的身份不会进入改密计数，详细流程见 [改密指南](password-change-guide.md)。
 
 提交用户名使用与登录查询相同的 `strip()` 和 `toLowerCase(Locale.ROOT)` 规范化。登录查询还核对实际存储的规范用户名，拒绝 MySQL 重音忽略排序规则匹配出来的不同拼写，保留原大小写、空白及既有长账号登录。端点匹配复用 Spring Security 的路径语义，编码形式的正常接口也共用计数。登录成功、刷新令牌、退出或更换 Session 都不会重置来源计数。组合桶包含来源，其他来源的尝试不会直接锁住某个账号；同一来源更换用户名仍受到来源总次数限制。
 
@@ -62,6 +66,10 @@ Security Filter 位于 CSRF 校验之后、表单认证之前。通过 CSRF 的�
 | `AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS` | `60` |
 | `AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT` | `5` |
 | `AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS` | `600` |
+| `AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT` | `5` |
+| `AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS` | `600` |
+| `AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT` | `20` |
+| `AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS` | `600` |
 | `AUTH_RATE_LIMIT_MAX_BUCKETS` | `10000` |
 | `AUTH_RATE_LIMIT_NAMESPACE` | `gather:auth-rate-limit` |
 | `AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS` | 空，多个精确 IP 用逗号分隔 |

@@ -47,6 +47,8 @@
 
 **讲清取舍：** 默认 Session 存在单个 Java 进程内存，重启后重新登录。显式 `redis` profile 才启用 Spring Session Redis，让两个真实 Java 实例共用登录与 CSRF 状态；同组实例使用一致的 Cookie、命名空间和闲置时限。恢复登录还要求会话有效、Redis 数据仍在且可用。Redis 不保存剩余名额，不代替 MySQL 行锁，也没有自动形成高可用方案。
 
+**可以继续追问：** 本人改密用数据库凭据版本撤销所有旧登录，每个已登录请求增加一次轻量校验，迟到 Session 保存不能恢复旧权限；原哈希和版本必须同次登录读取，BCrypt 期间不锁用户行，CAS 只允许一个并发胜者。响应丢失只能说“结果未确认”，不能声称事务回滚；JS 代次校验也不能撤销浏览器已经应用的 Cookie，所以撤销响应和旧 CSRF 另有保护。阅读 [改密指南](password-change-guide.md) 与实际验证后再把这些写成个人掌握内容。
+
 | 阅读入口 | 在代码或证据中找什么 |
 | --- | --- |
 | [SecurityConfiguration](../backend/src/main/java/com/example/gather/security/SecurityConfiguration.java)、[ActivityController](../backend/src/main/java/com/example/gather/api/ActivityController.java) | Session CSRF 仓库、服务端 ADMIN 规则、可信 principal 的用户 ID |
