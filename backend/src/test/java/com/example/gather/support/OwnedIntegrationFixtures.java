@@ -19,9 +19,10 @@ public final class OwnedIntegrationFixtures {
         var transaction = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         transaction.executeWithoutResult(status -> {
             if (!"activity_platform_test".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))
-                || !"6".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
-                throw new IllegalStateException("Fixture cleanup requires the dedicated V6 test database");
+                || !"7".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
+                throw new IllegalStateException("Fixture cleanup requires the dedicated V7 test database");
             }
+            jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
             if (!activities.isEmpty()) {
                 jdbc.queryForList("SELECT id FROM activities WHERE id IN (" + marks(activities) + ") FOR UPDATE", activities.toArray());
                 noReferences(jdbc, "SELECT COUNT(*) FROM activity_audit_logs a JOIN registrations r ON r.id=a.registration_id "

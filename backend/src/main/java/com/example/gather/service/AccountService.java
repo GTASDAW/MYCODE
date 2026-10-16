@@ -5,12 +5,12 @@ import com.example.gather.api.ApiException;
 import com.example.gather.api.ApiModels.UserView;
 import com.example.gather.domain.UserRow;
 import com.example.gather.mapper.UserMapper;
+import com.example.gather.security.PasswordPolicy;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -33,14 +33,7 @@ public class AccountService {
         }
         username = username.toLowerCase(Locale.ROOT);
         String password = request.password();
-        if (password == null || password.length() < 8 || password.length() > 64
-            || !password.chars().anyMatch(value -> value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z')
-            || !password.chars().anyMatch(value -> value >= '0' && value <= '9')) {
-            throw invalid("密码须为 8–64 位，且包含英文字母和数字");
-        }
-        if (password.getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw invalid("密码过长，请减少字符数量。");
-        }
+        PasswordPolicy.validateNew(password);
         String displayName = displayName(request.displayName());
         String hash = encoder.encode(password);
         try {

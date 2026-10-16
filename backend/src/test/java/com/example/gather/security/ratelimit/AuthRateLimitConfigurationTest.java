@@ -12,6 +12,8 @@ class AuthRateLimitConfigurationTest {
         .withPropertyValues("app.auth-rate-limit.login-source-limit=60", "app.auth-rate-limit.login-source-window-seconds=60",
             "app.auth-rate-limit.login-pair-limit=10", "app.auth-rate-limit.login-pair-window-seconds=60",
             "app.auth-rate-limit.register-source-limit=5", "app.auth-rate-limit.register-source-window-seconds=600",
+            "app.auth-rate-limit.password-account-limit=5", "app.auth-rate-limit.password-account-window-seconds=600",
+            "app.auth-rate-limit.password-source-limit=20", "app.auth-rate-limit.password-source-window-seconds=600",
             "app.auth-rate-limit.max-buckets=10000", "app.auth-rate-limit.namespace=gather:test:limits");
 
     @Test
@@ -32,7 +34,8 @@ class AuthRateLimitConfigurationTest {
     void invalidLimitsWindowsCapacityNamespaceAndProxyConfigFailAtStartup() {
         for (String property : new String[] {"login-source-limit=0", "login-pair-limit=-1", "register-source-limit=100001",
                 "login-source-window-seconds=0", "login-pair-window-seconds=86401", "register-source-window-seconds=-1",
-                "max-buckets=1", "max-buckets=1000001", "namespace=bad{slot}", "trusted-proxy-ips=localhost"}) {
+                "password-account-limit=0", "password-account-window-seconds=86401", "password-source-limit=100001",
+                "password-source-window-seconds=-1", "max-buckets=1", "max-buckets=1000001", "namespace=bad{slot}", "trusted-proxy-ips=localhost"}) {
             context.withPropertyValues("app.auth-rate-limit." + property).run(application -> assertThat(application).hasFailed());
         }
     }

@@ -33,6 +33,7 @@ export function LoginPage() {
     notice?: string;
     username?: string;
     registered?: boolean;
+    passwordUpdated?: boolean;
   } | null;
   const destination = safeReturnPath(state?.from);
 
@@ -105,7 +106,7 @@ export function LoginPage() {
           {(state?.notice || auth.error) && (
             <Alert
               className="form-alert"
-              type={state?.registered ? "success" : "warning"}
+              type={state?.registered || state?.passwordUpdated ? "success" : "warning"}
               showIcon
               title={state?.notice ?? auth.error}
             />

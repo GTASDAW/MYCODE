@@ -6,6 +6,7 @@ import { errorMessage } from "../api";
 import { displayNameError } from "../accountValidation";
 import { ErrorState, LoadingState, PageHeading } from "../components";
 import { useResource } from "../useResource";
+import { PasswordChangeCard } from "./PasswordChangeCard";
 
 export function ProfilePage() {
   const { user, readProfile, updateProfile } = useAuth();
@@ -83,6 +84,7 @@ export function ProfilePage() {
               <Button type="primary" htmlType="submit" loading={busy} aria-label="保存昵称" aria-busy={busy}>保存昵称</Button>
             </Form>
           </Card>
+          <PasswordChangeCard />
         </div>
       )}
     </div>

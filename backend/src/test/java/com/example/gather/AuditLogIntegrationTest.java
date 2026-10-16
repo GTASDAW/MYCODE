@@ -147,7 +147,8 @@ class AuditLogIntegrationTest {
     void prepareVerifiedFixtures() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("6");
+        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("7");
+        jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         actor = createUser("ADMIN", "审计管理员");
     }
 

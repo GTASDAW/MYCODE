@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
+import { createServer } from 'node:http';
 
 const originalFetch = globalThis.fetch;
 let sequence = 0;
@@ -547,12 +548,14 @@ test('a login cancelled after its CSRF refresh starts cannot cache that response
   const oldRefresh = deferredResponse();
   const refreshStarted = deferredResponse();
   let tokenFetches = 0;
+  let ownedRefreshSignal;
   const writes = [];
   globalThis.fetch = async (url, options) => {
     if (url === '/api/auth/csrf') {
       tokenFetches++;
       if (tokenFetches === 2) {
-        assert.equal(options.signal, controller.signal);
+        ownedRefreshSignal = options.signal;
+        assert.ok(ownedRefreshSignal instanceof AbortSignal);
         refreshStarted.resolve();
         // Deliberately return after cancellation, as an already delivered body
         // or an intermediary may do. The cache still has to reject the result.
@@ -566,6 +569,7 @@ test('a login cancelled after its CSRF refresh starts cannot cache that response
   const rejectedLogin = assert.rejects(api.login('demo', 'Demo123!', controller.signal), error => error.name === 'AbortError');
   await refreshStarted.promise;
   controller.abort();
+  assert.equal(ownedRefreshSignal.aborted, true);
   await api.register(25);
   assert.equal(tokenFetches, 3);
   oldRefresh.resolve(response(200, { token: 'obsolete', headerName: 'X-CSRF-TOKEN' }));
@@ -753,4 +757,310 @@ test('attendance errors preserve authentication, validation and incident codes w
   controller.abort();
   globalThis.fetch = async () => assert.fail('obsolete attendance read must not start');
   await assert.rejects(api.adminAttendance({ from: '2026-09-16', to: '2026-10-15', page: 1, pageSize: 10 }, controller.signal), error => error.name === 'AbortError');
+});
+
+test('password change sends only the unmodified current/new passwords with CSRF and cancellation without logging in or out', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url === '/api/auth/csrf') return response(200, { token: 'current-session-token', headerName: 'X-CSRF-TOKEN' });
+    return response(200, { success: true });
+  };
+  assert.equal(await api.changePassword(' 旧密码 ', ' Newpass123 ', controller.signal), undefined);
+  assert.deepEqual(calls.map(call => call.url), ['/api/auth/csrf', '/api/me/password']);
+  const write = calls[1].options;
+  assert.equal(write.method, 'POST');
+  assert.equal(write.signal, controller.signal);
+  assert.equal(write.headers.get('X-CSRF-TOKEN'), 'current-session-token');
+  assert.equal(write.credentials, 'same-origin');
+  assert.deepEqual(JSON.parse(write.body), { currentPassword: ' 旧密码 ', newPassword: ' Newpass123 ' });
+});
+
+test('password rejections and uncertain outcomes are never automatically replayed or refreshed as CSRF failures', async () => {
+  for (const [status, code] of [[400, 'CURRENT_PASSWORD_INCORRECT'], [400, 'PASSWORD_UNCHANGED'], [400, 'VALIDATION_ERROR'],
+    [401, 'SESSION_REVOKED'], [429, 'AUTH_RATE_LIMITED'], [503, 'AUTH_RATE_LIMIT_UNAVAILABLE'],
+    [503, 'AUTHENTICATION_UNAVAILABLE'], [500, 'PASSWORD_CHANGE_UNCONFIRMED']]) {
+    const { api } = await freshApi();
+    let tokenFetches = 0;
+    let writes = 0;
+    const requestId = '02dac041-2ba2-4d70-ae40-b50c395a647b';
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/csrf') { tokenFetches++; return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' }); }
+      writes++;
+      return response(status, { code, message: '改密未完成', retryAfterSeconds: 5 }, { 'X-Request-Id': requestId, 'Retry-After': '5' });
+    };
+    await assert.rejects(api.changePassword('Oldpass123', 'Newpass123'), error => error.status === status && error.code === code &&
+      error.requestId === requestId && error.retryAfterSeconds === (status === 429 ? 5 : undefined));
+    assert.equal(tokenFetches, 1);
+    assert.equal(writes, 1);
+  }
+});
+
+test('password changes retry only one explicit CSRF rejection while network failures and invalid success responses remain uncertain', async () => {
+  const { api } = await freshApi();
+  let tokens = 0;
+  let writes = 0;
+  globalThis.fetch = async url => {
+    if (url === '/api/auth/csrf') return response(200, { token: `token-${++tokens}`, headerName: 'X-CSRF-TOKEN' });
+    return ++writes === 1 ? response(403, { code: 'CSRF_INVALID' }) : response(200, { success: true });
+  };
+  await api.changePassword('Oldpass123', 'Newpass123');
+  assert.equal(tokens, 2);
+  assert.equal(writes, 2);
+  for (const badSuccess of [{}, { success: false }, { success: 'true' }, null]) {
+    const { api } = await freshApi();
+    let writes = 0;
+    globalThis.fetch = async url => url === '/api/auth/csrf' ? response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' })
+      : (writes++, response(200, badSuccess));
+    await assert.rejects(api.changePassword('Oldpass123', 'Newpass123'), error => error.code === 'INVALID_RESPONSE');
+    assert.equal(writes, 1);
+  }
+  const isolated = await freshApi();
+  let attempts = 0;
+  globalThis.fetch = async url => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    attempts++;
+    throw new TypeError('uncertain transport failure');
+  };
+  await assert.rejects(isolated.api.changePassword('Oldpass123', 'Newpass123'), error => error.code === 'NETWORK_ERROR');
+  assert.equal(attempts, 1);
+});
+
+test('manual password confirmation logout carries cancellation and refreshes only the current anonymous CSRF token', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const refresh = deferredResponse();
+  const refreshStarted = deferredResponse();
+  let tokenFetches = 0;
+  let ownedRefreshSignal;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      if (++tokenFetches === 2) {
+        ownedRefreshSignal = options.signal;
+        assert.ok(ownedRefreshSignal instanceof AbortSignal);
+        refreshStarted.resolve();
+        return refresh.promise;
+      }
+      return response(200, { token: 'initial', headerName: 'X-CSRF-TOKEN' });
+    }
+    assert.equal(url, '/api/auth/logout');
+    assert.equal(options.signal, controller.signal);
+    return response(200, {});
+  };
+  const cancelledLogout = assert.rejects(api.logout(controller.signal), error => error.name === 'AbortError');
+  await refreshStarted.promise;
+  controller.abort();
+  assert.equal(ownedRefreshSignal.aborted, true);
+  refresh.resolve(response(200, { token: 'obsolete-anonymous-token', headerName: 'X-CSRF-TOKEN' }));
+  await cancelledLogout;
+  await api.refreshCsrf();
+  assert.equal(tokenFetches, 3);
+});
+
+test('cancelling one initial-token subscriber keeps the shared fetch alive for another page write', async () => {
+  const { api } = await freshApi();
+  const first = new AbortController();
+  const second = new AbortController();
+  const tokenResponse = deferredResponse();
+  let tokenFetches = 0;
+  let sharedSignal;
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      tokenFetches++;
+      sharedSignal = options.signal;
+      return tokenResponse.promise;
+    }
+    writes.push({ url, token: options.headers.get('X-CSRF-TOKEN') });
+    return response(200, { id: 26 });
+  };
+  const firstCancelled = assert.rejects(api.register(25, first.signal), error => error.name === 'AbortError');
+  const secondWrite = api.register(26, second.signal);
+  assert.equal(tokenFetches, 1);
+  assert.notEqual(sharedSignal, first.signal);
+  first.abort();
+  await firstCancelled;
+  assert.equal(sharedSignal.aborted, false);
+  tokenResponse.resolve(response(200, { token: 'shared-token', headerName: 'X-CSRF-TOKEN' }));
+  await secondWrite;
+  assert.deepEqual(writes, [{ url: '/api/activities/26/registration', token: 'shared-token' }]);
+  assert.equal(sharedSignal.aborted, false);
+});
+
+test('the last departing initial-token subscriber aborts the actual shared fetch without sending any write', async () => {
+  const { api } = await freshApi();
+  const first = new AbortController();
+  const second = new AbortController();
+  let sharedSignal;
+  let networkAborts = 0;
+  let writes = 0;
+  globalThis.fetch = async (url, options) => {
+    if (url !== '/api/auth/csrf') { writes++; return response(200, {}); }
+    sharedSignal = options.signal;
+    return new Promise((resolve, reject) => sharedSignal.addEventListener('abort', () => {
+      networkAborts++;
+      reject(new DOMException('network request cancelled', 'AbortError'));
+    }, { once: true }));
+  };
+  const firstCancelled = assert.rejects(api.register(25, first.signal), error => error.name === 'AbortError');
+  const secondCancelled = assert.rejects(api.register(26, second.signal), error => error.name === 'AbortError');
+  first.abort();
+  assert.equal(sharedSignal.aborted, false);
+  second.abort();
+  await Promise.all([firstCancelled, secondCancelled]);
+  assert.equal(sharedSignal.aborted, true);
+  assert.equal(networkAborts, 1);
+  assert.equal(writes, 0);
+});
+
+test('an unbound initialization subscriber keeps deduplication when an unrelated page cancels', async () => {
+  const { api } = await freshApi();
+  const tokenResponse = deferredResponse();
+  const page = new AbortController();
+  let tokenFetches = 0;
+  let sharedSignal;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') { tokenFetches++; sharedSignal = options.signal; return tokenResponse.promise; }
+    return response(200, { id: 26 });
+  };
+  const initialization = api.refreshCsrf();
+  const cancelled = assert.rejects(api.register(25, page.signal), error => error.name === 'AbortError');
+  page.abort();
+  await cancelled;
+  assert.equal(sharedSignal.aborted, false);
+  tokenResponse.resolve(response(200, { token: 'initialization-token', headerName: 'X-CSRF-TOKEN' }));
+  await initialization;
+  await api.register(26);
+  assert.equal(tokenFetches, 1);
+});
+
+test('leaving the sole explicit-CSRF-recovery page aborts its recovery fetch and never replays the write', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const recoveryStarted = deferredResponse();
+  let recoverySignal;
+  let tokenFetches = 0;
+  let writes = 0;
+  let networkAborts = 0;
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      if (++tokenFetches === 1) return response(200, { token: 'expired', headerName: 'X-CSRF-TOKEN' });
+      recoverySignal = options.signal;
+      recoveryStarted.resolve();
+      return new Promise((resolve, reject) => recoverySignal.addEventListener('abort', () => {
+        networkAborts++;
+        reject(new DOMException('recovery cancelled', 'AbortError'));
+      }, { once: true }));
+    }
+    writes++;
+    return response(403, { code: 'CSRF_INVALID' });
+  };
+  const cancelled = assert.rejects(api.register(25, controller.signal), error => error.name === 'AbortError');
+  await recoveryStarted.promise;
+  controller.abort();
+  await cancelled;
+  assert.equal(recoverySignal.aborted, true);
+  assert.equal(networkAborts, 1);
+  assert.equal(tokenFetches, 2);
+  assert.equal(writes, 1);
+});
+
+test('new authentication aborts an older shared 403-recovery fetch and the next write uses the new-session token', async () => {
+  const { api } = await freshApi();
+  const recoveryStarted = deferredResponse();
+  let tokenFetches = 0;
+  let recoverySignal;
+  let networkAborts = 0;
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') {
+      if (++tokenFetches === 2) {
+        recoverySignal = options.signal;
+        recoveryStarted.resolve();
+        return new Promise((resolve, reject) => recoverySignal.addEventListener('abort', () => {
+          networkAborts++;
+          reject(new DOMException('old identity cancelled', 'AbortError'));
+        }, { once: true }));
+      }
+      return response(200, { token: `token-${tokenFetches}`, headerName: 'X-CSRF-TOKEN' });
+    }
+    writes.push({ url, token: options.headers.get('X-CSRF-TOKEN') });
+    return url === '/api/activities/25/registration' ? response(403, { code: 'CSRF_INVALID' }) : response(200, { id: 1 });
+  };
+  const cancelledOldWrite = assert.rejects(api.register(25), error => error.name === 'AbortError');
+  await recoveryStarted.promise;
+  await api.login('demo', 'Demo123!');
+  await cancelledOldWrite;
+  assert.equal(recoverySignal.aborted, true);
+  assert.equal(networkAborts, 1);
+  await api.register(26);
+  assert.deepEqual(writes.at(-1), { url: '/api/activities/26/registration', token: 'token-4' });
+  assert.equal(writes.filter(write => write.url === '/api/activities/25/registration').length, 1);
+});
+
+test('a new login closes an actual in-flight HTTP initialization fetch before it can deliver old response headers', async () => {
+  const { api } = await freshApi();
+  const initialStarted = deferredResponse();
+  const initialClosed = deferredResponse();
+  let tokenFetches = 0;
+  let finalWriteToken;
+  const server = createServer((request, reply) => {
+    if (request.url === '/api/auth/csrf') {
+      if (++tokenFetches === 1) {
+        initialStarted.resolve();
+        reply.on('close', () => initialClosed.resolve({ finished: reply.writableFinished, headersSent: reply.headersSent }));
+        return;
+      }
+      reply.writeHead(200, { 'Content-Type': 'application/json' });
+      reply.end(JSON.stringify({ token: `http-token-${tokenFetches}`, headerName: 'X-CSRF-TOKEN' }));
+      return;
+    }
+    if (request.url === '/api/activities/26/registration') finalWriteToken = request.headers['x-csrf-token'];
+    request.resume();
+    reply.writeHead(200, { 'Content-Type': 'application/json' });
+    reply.end(JSON.stringify({ id: 1 }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  globalThis.fetch = (url, options) => originalFetch(`http://127.0.0.1:${address.port}${url}`, options);
+  try {
+    const cancelledInitialization = assert.rejects(api.refreshCsrf(), error => error.name === 'AbortError');
+    await initialStarted.promise;
+    await api.login('demo', 'Demo123!');
+    await cancelledInitialization;
+    assert.deepEqual(await initialClosed.promise, { finished: false, headersSent: false });
+    await api.register(26);
+    assert.equal(finalWriteToken, 'http-token-3');
+    assert.equal(tokenFetches, 3);
+  } finally {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('an old explicit CSRF rejection delivered after a new login cannot refresh tokens or replay its write across identities', async () => {
+  const { api } = await freshApi();
+  const oldWrite = deferredResponse();
+  const oldDispatched = deferredResponse();
+  let tokenFetches = 0;
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') return response(200, { token: `token-${++tokenFetches}`, headerName: 'X-CSRF-TOKEN' });
+    writes.push({ url, token: options.headers.get('X-CSRF-TOKEN') });
+    if (url === '/api/activities/25/registration') { oldDispatched.resolve(); return oldWrite.promise; }
+    return response(200, { id: 1 });
+  };
+  const oldCancelled = assert.rejects(api.register(25), error => error.name === 'AbortError');
+  await oldDispatched.promise;
+  await api.login('demo', 'Demo123!');
+  assert.equal(tokenFetches, 2);
+  oldWrite.resolve(response(403, { code: 'CSRF_INVALID' }));
+  await oldCancelled;
+  assert.equal(tokenFetches, 2);
+  assert.equal(writes.filter(write => write.url === '/api/activities/25/registration').length, 1);
+  await api.register(26);
+  assert.deepEqual(writes.at(-1), { url: '/api/activities/26/registration', token: 'token-2' });
+  assert.equal(tokenFetches, 2);
 });

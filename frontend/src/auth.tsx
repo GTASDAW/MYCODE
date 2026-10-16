@@ -27,6 +27,14 @@ interface AuthContextValue {
   isCurrentAccountRequest: (request: AccountRequest) => boolean;
   captureAuthenticationRequest: () => number;
   isCurrentAuthenticationRequest: (generation: number) => boolean;
+  completePasswordChange: (request: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void) => Promise<void>;
+  signOutToConfirmPassword: (request: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void) => Promise<void>;
+}
+
+export interface PasswordSignOutResult {
+  generation: number;
+  username: string;
+  csrfReady: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -121,6 +129,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isCurrentAuthenticationRequest = useCallback((generation: number) =>
     requests.current.isCurrentAuthentication(generation), []);
 
+  const completePasswordChange = useCallback(async (
+    ticket: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void,
+  ) => {
+    const cancelled = () => new DOMException("Password authentication changed", "AbortError");
+    if (signal.aborted || !requests.current.isSameAccount(ticket, currentUser.current?.id)) throw cancelled();
+    const username = currentUser.current!.username;
+    // Invalidate old profile/notification reads before obtaining the anonymous
+    // CSRF token. Keep the form mounted until that owned refresh is finished.
+    const generation = requests.current.beginAuthentication();
+    const current = () => !signal.aborted && requests.current.isCurrentAuthentication(generation);
+    let csrfReady = true;
+    try { await api.refreshCsrf(signal, true); }
+    catch (error) {
+      if (!current()) throw cancelled();
+      // The POST already confirmed the password change. A refresh failure must
+      // not misreport that confirmed result as an unknown password outcome.
+      csrfReady = false;
+    }
+    if (!current()) throw cancelled();
+    publishUser(null);
+    setError(null);
+    setNotice(null);
+    setLoading(false);
+    // Synchronous completion lets the form clear and navigate before clearing
+    // the user unmounts it and aborts its own already-completed refresh.
+    onComplete({ generation, username, csrfReady });
+  }, [publishUser]);
+
+  const signOutToConfirmPassword = useCallback(async (
+    ticket: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void,
+  ) => {
+    const current = () => !signal.aborted && requests.current.isSameAccount(ticket, currentUser.current?.id);
+    const cancelled = () => new DOMException("Password confirmation cancelled", "AbortError");
+    if (!current()) throw cancelled();
+    const username = currentUser.current!.username;
+    try { await api.logout(signal); }
+    catch (error) {
+      if (!current()) throw cancelled();
+      throw error;
+    }
+    if (!current()) throw cancelled();
+    const generation = requests.current.beginAuthentication();
+    publishUser(null);
+    setError(null);
+    setNotice(null);
+    setLoading(false);
+    onComplete({ generation, username, csrfReady: true });
+  }, [publishUser]);
+
   const readProfile = useCallback(async (signal: AbortSignal) => {
     const userId = currentUser.current?.id;
     if (userId === undefined)
@@ -203,6 +260,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isCurrentAccountRequest,
         captureAuthenticationRequest,
         isCurrentAuthenticationRequest,
+        completePasswordChange,
+        signOutToConfirmPassword,
       }}
     >
       {children}

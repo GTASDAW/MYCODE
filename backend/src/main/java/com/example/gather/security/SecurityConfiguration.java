@@ -2,9 +2,11 @@ package com.example.gather.security;
 
 import com.example.gather.api.ApiModels.ErrorView;
 import com.example.gather.monitoring.RequestObservationFilter;
+import com.example.gather.mapper.CredentialVersionMapper;
 import com.example.gather.security.ratelimit.AuthRateLimitFilter;
 import com.example.gather.security.ratelimit.AuthRateLimitProperties;
 import com.example.gather.security.ratelimit.AuthRateLimitStore;
+import com.example.gather.security.ratelimit.PasswordChangeRateLimitFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
@@ -19,6 +21,7 @@ import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.savedrequest.NullRequestCache;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.util.Map;
@@ -30,13 +33,16 @@ public class SecurityConfiguration {
 
     @Bean
     SecurityFilterChain applicationSecurity(HttpSecurity http, ObjectMapper json,
-            AuthRateLimitProperties rateLimits, AuthRateLimitStore rateLimitStore) throws Exception {
+            AuthRateLimitProperties rateLimits, AuthRateLimitStore rateLimitStore,
+            CredentialVersionMapper versions, CurrentSessionLogout sessions) throws Exception {
         // The SPA asks /auth/csrf for a plain token and sends it through the returned header.
         // Spring Security rotates the token after successful login and logout.
         var tokens = new HttpSessionCsrfTokenRepository();
         var handler = new CsrfTokenRequestAttributeHandler();
         http.csrf(csrf -> csrf.csrfTokenRepository(tokens).csrfTokenRequestHandler(handler))
             .addFilterAfter(new AuthRateLimitFilter(rateLimits, rateLimitStore, json), CsrfFilter.class)
+            .addFilterBefore(new CredentialVersionFilter(versions, sessions, json), AuthorizationFilter.class)
+            .addFilterAfter(new PasswordChangeRateLimitFilter(rateLimits, rateLimitStore, json), AuthorizationFilter.class)
             .requestCache(cache -> cache.requestCache(new NullRequestCache()))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/search", "/api/activities/*", "/api/auth/csrf", "/api/health").permitAll()

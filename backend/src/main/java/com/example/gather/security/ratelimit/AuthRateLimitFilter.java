@@ -65,7 +65,7 @@ public final class AuthRateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    private static AuthRateLimitStore.Bucket bucket(String kind, String source, String username, int limit, int seconds) {
+    static AuthRateLimitStore.Bucket bucket(String kind, String source, String username, int limit, int seconds) {
         try {
             MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
             // Length prefixes prevent submitted separators from creating ambiguous identity tuples.

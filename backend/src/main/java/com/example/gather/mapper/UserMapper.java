@@ -5,11 +5,14 @@ import org.apache.ibatis.annotations.*;
 
 @Mapper
 public interface UserMapper {
-    @Select("SELECT id, username, password_hash, display_name, role FROM users WHERE username = #{username}")
+    @Select("SELECT id, username, password_hash, display_name, role, credential_version FROM users WHERE username = #{username}")
     UserRow findByUsername(String username);
 
-    @Select("SELECT id, username, password_hash, display_name, role FROM users WHERE id = #{id}")
+    @Select("SELECT id, username, password_hash, display_name, role, credential_version FROM users WHERE id = #{id}")
     UserRow findById(long id);
+
+    @Update("UPDATE users SET password_hash=#{passwordHash}, credential_version=credential_version+1 WHERE id=#{id} AND credential_version=#{expectedVersion}")
+    int changePassword(@Param("id") long id, @Param("expectedVersion") long expectedVersion, @Param("passwordHash") String passwordHash);
 
     @Update("UPDATE users SET display_name = #{displayName} WHERE id = #{id}")
     int updateDisplayName(@Param("id") long id, @Param("displayName") String displayName);

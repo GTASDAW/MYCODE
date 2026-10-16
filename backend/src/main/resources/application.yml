@@ -51,6 +51,10 @@ app:
     login-pair-window-seconds: ${AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS:60}
     register-source-limit: ${AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT:5}
     register-source-window-seconds: ${AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS:600}
+    password-account-limit: ${AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT:5}
+    password-account-window-seconds: ${AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS:600}
+    password-source-limit: ${AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT:20}
+    password-source-window-seconds: ${AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS:600}
     max-buckets: ${AUTH_RATE_LIMIT_MAX_BUCKETS:10000}
     namespace: ${AUTH_RATE_LIMIT_NAMESPACE:gather:auth-rate-limit}
     trusted-proxy-ips: ${AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS:}

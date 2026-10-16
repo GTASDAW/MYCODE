@@ -81,15 +81,19 @@ function authenticationRetrySeconds(body: unknown, header: string | null): numbe
 
 let csrf: CsrfToken | null = null;
 let csrfVersion = 0;
-let csrfPromise: {
+interface PendingCsrf {
   version: number;
-  signal?: AbortSignal;
+  controller: AbortController;
+  subscribers: Set<symbol>;
+  finished: boolean;
   promise: Promise<CsrfToken>;
-} | null = null;
+}
+let csrfPromise: PendingCsrf | null = null;
 
 function beginCsrfTransition(): number {
   // The cached token can still authorize the login/logout POST. Any pending
   // refresh belongs to the preceding transition and must not supply its token.
+  csrfPromise?.controller.abort();
   csrfPromise = null;
   return ++csrfVersion;
 }
@@ -105,10 +109,11 @@ async function request<T>(
   const headers = new Headers(options.headers);
   headers.set("Accept", responseType === "csv" ? "text/csv, application/json" : "application/json");
   if (method !== "GET" && method !== "HEAD") {
-    const token = csrf ?? (await getCsrf());
+    const token = csrf ?? (await getCsrf(options.signal ?? undefined));
     headers.set(token.headerName, token.token);
   }
   options.signal?.throwIfAborted();
+  const dispatchedCsrfVersion = csrfVersion;
 
   let response: Response;
   try {
@@ -162,7 +167,11 @@ async function request<T>(
       response.status === 403 &&
       details?.code === "CSRF_INVALID"
     ) {
+      if (dispatchedCsrfVersion !== csrfVersion)
+        throw new DOMException("CSRF recovery authentication changed", "AbortError");
       await refreshCsrf(options.signal ?? undefined);
+      if (dispatchedCsrfVersion !== csrfVersion)
+        throw new DOMException("CSRF recovery authentication changed", "AbortError");
       return request<T>(path, options, false, responseType);
     }
     const fallback =
@@ -184,16 +193,60 @@ async function request<T>(
   return body as T;
 }
 
-async function getCsrf(signal?: AbortSignal): Promise<CsrfToken> {
+function subscribeCsrf(pending: PendingCsrf, signal?: AbortSignal): Promise<CsrfToken> {
+  signal?.throwIfAborted();
+  const cancelled = () => new DOMException("CSRF subscription cancelled", "AbortError");
+  if (pending.controller.signal.aborted) return Promise.reject(cancelled());
+  return new Promise((resolve, reject) => {
+    const subscriber = Symbol();
+    let settled = false;
+    pending.subscribers.add(subscriber);
+    const cleanup = () => {
+      signal?.removeEventListener("abort", abort);
+      pending.controller.signal.removeEventListener("abort", abort);
+      pending.subscribers.delete(subscriber);
+      // One departing page must not abort another live subscriber. Once no
+      // caller remains, stop the network read as well as ignoring its token.
+      if (!pending.finished && pending.subscribers.size === 0) pending.controller.abort();
+    };
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(cancelled());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    pending.controller.signal.addEventListener("abort", abort, { once: true });
+    pending.promise.then(token => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(token);
+    }, error => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+async function getCsrf(signal?: AbortSignal, owned = false): Promise<CsrfToken> {
   signal?.throwIfAborted();
   if (csrf) return csrf;
-  if (csrfPromise && (csrfPromise.signal?.aborted || csrfPromise.version !== csrfVersion))
+  if (csrfPromise && (csrfPromise.controller.signal.aborted || csrfPromise.version !== csrfVersion))
     beginCsrfTransition();
   if (!csrfPromise) {
     const version = csrfVersion;
-    const isCurrent = () => !signal?.aborted && version === csrfVersion;
+    const controller = new AbortController();
+    // A new-session refresh belongs to the authentication that requested it.
+    // Ordinary initialization/recovery instead uses subscriber cancellation.
+    const cancelOwner = () => controller.abort();
+    if (owned) signal?.addEventListener("abort", cancelOwner, { once: true });
+    const isCurrent = () => !controller.signal.aborted && version === csrfVersion;
     const cancelled = () => new DOMException("CSRF refresh cancelled", "AbortError");
-    const promise = request<CsrfToken>("/auth/csrf", { signal })
+    const pending: PendingCsrf = { version, controller, subscribers: new Set(), finished: false,
+      promise: request<CsrfToken>("/auth/csrf", { signal: controller.signal })
       .then((token) => {
         if (!isCurrent()) throw cancelled();
         csrf = token;
@@ -204,21 +257,22 @@ async function getCsrf(signal?: AbortSignal): Promise<CsrfToken> {
         throw error;
       })
       .finally(() => {
+        pending.finished = true;
+        if (owned) signal?.removeEventListener("abort", cancelOwner);
         // A stale refresh must not erase a newer refresh's shared promise.
-        if (csrfPromise?.promise === promise) csrfPromise = null;
-      });
-    csrfPromise = { version, signal, promise };
+        if (csrfPromise === pending) csrfPromise = null;
+      }),
+    };
+    csrfPromise = pending;
   }
-  return csrfPromise.promise;
+  return subscribeCsrf(csrfPromise, signal);
 }
 
 async function refreshCsrf(signal?: AbortSignal, newSession = false): Promise<void> {
   signal?.throwIfAborted();
   csrf = null;
   if (newSession) beginCsrfTransition();
-  // Initialization and ordinary CSRF recovery share an unbound read. A
-  // successful authentication owns its new, cancellable refresh instead.
-  await getCsrf(newSession ? signal : undefined);
+  await getCsrf(signal, newSession);
   signal?.throwIfAborted();
 }
 
@@ -239,6 +293,14 @@ export const api = {
       body: JSON.stringify({ displayName }),
       signal,
     }),
+  changePassword: async (currentPassword: string, newPassword: string, signal?: AbortSignal) => {
+    const result = await request<{ success: boolean }>("/me/password", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }), signal,
+    });
+    if (result?.success !== true)
+      throw new ApiError(200, "结果未确认，请重新登录确认。", "INVALID_RESPONSE");
+  },
   login: async (username: string, password: string, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const version = beginCsrfTransition();
@@ -255,12 +317,14 @@ export const api = {
     signal?.throwIfAborted();
     return user;
   },
-  logout: async () => {
+  logout: async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     const version = beginCsrfTransition();
-    await request("/auth/logout", { method: "POST" });
+    await request("/auth/logout", { method: "POST", signal });
+    signal?.throwIfAborted();
     if (version !== csrfVersion)
       throw new DOMException("Logout refresh superseded", "AbortError");
-    await refreshCsrf(undefined, true);
+    await refreshCsrf(signal, true);
   },
   activities: (signal?: AbortSignal) =>
     request<Activity[]>("/activities", { signal }),

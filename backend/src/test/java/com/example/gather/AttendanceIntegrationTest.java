@@ -4,6 +4,7 @@ import com.example.gather.api.AttendanceModels.*;
 import com.example.gather.domain.NewActivity;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.AttendanceMapper;
+import com.example.gather.mapper.CredentialVersionMapper;
 import com.example.gather.mapper.UserMapper;
 import com.example.gather.monitoring.MonitoringService;
 import com.example.gather.security.AppUserDetails;
@@ -145,7 +146,8 @@ class AttendanceIntegrationTest {
     void verifyDedicatedDatabaseBeforeOwnedFixtureWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(6);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(7);
+        jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, checked_in_at, checked_in_by FROM registrations LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id FROM activity_audit_logs LIMIT 0");
     }
@@ -197,7 +199,9 @@ class AttendanceIntegrationTest {
                 try { mvc.perform(request).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR")); }
                 catch (Exception failure) { throw new IllegalStateException("Invalid attendance parameters must be rejected", failure); }
             });
-            assertThat(records).as(parameters.toString()).isEmpty();
+            assertThat(records).as("Authenticate once, then reject invalid parameters before business SQL: " + parameters)
+                .extracting(query -> query.statement())
+                .containsExactly(CredentialVersionMapper.class.getName() + ".findByUserId");
         }
         for (var range : List.of(List.of("2000-01-01", "2000-01-01"), List.of("2100-12-31", "2100-12-31"),
                 List.of("2040-01-01", "2040-12-31"), List.of("2041-01-01", "2042-01-01"))) {
@@ -348,7 +352,7 @@ class AttendanceIntegrationTest {
         }
         StringBuilder evidence = new StringBuilder("# Attendance actual MySQL EXPLAIN\n\n")
             .append("Two business SELECT statements, one UTC microsecond time, read-only REPEATABLE_READ.\n")
-            .append("Application statement count is not a throughput or latency measurement.\n");
+            .append("Authenticated HTTP separately adds one credential-version SELECT. Statement counts are not a throughput or latency measurement.\n");
         for (var query : queries) {
             var plan = jdbc.queryForList("EXPLAIN " + query.sql(), query.parameters().toArray());
             assertThat(plan).isNotEmpty();
@@ -359,6 +363,24 @@ class AttendanceIntegrationTest {
         }
         Path directory = Path.of("..", ".runtime"); Files.createDirectories(directory);
         Files.writeString(directory.resolve("attendance-query-evidence.md"), evidence.toString(), StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void authenticatedHttpSeparatesOneCredentialVersionReadFromTwoAttendanceBusinessReads() {
+        var identity = principal(adminId());
+        var queries = capture(() -> {
+            try { mvc.perform(get(PATH).with(user(identity)).param("from", DAY).param("to", DAY)).andExpect(status().isOk()); }
+            catch (Exception failure) { throw new IllegalStateException("Authenticated attendance read failed", failure); }
+        });
+        assertThat(queries).extracting(Query::statement).containsExactly(
+            CredentialVersionMapper.class.getName() + ".findByUserId", AttendanceMapper.class.getName() + ".totals",
+            AttendanceMapper.class.getName() + ".page");
+        assertThat(queries.getFirst().sql()).contains("SELECT credential_version").doesNotContain("password_hash", "FOR UPDATE");
+        assertThat(queries.getFirst().parameters()).containsExactly(identity.id());
+        assertThat(queries.subList(1, queries.size())).allSatisfy(query -> {
+            assertThat(query.readOnly()).isTrue();
+            assertThat(query.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        });
     }
 
     @Test

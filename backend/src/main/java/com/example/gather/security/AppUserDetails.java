@@ -12,12 +12,16 @@ public class AppUserDetails extends User {
     private static final long serialVersionUID = 1L;
 
     private final UserView view;
+    // Nullable intentionally: older serialized Sessions deserialize this new field as null and fail closed.
+    private final Long credentialVersion;
 
     public AppUserDetails(UserRow row) {
         super(row.username(), row.passwordHash(), List.of(new SimpleGrantedAuthority("ROLE_" + row.role())));
         this.view = UserView.from(row);
+        this.credentialVersion = row.credentialVersion();
     }
 
     public UserView view() { return view; }
     public long id() { return view.id(); }
+    public Long credentialVersion() { return credentialVersion; }
 }

@@ -2,6 +2,7 @@ package com.example.gather.config;
 
 import com.example.gather.domain.UserRow;
 import com.example.gather.security.AppUserDetails;
+import com.example.gather.security.CurrentSessionLogout;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.session.autoconfigure.SessionAutoConfiguration;
@@ -16,10 +17,17 @@ import org.springframework.security.web.csrf.DefaultCsrfToken;
 import org.springframework.session.data.redis.RedisSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.session.web.http.CookieSerializer;
+import org.springframework.session.web.http.HttpSessionIdResolver;
+import org.springframework.session.web.http.CookieHttpSessionIdResolver;
+import org.springframework.session.MapSession;
+import org.springframework.session.MapSessionRepository;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
@@ -72,7 +80,7 @@ class RedisSessionConfigurationTest {
     @Test
     void defaultRedisSerializerRoundTripsTrustedIdentityAndCsrfWithoutPassword() {
         String hash = "hash-must-not-be-stored";
-        var principal = new AppUserDetails(new UserRow(42L, "demo", hash, "演示用户", "USER"));
+        var principal = new AppUserDetails(new UserRow(42L, "demo", hash, "演示用户", "USER", 9));
         var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, "plain-password",
             principal.getAuthorities());
         authentication.eraseCredentials();
@@ -89,8 +97,40 @@ class RedisSessionConfigurationTest {
         assertThat(restoredAuthentication.getCredentials()).isNull();
         assertThat(restoredPrincipal.getPassword()).isNull();
         assertThat(restoredPrincipal.id()).isEqualTo(42L);
+        assertThat(restoredPrincipal.credentialVersion()).isEqualTo(9L);
         assertThat(restoredPrincipal.view().displayName()).isEqualTo("演示用户");
         assertThat(restoredPrincipal.getAuthorities()).extracting("authority").containsExactly("ROLE_USER");
         assertThat(((DefaultCsrfToken) restored.get("csrf")).getToken()).isEqualTo("rotated-token");
+    }
+
+    @Test
+    void springSessionOuterCommitPreservesCookieForRevocationButExplicitLogoutStillExpires() {
+        context.run(application -> {
+            assertThat(application).hasNotFailed().hasSingleBean(CookieSerializer.class);
+            var repository = new MapSessionRepository(new ConcurrentHashMap<>());
+            var resolver = new CookieHttpSessionIdResolver();
+            resolver.setCookieSerializer(application.getBean(CookieSerializer.class));
+            for (boolean passwordRevocation : new boolean[] {true, false}) {
+                MapSession session = repository.createSession(); session.setAttribute("trusted", "identity"); repository.save(session);
+                var cookieResponse = new MockHttpServletResponse();
+                resolver.setSessionId(new MockHttpServletRequest(), cookieResponse, session.getId());
+                String header = cookieResponse.getHeader("Set-Cookie");
+                assertThat(header).startsWith("JSESSIONID=").contains("Path=/", "HttpOnly", "SameSite=Lax");
+                String cookie = header.substring("JSESSIONID=".length(), header.indexOf(';'));
+                var request = new MockHttpServletRequest("POST", passwordRevocation ? "/api/me/password" : "/api/auth/logout");
+                request.setCookies(new Cookie("JSESSIONID", cookie));
+                var response = new MockHttpServletResponse();
+                var filter = new SessionRepositoryFilter<MapSession>(repository); filter.setHttpSessionIdResolver(resolver);
+                filter.doFilter(request, response, (incoming, outgoing) -> {
+                    var sessionRequest = (HttpServletRequest) incoming;
+                    assertThat(sessionRequest.getSession(false).getAttribute("trusted")).isEqualTo("identity");
+                    if (passwordRevocation) incoming.setAttribute(CurrentSessionLogout.PRESERVE_BROWSER_COOKIE, true);
+                    sessionRequest.getSession(false).invalidate();
+                });
+                assertThat(repository.findById(session.getId())).isNull();
+                if (passwordRevocation) assertThat(response.getHeader("Set-Cookie")).isNull();
+                else assertThat(response.getHeader("Set-Cookie")).contains("JSESSIONID=", "Max-Age=0");
+            }
+        });
     }
 }

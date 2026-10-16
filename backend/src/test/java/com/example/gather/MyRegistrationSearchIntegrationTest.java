@@ -3,6 +3,7 @@ package com.example.gather;
 import com.example.gather.api.ApiModels.*;
 import com.example.gather.api.MyRegistrationModels.*;
 import com.example.gather.mapper.RegistrationMapper;
+import com.example.gather.mapper.CredentialVersionMapper;
 import com.example.gather.mapper.UserMapper;
 import com.example.gather.monitoring.MonitoringService;
 import com.example.gather.security.AppUserDetails;
@@ -141,7 +142,8 @@ class MyRegistrationSearchIntegrationTest {
     void verifyDedicatedCurrentSchemaBeforeFixtureWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class))
-            .isEqualTo("6");
+            .isEqualTo("7");
+        jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
     }
 
@@ -385,6 +387,34 @@ class MyRegistrationSearchIntegrationTest {
     }
 
     @Test
+    void authenticatedHttpAddsOneCredentialReadWithoutChangingLegacyOrPagedBusinessQueryCounts() {
+        long owner = createUser("USER", "认证与业务查询分列");
+        register(createActivity(2), owner);
+        var identity = principal(owner);
+        var old = capture(() -> {
+            try { mvc.perform(get("/api/me/registrations").with(user(identity))).andExpect(status().isOk()); }
+            catch (Exception failure) { throw new IllegalStateException("Authenticated legacy read failed", failure); }
+        });
+        assertThat(old).extracting(Query::statement).containsExactly(
+            CredentialVersionMapper.class.getName() + ".findByUserId", RegistrationMapper.class.getName() + ".findMine");
+        var paged = capture(() -> {
+            try { mvc.perform(get(PATH).with(user(identity))).andExpect(status().isOk()); }
+            catch (Exception failure) { throw new IllegalStateException("Authenticated paged read failed", failure); }
+        });
+        assertThat(paged).extracting(Query::statement).containsExactly(
+            CredentialVersionMapper.class.getName() + ".findByUserId", RegistrationMapper.class.getName() + ".mineTotals",
+            RegistrationMapper.class.getName() + ".searchMine");
+        for (var credential : List.of(old.getFirst(), paged.getFirst())) {
+            assertThat(credential.sql()).contains("SELECT credential_version").doesNotContain("password_hash", "FOR UPDATE");
+            assertThat(credential.parameters()).containsExactly(owner);
+        }
+        assertThat(paged.subList(1, paged.size())).allSatisfy(query -> {
+            assertThat(query.readOnly()).isTrue();
+            assertThat(query.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        });
+    }
+
+    @Test
     void actualMySqlExplainUsesTheCapturedJoinedStatementsAndWritesBoundedEvidence() throws Exception {
         long owner = createUser("USER", "执行计划");
         for (int i = 0; i < 13; i++) register(createActivity(2), owner);
@@ -393,7 +423,7 @@ class MyRegistrationSearchIntegrationTest {
         var evidence = new StringBuilder("# My registration query evidence\n\n")
             .append("Dedicated database: activity_platform_test; MySQL ").append(jdbc.queryForObject("SELECT VERSION()", String.class)).append(".\n")
             .append("Owned fixture: 13 activities and 13 personal registration rows.\n")
-            .append("Observed application data SELECT statements: legacy=1; paged=2.\n")
+            .append("Observed service business SELECT statements: legacy=1; paged=2. Authenticated HTTP adds one credential-version SELECT.\n")
             .append("These are statement counts, not a constant-work or production latency claim. Waiting counts use a correlated subquery.\n");
         for (var query : java.util.stream.Stream.concat(old.stream(), paged.stream()).toList()) {
             var plan = jdbc.queryForList("EXPLAIN " + query.sql(), query.parameters().toArray());
