@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24.21.0'
@@ -36,12 +38,25 @@ jobs:
           npm ci --prefix frontend 2>&1 | tee .runtime/ci/frontend-install.log
           npm test --prefix frontend 2>&1 | tee .runtime/ci/frontend-tests.log
           npm run build --prefix frontend 2>&1 | tee .runtime/ci/frontend-build.log
+      - name: Verify fixed production loading baseline and current module boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test scripts/frontend-loading.test.mjs 2>&1 | tee .runtime/ci/frontend-loading-tools.log
+          npm run build:loading 2>&1 | tee .runtime/ci/frontend-loading-build.log
+          npm run check:loading 2>&1 | tee .runtime/ci/frontend-loading-contract.log
       - name: Preserve frontend diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: frontend-diagnostics
-          path: .runtime/ci/frontend-*.log
+          path: |
+            .runtime/ci/frontend-*.log
+            .runtime/frontend-loading/contract.json
+            .runtime/frontend-loading/comparison.md
+            .runtime/frontend-loading/baseline/build.json
+            .runtime/frontend-loading/after/build.json
+          include-hidden-files: true
           retention-days: 7
 
   backend:
@@ -146,6 +161,13 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:e2e 2>&1 | tee .runtime/ci/browser-tests.log
+      - name: Verify production route loading, recovery and Nginx cache contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci/loading-dist
+          docker compose -f compose.yaml -f .github/compose.ci.yaml cp web:/usr/share/nginx/html/.vite .runtime/ci/loading-dist/.vite
+          LOADING_BASE_URL="$E2E_BASE_URL" LOADING_BUILD_PATH=.runtime/ci/loading-dist/.vite/loading-graph.json LOADING_DIST_PATH=.runtime/ci/loading-dist LOADING_OUTPUT_DIR=.runtime/ci/loading-browser-results LOADING_REPORT_DIR=.runtime/ci/loading-browser-report npm run test:loading 2>&1 | tee .runtime/ci/loading-browser.log
       - name: Verify strict in-memory auth limits and real browser recovery
         shell: bash
         run: |
@@ -243,6 +265,13 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:e2e 2>&1 | tee .runtime/ci/redis-browser-tests.log
+      - name: Verify production loading and cache recovery through shared-session Nginx
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime/ci/loading-dist
+          docker compose -f compose.yaml -f compose.redis.yaml -f .github/compose.ci.yaml -f .github/compose.redis-ci.yaml cp web:/usr/share/nginx/html/.vite .runtime/ci/loading-dist/.vite
+          LOADING_BASE_URL="$E2E_BASE_URL" LOADING_BUILD_PATH=.runtime/ci/loading-dist/.vite/loading-graph.json LOADING_DIST_PATH=.runtime/ci/loading-dist LOADING_OUTPUT_DIR=.runtime/ci/loading-browser-results LOADING_REPORT_DIR=.runtime/ci/loading-browser-report npm run test:loading 2>&1 | tee .runtime/ci/redis-loading-browser.log
       - name: Verify strict shared auth limits on both replicas and real browser recovery
         shell: bash
         run: |

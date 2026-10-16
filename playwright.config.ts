@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testIgnore: process.env.AUTH_RATE_LIMIT_E2E === '1' ? undefined : ['**/auth-rate-limit.spec.ts'],
+  testIgnore: ['**/loading.spec.ts', ...(process.env.AUTH_RATE_LIMIT_E2E === '1' ? [] : ['**/auth-rate-limit.spec.ts'])],
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   fullyParallel: false,
