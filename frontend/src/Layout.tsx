@@ -29,6 +29,7 @@ import { useAuth } from "./auth";
 import { useNotifications } from "./notifications";
 import { errorMessage } from "./api";
 import { Logo } from "./components";
+import { PageContentBoundary } from "./PageContentBoundary";
 
 export function Layout() {
   const auth = useAuth();
@@ -258,7 +259,7 @@ export function Layout() {
         </aside>
         <div className="content-shell">
           <main id="main-content" ref={mainRef} tabIndex={-1}>
-            <Outlet />
+            <PageContentBoundary><Outlet /></PageContentBoundary>
           </main>
           <footer className="site-footer">集会 Gather · 活动报名平台</footer>
         </div>

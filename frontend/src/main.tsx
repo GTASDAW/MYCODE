@@ -1,4 +1,4 @@
-import React from "react";
+import React, { lazy } from "react";
 import ReactDOM from "react-dom/client";
 import { App as AntApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
@@ -7,21 +7,37 @@ import { AuthProvider } from "./auth";
 import { NotificationProvider } from "./notifications";
 import { Layout } from "./Layout";
 import { ActivitiesPage } from "./pages/ActivitiesPage";
-import { ActivityDetailRoute } from "./pages/ActivityDetailPage";
-import { CreateActivityPage } from "./pages/CreateActivityPage";
-import { EditActivityRoute } from "./pages/EditActivityPage";
-import { LoginPage } from "./pages/LoginPage";
-import { RegisterPage } from "./pages/RegisterPage";
-import { ProfilePage } from "./pages/ProfilePage";
-import { NotificationsPage } from "./pages/NotificationsPage";
-import { MyRegistrationsPage } from "./pages/MyRegistrationsPage";
 import { NotFoundPage, ProtectedRoute } from "./pages/AccessPages";
-import { AdminDashboardPage } from "./pages/AdminDashboardPage";
-import { AdminActivitiesPage } from "./pages/AdminActivitiesPage";
-import { AdminRegistrationsRoute } from "./pages/AdminRegistrationsPage";
-import { AdminMonitoringPage } from "./pages/AdminMonitoringPage";
-import { AdminAuditLogsPage } from "./pages/AdminAuditLogsPage";
 import "./styles.css";
+
+// Keep lazy identities outside renders. ProtectedRoute decides whether an
+// authorized page is rendered before React invokes its dynamic import.
+const ActivityDetailRoute = lazy(() => import("./pages/ActivityDetailPage")
+  .then(module => ({ default: module.ActivityDetailRoute })));
+const CreateActivityPage = lazy(() => import("./pages/CreateActivityPage")
+  .then(module => ({ default: module.CreateActivityPage })));
+const EditActivityRoute = lazy(() => import("./pages/EditActivityPage")
+  .then(module => ({ default: module.EditActivityRoute })));
+const LoginPage = lazy(() => import("./pages/LoginPage")
+  .then(module => ({ default: module.LoginPage })));
+const RegisterPage = lazy(() => import("./pages/RegisterPage")
+  .then(module => ({ default: module.RegisterPage })));
+const ProfilePage = lazy(() => import("./pages/ProfilePage")
+  .then(module => ({ default: module.ProfilePage })));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage")
+  .then(module => ({ default: module.NotificationsPage })));
+const MyRegistrationsPage = lazy(() => import("./pages/MyRegistrationsPage")
+  .then(module => ({ default: module.MyRegistrationsPage })));
+const AdminDashboardPage = lazy(() => import("./pages/AdminDashboardPage")
+  .then(module => ({ default: module.AdminDashboardPage })));
+const AdminActivitiesPage = lazy(() => import("./pages/AdminActivitiesPage")
+  .then(module => ({ default: module.AdminActivitiesPage })));
+const AdminRegistrationsRoute = lazy(() => import("./pages/AdminRegistrationsPage")
+  .then(module => ({ default: module.AdminRegistrationsRoute })));
+const AdminMonitoringPage = lazy(() => import("./pages/AdminMonitoringPage")
+  .then(module => ({ default: module.AdminMonitoringPage })));
+const AdminAuditLogsPage = lazy(() => import("./pages/AdminAuditLogsPage")
+  .then(module => ({ default: module.AdminAuditLogsPage })));
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

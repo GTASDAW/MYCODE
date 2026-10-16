@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { loadingEvidencePlugin } from "./loadingEvidencePlugin";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), loadingEvidencePlugin()],
   server: {
     host: "127.0.0.1",
     port: 5173,
@@ -20,16 +21,5 @@ export default defineConfig({
       },
     },
   },
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: (id: string) => {
-          if (/node_modules\/(react|react-dom|react-router)\//.test(id))
-            return "react";
-          if (/node_modules\/@rc-component\//.test(id)) return "components";
-          if (/node_modules\/(antd|@ant-design)\//.test(id)) return "ui";
-        },
-      },
-    },
-  },
+  build: { manifest: true },
 });
