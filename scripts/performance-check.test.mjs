@@ -366,6 +366,7 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert(!db.calls.some(sql => sql.includes('notifications')));
   assert(!db.calls.some(sql => sql.includes('checked_in')));
   assert(!db.calls.some(sql => sql.includes('activity_audit_logs')));
+  assert(!db.calls.some(sql => sql.includes('credential_version')));
 });
 
 test('external check-in audit references reject performance cleanup before any deletion', async () => {

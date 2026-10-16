@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError } from '../src/api.ts';
 import { passwordError } from '../src/accountValidation.ts';
-import { currentPasswordError, passwordChangeUnconfirmed, passwordConfirmationError,
+import { currentPasswordError, passwordChangeUnconfirmed, passwordConfirmationError, passwordLoginState,
   passwordUnconfirmedNotice, passwordUpdatedCsrfUnavailableNotice, passwordUpdatedNotice } from '../src/passwordChange.ts';
 import { AuthRequestGuard, readAccountResource } from '../src/authRequestGuard.ts';
 
@@ -36,6 +36,20 @@ test('only uncertain transport, server or invalid-success outcomes enter confirm
   assert.equal(passwordUpdatedNotice, '密码已更新，请重新登录。');
   assert.match(passwordUpdatedCsrfUnavailableNotice, /^密码已更新.*安全凭证暂不可用/);
   assert.equal(passwordUnconfirmedNotice, '结果未确认，请重新登录确认。');
+});
+
+test('password exit retains confirmed or uncertain login metadata and the profile destination without copying password values', () => {
+  const result = { username: 'own_account', csrfReady: true, currentPassword: 'Oldpassword123', newPassword: 'Newpassword123' };
+  assert.deepEqual(passwordLoginState(result, true), {
+    from: '/profile', username: 'own_account', passwordUpdated: true, notice: passwordUpdatedNotice,
+  });
+  assert.deepEqual(passwordLoginState({ ...result, csrfReady: false }, true), {
+    from: '/profile', username: 'own_account', passwordUpdated: true, notice: passwordUpdatedCsrfUnavailableNotice,
+  });
+  assert.deepEqual(passwordLoginState(result, false), {
+    from: '/profile', username: 'own_account', passwordUpdated: false, notice: passwordUnconfirmedNotice,
+  });
+  assert.deepEqual(Object.keys(passwordLoginState(result, true)).sort(), ['from', 'notice', 'passwordUpdated', 'username']);
 });
 
 function deferred() {

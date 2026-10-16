@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, verifyDeclaredSettings, verifyOwnedRateOperation, verifyConcurrentAdmissions } from './auth-rate-limit-check.mjs';
+import { isolatedSettings, verifyDeclaredSettings, verifyOwnedRateOperation, verifyConcurrentAdmissions, verifyPasswordAdmissions } from './auth-rate-limit-check.mjs';
 
 const environment = {
   AUTH_RATE_LIMIT_TEST_MODE: 'redis', COMPOSE_PROJECT_NAME: 'gather-redis-ci',
@@ -15,6 +15,8 @@ function declaration(settings) {
     AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT: '10000', AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT: '1000',
     AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT: '10000', AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS: '60',
     AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS: '60', AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS: '600',
+    AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT: '1000', AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS: '600',
+    AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT: '10000', AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS: '600',
     AUTH_RATE_LIMIT_MAX_BUCKETS: '10000', AUTH_RATE_LIMIT_NAMESPACE: 'gather:auth-rate-limit-ci', AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS: '',
     ...(settings.redis ? { SPRING_PROFILES_ACTIVE: 'redis', REDIS_HOST: 'redis', REDIS_PORT: '6379',
       REDIS_PASSWORD: environment.REDIS_PASSWORD, SESSION_TIMEOUT: '30m', SESSION_NAMESPACE: 'gather:session' } : {}),
@@ -55,6 +57,8 @@ test('strict auth declarations refuse identity, profile, proxy and mismatched du
     declared => { declared.services.backend.environment.DB_PASSWORD = 'changed-private-value'; },
     declared => { declared.services.backend2.environment.SPRING_PROFILES_ACTIVE = ''; },
     declared => { declared.services.backend2.environment.AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT = '3'; },
+    declared => { declared.services.backend2.environment.AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT = '2'; },
+    declared => { declared.services.backend2.environment.AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS = '8'; },
     declared => { declared.services.backend.environment.AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS = '127.0.0.1'; },
     declared => { declared.services.backend2.environment.AUTH_RATE_LIMIT_NAMESPACE = 'shared'; },
     declared => { declared.services.backend.environment.SESSION_TIMEOUT = '3s'; },
@@ -107,4 +111,13 @@ test('controlled Redis damage can delete only its exact UUID expiry index and ca
     [namespace, 'EXISTS', `${prefix}expires:other`], ['gather:auth-rate-limit', 'DEL', `${prefix}expires`],
     [namespace, 'DEL', 'gather:auth-rate-limit-ci-other:{auth-rate-limit}:expires'],
   ]) assert.throws(() => verifyOwnedRateOperation(name, command, key));
+});
+
+test('concurrent password admission counts real 400 outcomes separately from 429 and validates each JSON and Retry-After', async () => {
+  const response = (status, code = status === 400 ? 'CURRENT_PASSWORD_INCORRECT' : 'AUTH_RATE_LIMITED') => new Response(
+    JSON.stringify({ code, ...(status === 429 ? { retryAfterSeconds: 8 } : {}) }), { status,
+      headers: { 'X-Request-Id': 'sample-request-id', ...(status === 429 ? { 'Retry-After': '8' } : {}) } });
+  await verifyPasswordAdmissions([response(400), response(400), ...Array.from({ length: 6 }, () => response(429))], 2);
+  await assert.rejects(verifyPasswordAdmissions([response(400), response(429)], 2));
+  await assert.rejects(verifyPasswordAdmissions([response(400, 'VALIDATION_ERROR'), response(429)], 1));
 });

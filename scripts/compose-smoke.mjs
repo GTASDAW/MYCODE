@@ -30,6 +30,10 @@ const startedFixture = { key: startedKey, id: null, title: `Compose 签到验证
   description: `gather-compose-checkin:${runId}:${startedKey}` };
 const fixtureIntentPath = `.runtime/ci/compose-fixtures-${runId}.json`;
 const reportPath = '.runtime/ci/compose-smoke.json';
+const passwordKey = randomUUID();
+const passwordAccount = { key: passwordKey, id: null, username: `smoke_${passwordKey.replaceAll('-', '').slice(0, 24)}`,
+  displayName: `e2e-${passwordKey}`, allowedDisplayNames: [`e2e-${passwordKey}`], role: 'USER' };
+let passwordAttempted = false;
 
 function check(name) { checks.push(name); console.log(`PASS: ${name}`); }
 
@@ -109,6 +113,7 @@ async function verifyApiDatabaseBeforeWrites() {
 
 class ApiClient {
   cookies = new Map();
+  clone() { const client = new ApiClient(); client.cookies = new Map(this.cookies); return client; }
 
   async response(path, options = {}) {
     const headers = new Headers(options.headers);
@@ -159,20 +164,22 @@ async function waitHealthy() {
 }
 
 async function snapshot() {
+  const [users] = await db.query('SELECT * FROM users ORDER BY id');
   const [activities] = await db.query('SELECT id, title, description, location, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
-  return JSON.stringify({ activities, registrations, notifications, auditLogs });
+  return JSON.stringify({ users, activities, registrations, notifications, auditLogs });
 }
 
 async function removeFixture() {
   // Exact intent can recover a created row even if its HTTP response was interrupted.
   const proofs = [{ key: runId, id: fixture?.id ?? null, title, description }, startedFixture];
-  cleanupCounts = await deleteOwnedFixtures(db, proofs, new Set(), async (activities) => {
-    await writeFile(fixtureIntentPath, JSON.stringify({ runId, proofs, cleanupIntent: { activityIds: activities.map(row => row.id), userIds: [] } }, null, 2));
-  });
-  assert.equal(await snapshot(), baseline, 'Existing database records changed during smoke checks.');
+  cleanupCounts = await deleteOwnedFixtures(db, proofs, new Set(), async (activities, accounts) => {
+    await writeFile(fixtureIntentPath, JSON.stringify({ runId, proofs, passwordAccount, cleanupIntent: {
+      activityIds: activities.map(row => row.id), userIds: accounts.map(row => row.id) } }, null, 2));
+  }, { accounts: passwordAttempted ? [passwordAccount] : [] });
+  assert(await snapshot() === baseline, 'Existing database records changed during smoke checks.');
   check('only the exact smoke fixtures and their check-in history were removed; baseline data preserved');
 }
 
@@ -192,9 +199,9 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7']);
   assert(migrations.every(row => row.success === 1));
-  check('fresh MySQL schema contains successful Flyway V1 through V6');
+  check('fresh MySQL schema contains successful Flyway V1 through V7');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -347,7 +354,7 @@ try {
   assert.equal((await admin.response(checkInPath, { method: 'POST' })).status, 403);
   const demoCheckToken = await demo.json('/api/auth/csrf');
   assert.equal((await demo.response(checkInPath, { method: 'POST', headers: { [demoCheckToken.headerName]: demoCheckToken.token } })).status, 403);
-  assert.equal(await snapshot(), beforeCheckIn, 'Denied check-in requests must not change any data.');
+  assert(await snapshot() === beforeCheckIn, 'Denied check-in requests must not change any data.');
   const signed = await admin.write(checkInPath);
   assert(signed.checkedInAt && signed.checkedInBy === adminIdentity.id);
   assert.equal(signed.status, 'ACTIVE');
@@ -434,6 +441,46 @@ try {
   assert.deepEqual(outsidePersonal.summary, personal.summary);
   check('personal registration pagination preserves legacy shape, global statistics and private attendance from the trusted Session');
 
+  const passwordOwner = new ApiClient();
+  passwordAttempted = true;
+  const registeredPasswordOwner = await passwordOwner.write('/api/auth/register', 'POST', {
+    username: passwordAccount.username, displayName: passwordAccount.displayName, password: 'LocalPassword123!',
+  });
+  assert(registeredPasswordOwner.role === 'USER' && registeredPasswordOwner.username === passwordAccount.username);
+  passwordAccount.id = registeredPasswordOwner.id;
+  await passwordOwner.login(passwordAccount.username, 'LocalPassword123!');
+  const secondPasswordSession = new ApiClient();
+  await secondPasswordSession.login(passwordAccount.username, 'LocalPassword123!');
+  const oldPasswordCookie = secondPasswordSession.clone();
+  const beforeWrongPassword = await snapshot();
+  const passwordToken = await passwordOwner.json('/api/auth/csrf');
+  const wrongPassword = await passwordOwner.response('/api/me/password', { method: 'POST',
+    headers: { [passwordToken.headerName]: passwordToken.token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'Incorrect123!', newPassword: 'UpdatedPassword123!' }) });
+  assert.equal(wrongPassword.status, 400);
+  assert.equal((await wrongPassword.json()).code, 'CURRENT_PASSWORD_INCORRECT');
+  assert(await snapshot() === beforeWrongPassword, 'Rejected password change must preserve all application rows.');
+  assert.deepEqual(await passwordOwner.write('/api/me/password', 'POST', {
+    currentPassword: 'LocalPassword123!', newPassword: 'UpdatedPassword123!',
+  }), { success: true });
+  assert.equal((await passwordOwner.response('/api/auth/me')).status, 401);
+  const revoked = await oldPasswordCookie.clone().response('/api/auth/me');
+  assert.equal(revoked.status, 401);
+  assert.equal((await revoked.json()).code, 'SESSION_REVOKED');
+  const publicAfterPassword = await oldPasswordCookie.clone().json(`/api/activities/${fixture.id}`);
+  assert.equal(publicAfterPassword.registrationStatus, null);
+  const [[changedCredential]] = await db.execute('SELECT credential_version AS version FROM users WHERE id=?', [passwordAccount.id]);
+  assert.equal(Number(changedCredential.version), 1);
+  const wrongLoginToken = await passwordOwner.json('/api/auth/csrf');
+  const oldPasswordLogin = await passwordOwner.response('/api/auth/login', { method: 'POST',
+    headers: { [wrongLoginToken.headerName]: wrongLoginToken.token, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: passwordAccount.username, password: 'LocalPassword123!' }) });
+  assert.equal(oldPasswordLogin.status, 401);
+  assert.equal((await oldPasswordLogin.json()).code, 'INVALID_CREDENTIALS');
+  await passwordOwner.login(passwordAccount.username, 'UpdatedPassword123!');
+  await passwordOwner.write('/api/auth/logout');
+  check('owned password change advances V7 version, revokes both sessions, rejects the old password and admits the new password without changing demo accounts');
+
   if (process.env.SMOKE_RESTART_BACKEND === '1') {
     assert.equal(process.env.COMPOSE_PROJECT_NAME, 'gather-ci', 'Restart is restricted to the isolated gather-ci project.');
     assert.equal(database, 'activity_platform_e2e', 'Restart requires the isolated CI database.');
@@ -441,7 +488,7 @@ try {
     execFileSync('docker', ['compose', '-p', 'gather-ci', '-f', 'compose.yaml', '-f', '.github/compose.ci.yaml', 'restart', 'backend'], { stdio: 'inherit' });
     await waitHealthy();
     assert.equal((await admin.response('/api/auth/me')).status, 401, 'Restarted in-memory Session must require login.');
-    assert.equal(await snapshot(), beforeRestart, 'Restart changed existing activity or signup data.');
+    assert(await snapshot() === beforeRestart, 'Restart changed existing activity or signup data.');
     await admin.login('admin', process.env.DEMO_ADMIN_PASSWORD ?? 'Admin123!');
     const persisted = await admin.json(`/api/activities/${fixture.id}`);
     assert.equal(persisted.registrationStatus, 'CANCELLED');

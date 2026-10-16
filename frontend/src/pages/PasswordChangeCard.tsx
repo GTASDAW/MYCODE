@@ -6,8 +6,7 @@ import { useAuth } from "../auth";
 import type { PasswordSignOutResult } from "../auth";
 import { passwordError } from "../accountValidation";
 import { readAccountResource } from "../authRequestGuard";
-import { currentPasswordError, passwordChangeUnconfirmed, passwordConfirmationError, passwordUnconfirmedNotice,
-  passwordUpdatedCsrfUnavailableNotice, passwordUpdatedNotice } from "../passwordChange";
+import { currentPasswordError, passwordChangeUnconfirmed, passwordConfirmationError, passwordLoginState, passwordUnconfirmedNotice } from "../passwordChange";
 import { useAuthRateLimit } from "../useAuthRateLimit";
 import "./passwordChange.css";
 
@@ -59,10 +58,7 @@ export function PasswordChangeCard() {
     if (!mounted.current || controller.signal.aborted || submission.current !== controller ||
       !auth.isCurrentAuthenticationRequest(result.generation)) return;
     form.resetFields();
-    navigate("/login", { replace: true, state: {
-      from: "/profile", username: result.username, passwordUpdated: confirmed,
-      notice: confirmed ? result.csrfReady ? passwordUpdatedNotice : passwordUpdatedCsrfUnavailableNotice : passwordUnconfirmedNotice,
-    } });
+    navigate("/login", { replace: true, state: passwordLoginState(result, confirmed) });
   };
 
   async function submit(values: PasswordValues) {

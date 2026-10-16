@@ -27,6 +27,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessResourceFailureException;
@@ -67,7 +68,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {"spring.datasource.hikari.maximum-pool-size=4",
     "app.auth-rate-limit.password-account-limit=3", "app.auth-rate-limit.password-account-window-seconds=60",
     "app.auth-rate-limit.password-source-limit=12", "app.auth-rate-limit.password-source-window-seconds=60"})
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(PasswordChangeIntegrationTest.Configuration.class)
 @ExtendWith(OutputCaptureExtension.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -171,7 +172,9 @@ class PasswordChangeIntegrationTest {
             var response = mvc.perform(at(post(PATH).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(Map.of("currentPassword", PASSWORD, "newPassword", NEXT, "userId", other, "id", other, "role", "ADMIN"))), source()))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true)).andReturn().getResponse();
-            assertThat(session.isInvalid()).isTrue(); assertThat(response.getHeaders("Set-Cookie")).noneMatch(value -> value.contains("JSESSIONID=") && value.contains("Max-Age=0"));
+            assertThat(session.isInvalid()).isTrue();
+            assertThat(response.getHeaders("Set-Cookie").stream().noneMatch(value -> value.contains("JSESSIONID=") && value.contains("Max-Age=0")))
+                .as("Password change must not send a session cookie deletion").isTrue();
             var after = users.findById(id);
             assertThat(after.credentialVersion()).isEqualTo(before.credentialVersion() + 1);
             assertThat(after.passwordHash().equals(before.passwordHash())).isFalse(); assertThat(encoder.matches(NEXT, after.passwordHash())).isTrue();
@@ -180,7 +183,7 @@ class PasswordChangeIntegrationTest {
             login(id, NEXT);
             mvc.perform(at(post("/api/auth/login").with(csrf()).param("username", ownedUsers.get(id)).param("password", PASSWORD), source()))
                 .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
-            assertThat(output.getAll()).doesNotContain(PASSWORD, NEXT, after.passwordHash());
+            assertSafeOutput(output, PASSWORD, NEXT, after.passwordHash());
         }
     }
 
@@ -217,7 +220,7 @@ class PasswordChangeIntegrationTest {
         assertThat(encoder.matches("Ab12345", users.findById(legacy).passwordHash())).isFalse();
         long unicode = createUser("USER", PASSWORD);
         String exactBytes = "a1" + "汉".repeat(23) + "b";
-        assertThat(exactBytes.getBytes(java.nio.charset.StandardCharsets.UTF_8)).hasSize(72);
+        assertThat(exactBytes.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).isEqualTo(72);
         mvc.perform(change(principal(unicode), PASSWORD, exactBytes)).andExpect(status().isOk());
         login(unicode, exactBytes);
     }
@@ -255,13 +258,14 @@ class PasswordChangeIntegrationTest {
         passwords.change(principal(id), new ChangePasswordRequest(PASSWORD, NEXT));
         var revoked = mvc.perform(get("/api/auth/csrf").session(session)).andExpect(status().isUnauthorized())
             .andExpect(jsonPath("$.code").value("SESSION_REVOKED")).andReturn();
-        assertThat(revoked.getRequest().getSession(false)).isNull();
-        assertThat(revoked.getResponse().getHeaders("Set-Cookie")).isEmpty();
+        assertThat(revoked.getRequest().getSession(false) == null).as("Revoked CSRF read must not create a session").isTrue();
+        assertThat(revoked.getResponse().getHeaders("Set-Cookie").isEmpty()).as("Revoked CSRF read must not set any cookie").isTrue();
         var refreshed = mvc.perform(get("/api/auth/csrf")).andExpect(status().isOk()).andReturn();
         var next = json.readTree(refreshed.getResponse().getContentAsString());
-        assertThat(next.get("token").asString()).isNotEqualTo(token.get("token").asString());
+        assertThat(next.get("token").asString().equals(token.get("token").asString()))
+            .as("Fresh anonymous CSRF token must differ from the revoked token").isFalse();
         var anonymous = (MockHttpSession) refreshed.getRequest().getSession(false);
-        assertThat(anonymous.getId()).isNotEqualTo(session.getId());
+        assertThat(anonymous.getId().equals(session.getId())).as("Anonymous session must differ from the revoked session").isFalse();
         mvc.perform(post(PATH).session(anonymous).header(token.get("headerName").asString(), token.get("token").asString())
             .contentType(MediaType.APPLICATION_JSON).content(body(NEXT, "Another789!"))).andExpect(status().isForbidden());
         mvc.perform(post(PATH).session(anonymous).header(next.get("headerName").asString(), next.get("token").asString())
@@ -279,7 +283,7 @@ class PasswordChangeIntegrationTest {
         hooks.versionFailure.set(true);
         mvc.perform(get("/api/auth/me").with(user(principal))).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("AUTHENTICATION_UNAVAILABLE"));
         mvc.perform(get("/api/activities/search").with(user(principal))).andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("AUTHENTICATION_UNAVAILABLE"));
-        assertThat(output.getAll()).doesNotContain("password-test-private-db-password");
+        assertSafeOutput(output, "password-test-private-db-password");
     }
 
     @Test void passwordCasAllowsExactlyOneConcurrentWinnerAndHasNoLockingRead() throws Exception {
@@ -302,7 +306,7 @@ class PasswordChangeIntegrationTest {
         long id = createUser("USER", PASSWORD); var before = accountState(id); hooks.failAfterUpdate.set(true);
         mvc.perform(change(principal(id), PASSWORD, NEXT)).andExpect(status().isInternalServerError());
         assertThat(accountState(id)).isEqualTo(before);
-        assertThat(output.getAll()).doesNotContain(PASSWORD, NEXT, "password-test-private-update-failed");
+        assertSafeOutput(output, PASSWORD, NEXT, "password-test-private-update-failed");
     }
 
     @Test void oldHashLoginFinishingAfterPasswordChangeKeepsOldVersionAndIsRejectedOnNextRequest() throws Exception {
@@ -348,7 +352,7 @@ class PasswordChangeIntegrationTest {
         reset(sessions);
         mvc.perform(get("/api/auth/me").session(session)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("SESSION_REVOKED"));
         login(id, NEXT);
-        assertThat(output.getAll()).doesNotContain("private-session-store-password", PASSWORD, NEXT);
+        assertSafeOutput(output, "private-session-store-password", PASSWORD, NEXT);
     }
 
     @Test void passwordQuotaSharesAccountsAcrossSessionsAndSourcesAndRejectsBeforeReadingBody() throws Exception {
@@ -385,6 +389,11 @@ class PasswordChangeIntegrationTest {
         long id = users.findByUsername(username).id(); ownedUsers.put(id, username); return id;
     }
     private AppUserDetails principal(long id) { return new AppUserDetails(users.findById(id)); }
+    private static void assertSafeOutput(CapturedOutput output, String... secrets) {
+        String captured = output.getAll();
+        assertThat(Arrays.stream(secrets).noneMatch(captured::contains))
+            .as("Captured logs must not contain credentials or raw private failure text").isTrue();
+    }
     private String accountState(long id) {
         try {
             return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")

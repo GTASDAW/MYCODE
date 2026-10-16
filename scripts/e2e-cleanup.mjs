@@ -34,14 +34,14 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6') ORDER BY installed_rank");
-  if (!['1', '2', '3', '4', '5', '6'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4', '5', '6', '7'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
   await connection.execute('SELECT id, activity_id, user_id, status, checked_in_at, checked_in_by FROM registrations LIMIT 0');
-  await connection.execute('SELECT id, username, display_name, role FROM users LIMIT 0');
+  await connection.execute('SELECT id, username, display_name, role, credential_version FROM users LIMIT 0');
   await connection.execute('SELECT id, user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
   await connection.execute('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");

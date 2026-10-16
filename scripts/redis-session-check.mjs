@@ -148,6 +148,7 @@ async function verifyAllApiDatabasesBeforeWrites(settings) {
 export class ApiClient {
   cookies = new Map();
   sessionCookiePolicy;
+  lastResponseDeletedSession = false;
 
   clone() { const client = new ApiClient(); client.cookies = new Map(this.cookies); return client; }
 
@@ -156,6 +157,8 @@ export class ApiClient {
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     if (this.cookies.size) headers.set('Cookie', [...this.cookies].map(([key, value]) => `${key}=${value}`).join('; '));
     const response = await fetch(new URL(path, base), { ...options, headers, redirect: 'manual', signal: AbortSignal.timeout(10000) });
+    this.lastResponseDeletedSession = response.headers.getSetCookie().some(cookie =>
+      /^JSESSIONID=;/i.test(cookie) || /^JSESSIONID=/i.test(cookie) && /(?:max-age=0|expires=Thu, 01 Jan 1970)/i.test(cookie));
     for (const cookie of response.headers.getSetCookie()) {
       const pair = cookie.split(';')[0];
       const separator = pair.indexOf('=');
@@ -259,6 +262,28 @@ async function databaseSnapshot(db) {
 async function expectedError(response, status, code) {
   assert(response.status === status, `Expected HTTP ${status}, received ${response.status}.`);
   assert((await response.json()).code === code, `Expected ${code} response.`);
+}
+
+export async function withActivityTableLock(connection, action, settle = async () => {}, beforeLock = async () => {}) {
+  let locked = false;
+  let result;
+  const errors = [];
+  try {
+    await beforeLock();
+    await connection.execute('SET SESSION lock_wait_timeout=5');
+    await connection.execute('LOCK TABLES activities WRITE');
+    locked = true;
+    result = await action();
+  } catch (error) { errors.push(error); }
+  finally {
+    if (locked) try { await connection.execute('UNLOCK TABLES'); } catch (error) { errors.push(error); }
+    // Closing the owning connection also releases locks if UNLOCK itself failed.
+    try { await connection.end(); } catch (error) { errors.push(error); }
+    try { await settle(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'The isolated held-session verification and lock cleanup failed; first error is preserved.');
+  return result;
 }
 
 export async function runRedisSessionChecks() {
@@ -671,6 +696,83 @@ export async function runRedisSessionChecks() {
     assert.deepEqual(demoPersonal.summary, { activeRegistrations: 0, waitingRegistrations: 1, cancelledRegistrations: 1, checkedInRegistrations: 0 });
     await expectedError(await new ApiClient().response(settings.web, '/api/me/registrations/search'), 401, 'UNAUTHENTICATED');
     passed('personal pagination and global summary are scoped to each Session on A/B/Nginx; only own attendance is exposed and legacy arrays agree');
+
+    const savedOldSession = otherAccountSession.clone();
+    const savedOldCsrf = await otherAccountSession.csrf(settings.b);
+    const publicPasswordSession = client();
+    await publicPasswordSession.login(settings.b, ownedAccount.username, 'LocalAccount123!');
+    const publicOldCookie = publicPasswordSession.clone();
+    const currentPasswordToken = await accountClient.csrf(settings.a);
+    const beforePassword = JSON.parse(await databaseSnapshot(db));
+    // The fixed isolated project/ports/database/UUID probe above authorize this
+    // short table lock only in this CI database. It holds an existing read after
+    // its credential check so the real Java Session can save after password change.
+    const lateCookie = accountClient.clone();
+    const lockConnection = await mysql.createConnection({ ...settings.database, timezone: 'Z', dateStrings: true });
+    let changedPassword;
+    let lateRead;
+    let completedLateRead;
+    await withActivityTableLock(lockConnection, async () => {
+      lateRead = lateCookie.response(settings.b, '/api/me/registrations/search?page=1&pageSize=10&status=ALL');
+      const deadline = Date.now() + 4000;
+      let waiting = false;
+      while (Date.now() < deadline) {
+        // Never return or print PROCESSLIST.INFO, connection IDs or credentials.
+        const [[state]] = await db.execute("SELECT COUNT(*) AS total FROM information_schema.PROCESSLIST WHERE DB=? AND USER=? AND COMMAND='Query' AND STATE='Waiting for table metadata lock' AND INFO LIKE '%registrations%' AND INFO LIKE '%activities%'",
+          [settings.database.database, settings.database.user]);
+        if (Number(state.total) === 1) { waiting = true; break; }
+        await delay(50);
+      }
+      assert(waiting, 'The owned old-session Java read did not demonstrably pass credential validation and wait on its activity SELECT.');
+      changedPassword = await accountClient.write(settings.a, '/api/me/password', currentPasswordToken, 'POST', {
+        currentPassword: 'LocalAccount123!', newPassword: 'UpdatedAccount123!',
+      });
+    }, async () => { if (lateRead) completedLateRead = await lateRead; }, async () => {
+      const [[identity]] = await db.execute('SELECT @@server_uuid AS serverUuid');
+      await verifyDatabase(lockConnection, settings.database, { ...settings.database, serverUuid: identity.serverUuid });
+    });
+    assert.equal(completedLateRead.status, 200, 'The admitted in-flight read may finish after password change.');
+    const latePage = await completedLateRead.json();
+    assert.equal(latePage.total, 2, 'The held Java read must still belong to the exact existing owned user.');
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const afterLateSave = await lateCookie.clone().response(base, '/api/auth/me');
+      assert.equal(afterLateSave.status, 401, 'Late saving the old real Java Session must never restore authenticated access.');
+      await afterLateSave.arrayBuffer();
+    }
+    passed('a real B request held after credential validation finishes after A changes the password; its late shared-session save cannot restore identity on A/B/Nginx');
+    assert.deepEqual(changedPassword, { success: true });
+    assert.equal(accountClient.lastResponseDeletedSession, false, 'Password change must not send a late Cookie deletion that could erase a new login.');
+    await expectedError(await accountClient.response(settings.b, '/api/auth/me'), 401, 'UNAUTHENTICATED');
+    const revokedPasswordClient = savedOldSession.clone();
+    await expectedError(await revokedPasswordClient.response(settings.b, '/api/me/profile'), 401, 'SESSION_REVOKED');
+    assert.equal(revokedPasswordClient.lastResponseDeletedSession, false, 'Credential-version rejection must not expire a newly logged-in Cookie.');
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const stale = await savedOldSession.clone().response(base, '/api/auth/me');
+      assert.equal(stale.status, 401);
+      const failure = await stale.json();
+      assert(['SESSION_REVOKED', 'UNAUTHENTICATED'].includes(failure.code));
+      const publicActivity = await publicOldCookie.clone().json(base, `/api/activities/${fixture.id}`);
+      assert.equal(publicActivity.registrationStatus, null);
+      const deniedWrite = await savedOldSession.clone().response(base, '/api/me/password', { method: 'POST',
+        headers: { [savedOldCsrf.headerName]: savedOldCsrf.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: 'UpdatedAccount123!', newPassword: 'ShouldNeverSave123!' }) });
+      assert([401, 403].includes(deniedWrite.status), 'Stale Session or CSRF must never change credentials again.');
+      await deniedWrite.arrayBuffer();
+    }
+    const afterPassword = JSON.parse(await databaseSnapshot(db));
+    for (const state of [beforePassword, afterPassword]) state.users = state.users.map(row => row.id === ownedAccount.id
+      ? { ...row, password_hash: '<owned-password>', credential_version: '<owned-version>' } : row);
+    assert(JSON.stringify(afterPassword) === JSON.stringify(beforePassword), 'Password change may alter only the exact owned hash/version, preserving all other data.');
+    const [[versionAfterPassword]] = await db.execute('SELECT credential_version AS version FROM users WHERE id=?', [ownedAccount.id]);
+    assert.equal(Number(versionAfterPassword.version), 1);
+    const rejectedOldLogin = client();
+    const oldLoginToken = await rejectedOldLogin.csrf(settings.b);
+    await expectedError(await rejectedOldLogin.response(settings.b, '/api/auth/login', { method: 'POST',
+      headers: { [oldLoginToken.headerName]: oldLoginToken.token, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: ownedAccount.username, password: 'LocalAccount123!' }) }), 401, 'INVALID_CREDENTIALS');
+    await accountClient.login(settings.b, ownedAccount.username, 'UpdatedAccount123!');
+    for (const base of [settings.a, settings.b, settings.web]) assert((await accountClient.json(base, '/api/auth/me')).id === ownedAccount.id);
+    passed('changing only the owned password on A advances V7 once; all old cookies/CSRF lose identity on A/B/Nginx, public reads are anonymous and the new password logs in across replicas');
 
     const loggedOutCookie = admin.clone();
     await admin.write(settings.b, '/api/auth/logout', token);

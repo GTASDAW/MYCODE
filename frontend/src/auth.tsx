@@ -1,5 +1,6 @@
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -148,13 +149,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       csrfReady = false;
     }
     if (!current()) throw cancelled();
-    publishUser(null);
-    setError(null);
-    setNotice(null);
-    setLoading(false);
-    // Synchronous completion lets the form clear and navigate before clearing
-    // the user unmounts it and aborts its own already-completed refresh.
-    onComplete({ generation, username, csrfReady });
+    // BrowserRouter schedules navigation as a transition. Schedule the identity
+    // update with it so ProtectedRoute cannot redirect an intermediate null user
+    // and replace the confirmed login notice/username with its generic state.
+    startTransition(() => {
+      publishUser(null);
+      setError(null);
+      setNotice(null);
+      setLoading(false);
+      onComplete({ generation, username, csrfReady });
+    });
   }, [publishUser]);
 
   const signOutToConfirmPassword = useCallback(async (
@@ -171,11 +175,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (!current()) throw cancelled();
     const generation = requests.current.beginAuthentication();
-    publishUser(null);
-    setError(null);
-    setNotice(null);
-    setLoading(false);
-    onComplete({ generation, username, csrfReady: true });
+    startTransition(() => {
+      publishUser(null);
+      setError(null);
+      setNotice(null);
+      setLoading(false);
+      onComplete({ generation, username, csrfReady: true });
+    });
   }, [publishUser]);
 
   const readProfile = useCallback(async (signal: AbortSignal) => {

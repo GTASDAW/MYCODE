@@ -20,3 +20,12 @@ export function passwordChangeUnconfirmed(error: unknown): boolean {
 export const passwordUpdatedNotice = "密码已更新，请重新登录。";
 export const passwordUpdatedCsrfUnavailableNotice = "密码已更新，请重新登录。安全凭证暂不可用，请重试。";
 export const passwordUnconfirmedNotice = "结果未确认，请重新登录确认。";
+
+export function passwordLoginState(result: { username: string; csrfReady: boolean }, confirmed: boolean) {
+  // Select only safe login metadata; never put the submitted password values in
+  // browser history or rebuild this state through a generic protected redirect.
+  return {
+    from: "/profile", username: result.username, passwordUpdated: confirmed,
+    notice: confirmed ? result.csrfReady ? passwordUpdatedNotice : passwordUpdatedCsrfUnavailableNotice : passwordUnconfirmedNotice,
+  };
+}

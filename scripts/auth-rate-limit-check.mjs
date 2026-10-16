@@ -11,7 +11,8 @@ import { databaseConfig, verifyDatabase, initializeRun, cleanupRun, trackAccount
 const delay = milliseconds => new Promise(resolveDelay => setTimeout(resolveDelay, milliseconds));
 const windowSeconds = 8;
 const rateKeys = ['LOGIN_SOURCE_LIMIT', 'LOGIN_SOURCE_WINDOW_SECONDS', 'LOGIN_PAIR_LIMIT', 'LOGIN_PAIR_WINDOW_SECONDS',
-  'REGISTER_SOURCE_LIMIT', 'REGISTER_SOURCE_WINDOW_SECONDS', 'MAX_BUCKETS', 'NAMESPACE', 'TRUSTED_PROXY_IPS']
+  'REGISTER_SOURCE_LIMIT', 'REGISTER_SOURCE_WINDOW_SECONDS', 'PASSWORD_ACCOUNT_LIMIT', 'PASSWORD_ACCOUNT_WINDOW_SECONDS',
+  'PASSWORD_SOURCE_LIMIT', 'PASSWORD_SOURCE_WINDOW_SECONDS', 'MAX_BUCKETS', 'NAMESPACE', 'TRUSTED_PROXY_IPS']
   .map(key => `AUTH_RATE_LIMIT_${key}`);
 
 export function verifyOwnedRateOperation(namespace, command, key) {
@@ -79,6 +80,10 @@ export function verifyDeclaredSettings(settings, declared, environment = process
       AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS: environment.AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS ?? '60',
       AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS: environment.AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS ?? '60',
       AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS: environment.AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS ?? '600',
+      AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT: environment.AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT ?? '1000',
+      AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS: environment.AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS ?? '600',
+      AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT: environment.AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT ?? '10000',
+      AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS: environment.AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS ?? '600',
       AUTH_RATE_LIMIT_MAX_BUCKETS: environment.AUTH_RATE_LIMIT_MAX_BUCKETS ?? '10000',
       AUTH_RATE_LIMIT_NAMESPACE: environment.AUTH_RATE_LIMIT_NAMESPACE ?? 'gather:auth-rate-limit-ci',
     };
@@ -186,6 +191,20 @@ async function registration(client, endpoint, csrf, account, path = '/api/auth/r
     body: JSON.stringify({ username: account.username, displayName: account.displayName, password: 'Demo123!' }) });
 }
 
+async function changePassword(client, endpoint, csrf, currentPassword, newPassword = 'TargetPassword123!', path = '/api/me/password', headers = {}) {
+  return client.response(endpoint, path, { method: 'POST',
+    headers: { [csrf.headerName]: csrf.token, 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ currentPassword, newPassword }) });
+}
+
+export async function verifyPasswordAdmissions(responses, admitted) {
+  assert(responses.filter(response => response.status === 400).length === admitted
+    && responses.filter(response => response.status === 429).length === responses.length - admitted,
+  'Concurrent password attempts must admit exactly the configured account quota.');
+  for (const response of responses) await error(response, response.status,
+    response.status === 400 ? 'CURRENT_PASSWORD_INCORRECT' : 'AUTH_RATE_LIMITED');
+}
+
 function browserChecks(settings) {
   return new Promise((resolveBrowser, reject) => {
     const child = spawn(process.execPath, ['node_modules/@playwright/test/cli.js', 'test', 'e2e/auth-rate-limit.spec.ts',
@@ -239,11 +258,23 @@ export async function runRateLimitChecks() {
       assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description,
         'A rate-limit API endpoint differs from the UUID SQL proof; authentication writes refused.');
     }
-    passed('owned Docker containers, exact ports, profile, MySQL V6 and UUID API/database identity verified before authentication writes');
+    passed('owned Docker containers, exact ports, profile, MySQL V7 and UUID API/database identity verified before authentication writes');
+    // These new users belong to the existing exact cleanup manifest. Prepare
+    // them before strict registration limits; demo/admin credentials stay fixed.
+    const passwordAccounts = Array.from({ length: 3 }, () => trackAccount());
+    const prepare = newClient();
+    for (const account of passwordAccounts) {
+      const response = await registration(prepare, settings.web, await prepare.csrf(settings.web), account);
+      assert(response.status === 201, 'Could not create an exact password-quota fixture before the strict stage.');
+      const user = await response.json();
+      recordAccountId(account.key, user.id); account.id = user.id;
+    }
     Object.assign(process.env, {
       AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT: '6', AUTH_RATE_LIMIT_LOGIN_PAIR_LIMIT: '3', AUTH_RATE_LIMIT_REGISTER_SOURCE_LIMIT: '2',
       AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS: String(windowSeconds), AUTH_RATE_LIMIT_LOGIN_PAIR_WINDOW_SECONDS: String(windowSeconds),
       AUTH_RATE_LIMIT_REGISTER_SOURCE_WINDOW_SECONDS: String(windowSeconds), AUTH_RATE_LIMIT_MAX_BUCKETS: '10000',
+      AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_LIMIT: '2', AUTH_RATE_LIMIT_PASSWORD_SOURCE_LIMIT: '4',
+      AUTH_RATE_LIMIT_PASSWORD_ACCOUNT_WINDOW_SECONDS: String(windowSeconds), AUTH_RATE_LIMIT_PASSWORD_SOURCE_WINDOW_SECONDS: String(windowSeconds),
       AUTH_RATE_LIMIT_NAMESPACE: strictNamespace, AUTH_RATE_LIMIT_TRUSTED_PROXY_IPS: '',
     });
     strictChanged = true;
@@ -349,6 +380,65 @@ export async function runRateLimitChecks() {
 
     await browserChecks(settings);
     passed('real strict-limit desktop and mobile countdown, manual retry, input preservation and late-response browser checks passed');
+
+    await resetWindow();
+    const passwordClients = passwordAccounts.map(() => newClient());
+    const passwordTokens = [];
+    for (let index = 0; index < passwordAccounts.length; index++) {
+      await passwordClients[index].login(index % 2 ? second : first, passwordAccounts[index].username, 'Demo123!');
+      passwordTokens.push(await passwordClients[index].csrf(first));
+    }
+    const passwordBefore = await snapshot(db);
+    const anonymousPassword = newClient();
+    const anonymousToken = await anonymousPassword.csrf(first);
+    for (let index = 0; index < 5; index++) {
+      await error(await changePassword(anonymousPassword, index % 2 ? second : first, anonymousToken, 'Demo123!'), 401, 'UNAUTHENTICATED');
+      await error(await passwordClients[0].response(index % 2 ? second : first, '/api/me/password', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ currentPassword: 'Demo123!', newPassword: 'TargetPassword123!' }) }),
+      403, 'CSRF_INVALID');
+    }
+    const path = '/api/me/%70assword';
+    assert(new URL(path, first).pathname === path, 'Password encoded path must stay encoded on the wire.');
+    await error(await changePassword(passwordClients[0], first, passwordTokens[0], 'Incorrect123!'), 400, 'CURRENT_PASSWORD_INCORRECT');
+    await error(await changePassword(passwordClients[0], second, passwordTokens[0], 'Incorrect123!', 'TargetPassword123!', path), 400, 'CURRENT_PASSWORD_INCORRECT');
+    await error(await changePassword(passwordClients[0], first, passwordTokens[0], 'Demo123!'), 429, 'AUTH_RATE_LIMITED');
+    for (let index = 0; index < 2; index++) await error(await changePassword(passwordClients[1], index % 2 ? second : first,
+      passwordTokens[1], 'Incorrect123!'), 400, 'CURRENT_PASSWORD_INCORRECT');
+    await error(await changePassword(passwordClients[2], second, passwordTokens[2], 'Demo123!', 'TargetPassword123!', '/api/me/password', {
+      'X-Forwarded-For': '198.51.100.41', Forwarded: 'for=198.51.100.42', 'X-Gather-Client-IP': '198.51.100.43',
+    }), 429, 'AUTH_RATE_LIMITED');
+    if (settings.redis) {
+      // The fixed Nginx container is a real different direct source than the
+      // loopback-published Java ports; no caller-supplied IP header is trusted.
+      for (let index = 0; index < 2; index++) await error(await changePassword(passwordClients[2], settings.web,
+        passwordTokens[2], 'Incorrect123!'), 400, 'CURRENT_PASSWORD_INCORRECT');
+      await error(await changePassword(passwordClients[2], settings.web, passwordTokens[2], 'Demo123!'), 429, 'AUTH_RATE_LIMITED');
+    }
+    assert(await snapshot(db) === passwordBefore, 'Password quota, wrong current password, invalid CSRF and anonymous failures must leave all data unchanged.');
+    passed('password account/source quotas share canonical encoded paths on real instances; anonymous/invalid CSRF and rejected account quota do not consume other buckets, forged headers cannot bypass source quota');
+    await resetWindow();
+    const concurrentPassword = await Promise.all(Array.from({ length: 8 }, (_, index) => changePassword(passwordClients[0].clone(),
+      index % 2 ? second : first, passwordTokens[0], 'Incorrect123!')));
+    await verifyPasswordAdmissions(concurrentPassword, 2);
+    assert(await snapshot(db) === passwordBefore, 'Concurrent rejected password attempts must not write credentials or application data.');
+    passed('eight concurrent cross-instance password attempts admit exactly two account checks and preserve every database row');
+    await resetWindow();
+    const changed = await changePassword(passwordClients[0], first, passwordTokens[0], 'Demo123!');
+    assert(changed.status === 200 && (await changed.json()).success === true, 'A real password change must recover after the natural fixed window.');
+    assert(!changed.headers.getSetCookie().some(cookie => /^JSESSIONID=;/i.test(cookie)
+      || /^JSESSIONID=/i.test(cookie) && /max-age=0/i.test(cookie)), 'Password completion must never expire a newer browser Cookie.');
+    const [[credential]] = await db.execute('SELECT credential_version AS version FROM users WHERE id=?', [passwordAccounts[0].id]);
+    assert(Number(credential.version) === 1, 'Exactly one admitted password change must advance the owned credential version.');
+    const [[unchangedDemo]] = await db.execute("SELECT credential_version AS version FROM users WHERE username='demo'");
+    assert(Number(unchangedDemo.version) === 0, 'Original demo credentials must not be modified by password quota tests.');
+    const oldLogin = newClient();
+    await error(await attempt(oldLogin, second, await oldLogin.csrf(second), passwordAccounts[0].username, 'Demo123!'), 401, 'INVALID_CREDENTIALS');
+    const recoveredPassword = newClient();
+    await recoveredPassword.login(second, passwordAccounts[0].username, 'TargetPassword123!');
+    assert((await recoveredPassword.json(first, '/api/auth/me')).id === passwordAccounts[0].id, 'New credentials must authenticate across both selected instances.');
+    await recoveredPassword.write(first, '/api/auth/logout', await recoveredPassword.csrf(first));
+    for (let index = 1; index < passwordClients.length; index++) await passwordClients[index].write(first, '/api/auth/logout', passwordTokens[index]);
+    passed('password fixed windows expire naturally; one owned credential version advances, old password fails and new password authenticates without changing demo accounts');
     if (settings.redis) {
       await resetWindow();
       const corrupt = newClient();
@@ -402,7 +492,8 @@ export async function runRateLimitChecks() {
     else process.env.E2E_RUN_MANIFEST = previousManifest;
     await mkdir('.runtime/ci', { recursive: true });
     await writeFile(`.runtime/ci/auth-rate-limit-${settings.mode}.json`, `${JSON.stringify({ success: !primaryError, mode: settings.mode,
-      windowSeconds, loginPairLimit: 3, loginSourceLimit: 6, registerSourceLimit: 2, checks, cleanup: cleanupCounts }, null, 2)}\n`);
+      windowSeconds, loginPairLimit: 3, loginSourceLimit: 6, registerSourceLimit: 2,
+      passwordAccountLimit: 2, passwordSourceLimit: 4, checks, cleanup: cleanupCounts }, null, 2)}\n`);
   }
   if (primaryError) throw primaryError;
   console.log(`Authentication rate-limit verification completed (${checks.length} checks, ${settings.mode}).`);
