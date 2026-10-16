@@ -3,9 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
-import { afterContract, argumentsOf, BASELINE_REVISION, buildContract, byteSizes, eagerGraph,
-  LAZY_MODULES, outputRoot, PROJECT_ROOT, relativeModule, sourceDigest } from './frontend-loading-core.mjs';
+import { afterContract, argumentsOf, assetInventory, BASELINE_REVISION, buildContract, byteSizes, eagerGraph,
+  LAZY_MODULES, outputRoot, PROJECT_ROOT, relativeModule, sourceDigest, verifyMeasurementArtifacts } from './frontend-loading-core.mjs';
 import { createProductionServer } from './frontend-loading-server.mjs';
+import { runLoadingSample } from './frontend-loading-sample.mjs';
 
 const TABLE = 'node_modules/antd/es/table/InternalTable.js';
 const PRIVATE = 'src/pages/AdminPrivate.tsx';
@@ -144,4 +145,52 @@ test('production server refuses filesystem symlinks and preserves source authori
   assert.equal((await fetch(base + '/link/secret.js')).status, 404);
   const proxied = await fetch(base + '/api/health', { headers: { 'X-Gather-Client-IP': '203.0.113.2' } });
   assert.deepEqual(await proxied.json(), { source: '127.0.0.1', method: 'GET' });
+});
+
+function artifactPair(t) {
+  const root = temp(t);
+  const builds = {};
+  for (const variant of ['baseline', 'after']) {
+    const build = fixture();
+    const dist = path.join(root, variant, 'dist'); mkdirSync(path.join(dist, 'assets'), { recursive: true }); mkdirSync(path.join(dist, '.vite'));
+    for (const chunk of build.chunks) writeFileSync(path.join(dist, chunk.file), chunk.isEntry ? 'A'.repeat(variant === 'baseline' ? 5000 : 1000) : 'export{}');
+    writeFileSync(path.join(dist, 'assets/index-12345678.css'), 'body{color:red}');
+    writeFileSync(path.join(dist, '.vite/manifest.json'), JSON.stringify(build.manifest));
+    build.assets = assetInventory(dist); builds[variant] = build;
+  }
+  return { root, ...builds };
+}
+test('measurement preflight rechecks the comparison and exact disk manifests, bytes and hashes', t => {
+  const { root, baseline, after } = artifactPair(t);
+  assert.equal(verifyMeasurementArtifacts(baseline, after, root).lazyEntries.length, 13);
+  writeFileSync(path.join(root, 'after/dist/assets/index-12345678.js'), 'B'.repeat(1000));
+  assert.throws(() => verifyMeasurementArtifacts(baseline, after, root), /bytes or hashes differ/);
+});
+test('measurement preflight refuses an overwritten manifest or incompatible build metadata', t => {
+  const { root, baseline, after } = artifactPair(t);
+  writeFileSync(path.join(root, 'after/dist/.vite/manifest.json'), '{}');
+  assert.throws(() => verifyMeasurementArtifacts(baseline, after, root), /disk manifest differs/);
+  const incompatible = structuredClone(after); incompatible.lockSha256 = 'different';
+  assert.throws(() => verifyMeasurementArtifacts(baseline, incompatible, root), /locks must match/);
+});
+const sampleSettings = { network: { latencyMs: 150, downloadBitsPerSecond: 1600000, uploadBitsPerSecond: 750000 }, timeoutMs: 1000 };
+const sampleInput = { viewport: 'desktop', size: { width: 1280, height: 800 }, variant: 'after', round: 1, sequence: 1,
+  url: 'http://127.0.0.1:5185/activities', settings: sampleSettings };
+test('a context initialization failure still returns the scheduled failed sample', async () => {
+  const sample = await runLoadingSample({ ...sampleInput, browser: { async newContext() { throw new Error('setup failed'); } } });
+  assert.equal(sample.sequence, 1); assert.equal(sample.success, false); assert.equal(sample.failure, 'browser setup failed');
+  assert.deepEqual(sample.resources, []);
+});
+test('CDP initialization failures retain the failed sample and close its context', async () => {
+  let closed = 0;
+  const context = { async newPage() { return {}; }, async newCDPSession() { return { async send() { throw new Error('CDP failed'); } }; }, async close() { closed++; } };
+  const sample = await runLoadingSample({ ...sampleInput, browser: { async newContext() { return context; } } });
+  assert.equal(sample.success, false); assert.equal(sample.failure, 'browser setup failed'); assert.equal(closed, 1);
+});
+test('observer initialization failures are not discarded before navigation', async () => {
+  let closed = 0;
+  const page = { on() {}, async addInitScript() { throw new Error('observer failed'); } };
+  const context = { async newPage() { return page; }, async newCDPSession() { return { async send() {}, on() {} }; }, async close() { closed++; } };
+  const sample = await runLoadingSample({ ...sampleInput, browser: { async newContext() { return context; } } });
+  assert.equal(sample.success, false); assert.equal(sample.failure, 'browser setup failed'); assert.equal(closed, 1);
 });

@@ -77,9 +77,11 @@ export function assetInventory(dist) {
   function walk(directory) {
     for (const name of readdirSync(directory).sort()) {
       const full = path.join(directory, name);
-      if (statSync(full).isDirectory()) walk(full);
+      const info = lstatSync(full);
+      assert(!info.isSymbolicLink(), 'Build asset inventory must not traverse a symlink or junction');
+      if (info.isDirectory()) walk(full);
       else if (/\.(?:js|css)$/.test(name)) assets.push({ file: slash(path.relative(dist, full)),
-        type: name.endsWith('.js') ? 'js' : 'css', ...byteSizes(readFileSync(full)) });
+        type: name.endsWith('.js') ? 'js' : 'css', ...byteSizes(readFileSync(full)), sha256: digest(readFileSync(full)) });
     }
   }
   assert(existsSync(dist), 'Build dist is missing'); walk(dist); return assets;
@@ -174,4 +176,17 @@ export function buildContract(before, after) {
     administratorDeferredDependencies: evidence.adminDeferredSrc, administratorTableImplementations: evidence.tableImplementationModules,
     estimates: { gzip: 'Independent level-9 gzip per JS/CSS file; excludes HTTP headers and is not a browser measurement' },
     savings: { jsRawBytes: baseline.jsRawBytes - current.jsRawBytes, jsGzipBytes: baseline.jsGzipBytes - current.jsGzipBytes } };
+}
+
+export function verifyMeasurementArtifacts(before, after, output) {
+  const root = outputRoot(output);
+  const contract = buildContract(before, after);
+  for (const [variant, build] of [['baseline', before], ['after', after]]) {
+    const dist = path.join(root, variant, 'dist');
+    rejectSymlinkAncestors(dist);
+    assert.deepEqual(jsonFile(path.join(dist, '.vite/manifest.json')), build.manifest, `${variant} disk manifest differs from build metadata`);
+    const sorted = assets => [...assets].sort((a, b) => a.file.localeCompare(b.file));
+    assert.deepEqual(sorted(assetInventory(dist)), sorted(build.assets), `${variant} disk JS/CSS bytes or hashes differ from build metadata`);
+  }
+  return contract;
 }

@@ -2,6 +2,7 @@ import type { Plugin } from "vite";
 import { gzipSync } from "node:zlib";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 /** Build-only evidence; the web server denies .vite and the browser never fetches this graph. */
 export function loadingEvidencePlugin(): Plugin {
@@ -35,7 +36,8 @@ export function loadingEvidencePlugin(): Plugin {
       const assets = Object.values(bundle).filter(item => /\.(?:js|css)$/.test(item.fileName)).map(item => {
         const bytes = item.type === "chunk" ? Buffer.from(item.code) : Buffer.from(item.source);
         return { file: item.fileName, type: item.fileName.endsWith(".js") ? "js" : "css",
-          rawBytes: bytes.length, gzipBytes: gzipSync(bytes, { level: 9 }).length };
+          rawBytes: bytes.length, gzipBytes: gzipSync(bytes, { level: 9 }).length,
+          sha256: createHash("sha256").update(bytes).digest("hex") };
       });
       this.emitFile({ type: "asset", fileName: ".vite/loading-graph.json", source: JSON.stringify({
         schemaVersion: 1, chunks: chunks.sort((a, b) => a.file.localeCompare(b.file)),
@@ -53,7 +55,8 @@ export function loadingEvidencePlugin(): Plugin {
         graph.assets = Object.values(bundle).filter(item => /\.(?:js|css)$/.test(item.fileName)).map(item => {
           const bytes = readFileSync(path.join(directory, item.fileName));
           return { file: item.fileName, type: item.fileName.endsWith(".js") ? "js" : "css",
-            rawBytes: bytes.length, gzipBytes: gzipSync(bytes, { level: 9 }).length };
+            rawBytes: bytes.length, gzipBytes: gzipSync(bytes, { level: 9 }).length,
+            sha256: createHash("sha256").update(bytes).digest("hex") };
         });
         writeFileSync(metadata, JSON.stringify(graph));
       },
