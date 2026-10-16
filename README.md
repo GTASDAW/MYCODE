@@ -70,6 +70,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 
 管理概览的“活动签到分析”按北京时间开始日期筛选已开始、未取消的活动，展示全量有效报名、已签到、未签到与加权签到比例，并逐场比较和进入名单。筛选分页保存在 URL，没有有效报名时比例不适用；支持补录的当前进度不代表最终出勤结算。口径、查询快照和演示路径见 [活动签到分析](docs/attendance-guide.md)。
 
+前端按路由加载页面：发现页直接打开，其他页面在访问时加载，受保护页面先校验权限再加载。慢加载和失败只影响内容区域，导航与登录状态保持；失败可手动重新加载当前地址或返回活动列表。静态资源缓存、真实浏览器恢复和优化前后证据见 [前端加载与恢复](docs/frontend-loading-guide.md)。
+
 ## Docker Compose 部署
 
 安装并启动 Docker 后，在项目根目录运行：
@@ -226,6 +228,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [管理员签到、整场统计与 CSV 导出](docs/checkin-export-guide.md)
 - [管理员操作记录、字段快照与事务追溯](docs/audit-log-guide.md)
 - [活动签到分析、加权比例与日期快照](docs/attendance-guide.md)
+- [前端按需加载、静态资源缓存与失败恢复](docs/frontend-loading-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
 - [五分钟演示与面试讲解](docs/demo-guide.md)
 - [真实桌面与手机界面展示](docs/showcase.md)
