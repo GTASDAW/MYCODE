@@ -249,7 +249,7 @@ test('manifest validation refuses changed UUID ownership, USER role and cleanup 
 
 function fakeDatabase({ changedActivity = false, unownedReference = false, unownedActivityReference = false,
   changedUserRole = false, changedServer = false, unownedNoticeRecipient = false, externalNotice = false, externalCheckIn = false,
-  externalAuditActor = false, crossAuditRegistration = false } = {}) {
+  externalAuditActor = false, crossAuditRegistration = false, activityFavorite = false, userFavorite = false } = {}) {
   const calls = [];
   const proof = manifest();
   let activityDeleted = false;
@@ -269,6 +269,8 @@ function fakeDatabase({ changedActivity = false, unownedReference = false, unown
     async rollback() { calls.push('ROLLBACK'); },
     async execute(sql) {
       calls.push(sql);
+      if (sql.startsWith('SELECT user_id FROM activity_favorites')) return [activityFavorite ? [{user_id:2}] : []];
+      if (sql.startsWith('SELECT activity_id FROM activity_favorites')) return [userFavorite ? [{activity_id:99}] : []];
       if (sql.startsWith('SELECT a.activity_id')) return [auditDeleted ? [] : [{ activityId: crossAuditRegistration ? 99 : 4,
         registrationId: crossAuditRegistration ? 8 : null, registrationActivityId: crossAuditRegistration ? 4 : null }]];
       if (sql.startsWith('SELECT activity_id FROM activity_audit_logs')) return [auditDeleted ? [] : [{ activity_id: externalAuditActor ? 99 : 4 }]];
@@ -368,15 +370,16 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert(!db.calls.some(sql => sql.includes('activity_audit_logs')));
   assert(!db.calls.some(sql => sql.includes('credential_version')));
   assert(!db.calls.some(sql => sql.includes('category')));
+  assert(!db.calls.some(sql => sql.includes('activity_favorites')));
 });
 
-test('current performance preparation refuses missing V8 or category before seed reads or application writes', async () => {
+test('current performance preparation refuses missing V9 or category before seed reads or application writes', async () => {
   for (const missing of ['migration', 'category']) {
     const calls = [];
     const db = { async query(sql) {
       calls.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ name: 'activity_platform_perf', serverUuid: 'isolated-server', version: '8.4.7' }]];
-      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', ...(missing === 'migration' ? [] : ['8'])]
+      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', '8', ...(missing === 'migration' ? [] : ['9'])]
         .map(version => ({ version, success: 1 }))];
       if (sql.includes('category')) throw new Error('Category schema absent');
       return [[]];
@@ -432,5 +435,14 @@ test('current signup measurement preserves one exact CREATE snapshot and cannot 
     [{ ...rows[0], action: 'EDIT' }, rows[1]], [{ ...rows[0], activity_title: 'current mutable title' }, rows[1]],
     [{ ...rows[0], registration_id: 9 }, rows[1]]]) {
     await assert.rejects(verifyCurrentAuditCreation(db(malformed), activities, 1), /exactly one initial administrator CREATE audit/);
+  }
+});
+
+
+test('current performance cleanup rejects activity and user favorite references before every deletion', async()=>{
+  for(const option of [{activityFavorite:true},{userFavorite:true}]) {
+    const db=fakeDatabase(option);
+    await assert.rejects(cleanupOwned(db,manifest()),/favorite/i);
+    assert(db.calls.includes('ROLLBACK')); assert(!db.calls.some(sql=>sql.startsWith('DELETE ')));
   }
 });

@@ -34,6 +34,7 @@ import { activityClosed } from "../activityLifecycle";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { safeActivityDetailReturn } from "../activityDetailNavigation";
 import { activityCategoryLabel } from "../activityCategory";
+import { FavoriteButton } from "./FavoriteButton";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -48,7 +49,8 @@ function ActivityDetailPage() {
   const sourceList = new URLSearchParams(location.search).get("from");
   const returnPath = safeActivityDetailReturn(sourceList);
   const returnLabel = returnPath.split("?")[0] === "/my-registrations"
-    ? "返回我的报名" : sourceList === null ? "返回全部活动" : "返回活动列表";
+    ? "返回我的报名" : returnPath.split("?")[0] === "/my-favorites" ? "返回我的收藏"
+      : sourceList === null ? "返回全部活动" : "返回活动列表";
   const detailPath = `${location.pathname}${location.search}`;
   const resource = useResource(
     (signal) => {
@@ -167,14 +169,15 @@ function ActivityDetailPage() {
         title={activity.title}
         description="活动详情 · 时间均为北京时间"
         extra={
-          auth.user?.role === "ADMIN" ? (
             <Space wrap>
+              <FavoriteButton activityId={activity.id} detailPath={detailPath} />
+              {auth.user?.role === "ADMIN" && <>
               <ActivityManagementActions activity={activity} onChanged={resource.setData} disabled={busy} />
               <Link to={`/admin/activities/${activity.id}/registrations`}>
                 <Button>报名名单</Button>
               </Link>
+              </>}
             </Space>
-          ) : undefined
         }
       />
       <BackLink to={returnPath} label={returnLabel} />

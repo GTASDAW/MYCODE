@@ -34,9 +34,9 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8') ORDER BY installed_rank");
-  if (!['1', '2', '3', '4', '5', '6', '7', '8'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8', '9') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4', '5', '6', '7', '8', '9'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8/V9 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, category, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
@@ -44,6 +44,7 @@ export async function verifyDatabase(connection, config, expected) {
   await connection.execute('SELECT id, username, display_name, role, credential_version FROM users LIMIT 0');
   await connection.execute('SELECT id, user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
   await connection.execute('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
+  await connection.execute('SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0');
   const [accounts] = await connection.execute("SELECT username, role FROM users WHERE username IN ('admin', 'demo')");
   if (!accounts.some(row => row.username === 'admin' && row.role === 'ADMIN')
       || !accounts.some(row => row.username === 'demo' && row.role === 'USER')) {
@@ -81,6 +82,9 @@ function readManifest(path) {
   if (manifest.version !== 1 || !uuidPattern.test(manifest.runId) || !Array.isArray(manifest.fixtures)
       || !manifest.target || !allowedDatabases.has(manifest.target.database)) throw new Error('Invalid fixture manifest. Cleanup refused.');
   const keys = new Set();
+  if (manifest.favorites !== undefined && (!Array.isArray(manifest.favorites) || manifest.favorites.some(row =>
+      !Number.isSafeInteger(row.userId) || row.userId < 1 || !Number.isSafeInteger(row.activityId) || row.activityId < 1)))
+    throw new Error('Invalid favorite ownership proof. Cleanup refused.');
   for (const fixture of manifest.fixtures) {
     if (!uuidPattern.test(fixture.key) || keys.has(fixture.key) || typeof fixture.title !== 'string'
         || typeof fixture.description !== 'string' || !fixture.description.endsWith(fixtureMarker(manifest.runId, fixture.key))
@@ -224,6 +228,17 @@ export function recordAccountId(key, id) {
   saveManifest(path, manifest);
 }
 
+// Declare the exact pair before the API write, including lost-response cases.
+export function trackFavorite(userId, activityId) {
+  const {manifest, path} = readManifest(process.env.E2E_RUN_MANIFEST);
+  if (!Number.isSafeInteger(userId) || userId < 1 || !manifest.fixtures.some(fixture => fixture.id === activityId))
+    throw new Error('Favorite requires an exact user and an owned activity.');
+  manifest.favorites ??= [];
+  if (!manifest.favorites.some(row => row.userId === userId && row.activityId === activityId))
+    manifest.favorites.push({userId, activityId});
+  saveManifest(path, manifest);
+}
+
 export async function verifyAuditRegistrationOwnership(connection, activityIds) {
   for (const activityId of activityIds) {
     const [references] = await connection.execute(
@@ -236,7 +251,7 @@ export async function verifyAuditRegistrationOwnership(connection, activityIds) 
 }
 
 export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted = new Set(), beforeDelete = async () => {}, {
-  accounts = [], alreadyDeletedAccounts = new Set(),
+  accounts = [], alreadyDeletedAccounts = new Set(), favorites = [],
 } = {}) {
   await connection.execute('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
   await connection.beginTransaction();
@@ -320,12 +335,25 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
       }
       lockedAccounts.push(account);
     }
+    const clauses = [], favoriteParameters = [];
+    if (resolved.length) { clauses.push(`activity_id IN (${resolved.map(() => '?').join(',')})`); favoriteParameters.push(...resolved.map(row => row.id)); }
+    if (resolvedAccounts.length) { clauses.push(`user_id IN (${resolvedAccounts.map(() => '?').join(',')})`); favoriteParameters.push(...resolvedAccounts.map(row => row.id)); }
+    const [favoriteRows] = clauses.length ? await connection.execute(
+      `SELECT user_id AS userId, activity_id AS activityId FROM activity_favorites WHERE ${clauses.join(' OR ')} FOR UPDATE`, favoriteParameters) : [[]];
+    if (favorites.some(row => !Number.isSafeInteger(row.userId) || row.userId < 1 || !ownedActivityIds.has(row.activityId))
+        || favoriteRows.some(row => !ownedActivityIds.has(row.activityId) || !favorites.some(owned => owned.userId === row.userId && owned.activityId === row.activityId)))
+      throw new Error('External or undeclared favorite reference. Entire cleanup refused.');
     // Persist verified IDs before deleting. A lost COMMIT reply/process interruption
     // can then be retried safely even if the final manifest write never happened.
     await beforeDelete(resolved, resolvedAccounts);
     let deletedRegistrations = 0;
     let deletedNotifications = 0;
     let deletedAuditLogs = 0;
+    let deletedFavorites = 0;
+    for (const row of favoriteRows) {
+      const [removed] = await connection.execute('DELETE FROM activity_favorites WHERE user_id = ? AND activity_id = ?', [row.userId, row.activityId]);
+      deletedFavorites += removed.affectedRows;
+    }
     for (const fixture of locked) {
       const [auditLogs] = await connection.execute('DELETE FROM activity_audit_logs WHERE activity_id = ?', [fixture.id]);
       const [notifications] = await connection.execute('DELETE FROM notifications WHERE activity_id = ?', [fixture.id]);
@@ -344,7 +372,7 @@ export async function deleteOwnedFixtures(connection, fixtures, alreadyDeleted =
       if (user.affectedRows !== 1) throw new Error(`User ${account.id} was not deleted exactly once.`);
     }
     await connection.commit();
-    return { deletedActivities: locked.length, deletedRegistrations, deletedNotifications, deletedAuditLogs, resolvedIds: resolved.map(fixture => fixture.id),
+    return { deletedActivities: locked.length, deletedRegistrations, deletedNotifications, deletedAuditLogs, deletedFavorites, resolvedIds: resolved.map(fixture => fixture.id),
       deletedUsers: lockedAccounts.length, resolvedUserIds: resolvedAccounts.map(account => account.id) };
   } catch (error) {
     await connection.rollback();
@@ -368,7 +396,7 @@ export async function cleanupRun(manifestPath) {
       manifest.cleanupIntent = { verifiedIds: resolved.map(fixture => fixture.id),
         verifiedUserIds: resolvedAccounts.map(account => account.id), verifiedAt: new Date().toISOString() };
       saveManifest(path, manifest);
-    }, { accounts: manifest.accounts ?? [], alreadyDeletedAccounts: allowedMissingAccounts });
+    }, { accounts: manifest.accounts ?? [], alreadyDeletedAccounts: allowedMissingAccounts, favorites: manifest.favorites ?? [] });
     const completedAt = new Date().toISOString();
     if (manifest.cleanup?.completedAt) {
       // Keep the first successful deletion counts when CI's always-step retries.
@@ -377,7 +405,7 @@ export async function cleanupRun(manifestPath) {
       manifest.cleanup = { ...result, completedAt };
     }
     saveManifest(path, manifest);
-    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations, ${result.deletedNotifications} notifications, ${result.deletedAuditLogs} audit logs, ${result.deletedUsers} users; demo/other rows retained.`);
+    console.log(`E2E cleanup complete: ${result.deletedActivities} activities, ${result.deletedRegistrations} registrations, ${result.deletedNotifications} notifications, ${result.deletedAuditLogs} audit logs, ${result.deletedFavorites} favorites, ${result.deletedUsers} users; demo/other rows retained.`);
     return result;
   } catch (error) {
     const failure = { failedAt: new Date().toISOString(), error: error.message };

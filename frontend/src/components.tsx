@@ -209,9 +209,9 @@ export function DateBadge({
   );
 }
 
-export function ActivityCard({ activity, from }: { activity: Activity; from?: string }) {
+export function ActivityCard({ activity, from, detailsTo }: { activity: Activity; from?: string; detailsTo?: string }) {
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
-  const detailsPath = activityDetailsPath(activity.id, from);
+  const detailsPath = detailsTo ?? activityDetailsPath(activity.id, from);
   return (
     <article className="activity-card" data-activity-id={activity.id}>
       <div className="activity-card-top">

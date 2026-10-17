@@ -272,7 +272,7 @@ async function parallelMap(items, concurrency, work) {
 
 async function snapshotDatabase(db, phase) {
   const tables = {};
-  const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs'] : ['users', 'activities', 'registrations'];
+  const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites'] : ['users', 'activities', 'registrations'];
   for (const table of names) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
   // Kept only in memory: user password hashes must never enter an artifact.
   return JSON.stringify(tables);
@@ -282,7 +282,7 @@ export async function verifyPerformanceDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8', '9'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT credential_version FROM users LIMIT 0');
@@ -292,6 +292,8 @@ export async function verifyPerformanceDatabase(db, settings) {
     await db.query('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
     const [[notificationSeed]] = await db.query('SELECT COUNT(*) AS count FROM notifications');
     assert.equal(Number(notificationSeed.count), 0, 'Measurement requires a fresh notification baseline.');
+    const [[favoriteSeed]] = await db.query('SELECT COUNT(*) AS count FROM activity_favorites');
+    assert.equal(Number(favoriteSeed.count), 0, 'Measurement requires a fresh favorite baseline.');
     const [[auditSeed]] = await db.query('SELECT COUNT(*) AS count FROM activity_audit_logs');
     assert.equal(Number(auditSeed.count), 0, 'Measurement requires a fresh audit-log baseline.');
   }
@@ -440,6 +442,8 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
       const [children] = await db.execute('SELECT user_id FROM registrations WHERE activity_id = ? FOR UPDATE', [row.id]);
       assert(children.every(child => userIds.has(child.user_id)), 'An unowned user references a performance activity. Cleanup refused.');
       if (manifest.phase === undefined) {
+        const [favorites] = await db.execute('SELECT user_id FROM activity_favorites WHERE activity_id = ? FOR UPDATE', [row.id]);
+        assert.equal(favorites.length, 0, 'Unexpected favorite reference. Cleanup refused.');
         const [recipients] = await db.execute('SELECT user_id FROM notifications WHERE activity_id = ? FOR UPDATE', [row.id]);
         assert(recipients.every(recipient => userIds.has(recipient.user_id)), 'An unowned notification recipient references a performance activity. Cleanup refused.');
       }
@@ -448,6 +452,8 @@ export async function cleanupOwned(db, manifest, { activityIds, deleteUsers = tr
       const [references] = await db.execute('SELECT activity_id FROM registrations WHERE user_id = ? FOR UPDATE', [row.id]);
       assert(references.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user references an unowned activity. Cleanup refused.');
       if (manifest.phase === undefined) {
+        const [favorites] = await db.execute('SELECT activity_id FROM activity_favorites WHERE user_id = ? FOR UPDATE', [row.id]);
+        assert.equal(favorites.length, 0, 'Unexpected favorite owned by synthetic user. Cleanup refused.');
         const [noticeReferences] = await db.execute('SELECT activity_id FROM notifications WHERE user_id = ? FOR UPDATE', [row.id]);
         assert(noticeReferences.every(reference => ownedActivityIds.has(reference.activity_id)), 'A synthetic user has an unowned notification reference. Cleanup refused.');
         const [checkInReferences] = await db.execute('SELECT activity_id FROM registrations WHERE checked_in_by = ? FOR UPDATE', [row.id]);

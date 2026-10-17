@@ -169,7 +169,8 @@ async function snapshot() {
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
-  return JSON.stringify({ users, activities, registrations, notifications, auditLogs });
+  const [favorites] = await db.query('SELECT * FROM activity_favorites ORDER BY id');
+  return JSON.stringify({ users, activities, registrations, notifications, auditLogs, favorites });
 }
 
 async function removeFixture() {
@@ -199,10 +200,10 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9']);
   assert(migrations.every(row => row.success === 1));
   await db.query('SELECT category FROM activities LIMIT 0');
-  check('fresh MySQL schema contains successful Flyway V1 through V8 and the activity category column');
+  check('fresh MySQL schema contains successful Flyway V1 through V9 and the activity category column');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');

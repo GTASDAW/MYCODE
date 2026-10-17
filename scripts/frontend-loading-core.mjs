@@ -10,7 +10,7 @@ export const DEFAULT_OUTPUT = path.join(PROJECT_ROOT, '.runtime/frontend-loading
 export const BASELINE_REVISION = 'c98df13603074bb48eff89ec3785e47d186ffebf';
 export const LAZY_MODULES = [
   'ActivityDetailPage', 'CreateActivityPage', 'EditActivityPage', 'LoginPage', 'RegisterPage', 'ProfilePage',
-  'NotificationsPage', 'MyRegistrationsPage', 'AdminDashboardPage', 'AdminActivitiesPage',
+  'NotificationsPage', 'MyRegistrationsPage', 'MyFavoritesPage', 'AdminDashboardPage', 'AdminActivitiesPage',
   'AdminRegistrationsPage', 'AdminMonitoringPage', 'AdminAuditLogsPage',
 ].map(name => `src/pages/${name}.tsx`);
 
@@ -135,7 +135,7 @@ export function afterContract(after) {
     return { module, file: entry.file, imports: [...reachable].filter(file => file !== entry.file).sort(),
       modules: [...new Set([...reachable].flatMap(file => chunks.get(file)?.modules ?? []))].sort() };
   });
-  assert.equal(new Set(lazyEntries.map(entry => entry.file)).size, LAZY_MODULES.length, 'Lazy pages must map to 13 independent entries');
+  assert.equal(new Set(lazyEntries.map(entry => entry.file)).size, LAZY_MODULES.length, 'Lazy pages must map to 14 independent entries');
   const moduleEdges = new Map(after.modules.map(module => [module.id, module.imports]));
   function descendants(entry) {
     const found = new Set();

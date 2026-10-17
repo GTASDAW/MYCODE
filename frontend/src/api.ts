@@ -24,6 +24,9 @@ import type {
   AdminAuditLogQuery,
   AttendancePage,
   AttendanceQuery,
+  FavoriteState,
+  FavoritePage,
+  FavoriteQuery,
 } from "./types";
 
 interface CsrfToken {
@@ -347,6 +350,12 @@ export const api = {
     request<Activity>(`/activities/${id}/registration`, { method: "DELETE", signal }),
   registrations: (signal?: AbortSignal) =>
     request<Registration[]>("/me/registrations", { signal }),
+  favorite: (id: number, signal?: AbortSignal) =>
+    request<FavoriteState>(`/me/favorites/${id}`, { signal }),
+  setFavorite: (id: number, favorited: boolean, signal?: AbortSignal) =>
+    request<FavoriteState>(`/me/favorites/${id}`, { method: favorited ? "POST" : "DELETE", signal }),
+  favorites: (query: FavoriteQuery, signal?: AbortSignal) =>
+    request<FavoritePage>(`/me/favorites?${new URLSearchParams({page: String(query.page), pageSize: String(query.pageSize)})}`, {signal}),
   searchRegistrations: (query: MyRegistrationQuery, signal?: AbortSignal) =>
     request<MyRegistrationPage>(
       `/me/registrations/search?${new URLSearchParams({

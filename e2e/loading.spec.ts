@@ -14,7 +14,7 @@ if (!build.manifest) build.manifest = JSON.parse(readFileSync(resolve(distPath, 
 const contract = afterContract(build) as { lazyEntries: { module: string; file: string }[];
   publicRequired: string[]; adminDeferredSrc: string[]; tableImplementationModules: string[] };
 const lazyModules = ['ActivityDetailPage', 'CreateActivityPage', 'EditActivityPage', 'LoginPage', 'RegisterPage',
-  'ProfilePage', 'NotificationsPage', 'MyRegistrationsPage', 'AdminDashboardPage', 'AdminActivitiesPage',
+  'ProfilePage', 'NotificationsPage', 'MyRegistrationsPage', 'MyFavoritesPage', 'AdminDashboardPage', 'AdminActivitiesPage',
   'AdminRegistrationsPage', 'AdminMonitoringPage', 'AdminAuditLogsPage'];
 const pageModule = (name: string) => `src/pages/${name}.tsx`;
 const chunks = new Map(build.chunks.map(chunk => [chunk.file, chunk]));
@@ -56,8 +56,8 @@ test.beforeAll(async ({ request }) => {
   expect(text).not.toContain('/@vite/client');
   expect(text).toContain('/assets/');
   for (const entry of entryFiles) expect(text).toContain(assetPath(entry));
-  expect(lazyFiles).toHaveLength(13);
-  expect(new Set(lazyFiles).size).toBe(13);
+  expect(lazyFiles).toHaveLength(14);
+  expect(new Set(lazyFiles).size).toBe(14);
 });
 
 async function token(request: APIRequestContext) {
@@ -134,7 +134,7 @@ test('生产HTML与带hash资源缓存头正确，缺失JS和CSS真实404且不�
   expect(internalGraph.headers()['cache-control']).toBe('no-store');
 });
 
-test('冷首页只读取入口静态依赖，不下载13个其他页面或管理员独占模块', async ({ page }) => {
+test('冷首页只读取入口静态依赖，不下载14个其他页面或管理员独占模块', async ({ page }) => {
   const loaded: string[] = [];
   page.on('request', request => { if (request.resourceType() === 'script') loaded.push(requestedAsset(request.url())); });
   await page.goto('/activities');

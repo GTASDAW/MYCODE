@@ -33,9 +33,9 @@ async function listen(server) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-test('13 independent dynamic entries map by facade source and Layout dependencies stay public', () => {
+test('14 independent dynamic entries map by facade source and Layout dependencies stay public', () => {
   const result = afterContract(fixture());
-  assert.equal(result.lazyEntries.length, 13);
+  assert.equal(result.lazyEntries.length, 14);
   assert(result.publicRequired.includes('src/provider.ts'));
   assert(result.adminDeferredSrc.includes(PRIVATE));
   assert(!result.adminDeferredSrc.includes('src/provider.ts'));
@@ -60,7 +60,7 @@ test('missing or combined dynamic entries fail the independent-entry contract', 
   const missing = fixture(); missing.chunks.pop();
   assert.throws(() => afterContract(missing), /Missing independent dynamic entry/);
   const combined = fixture(); combined.chunks[2].file = combined.chunks[1].file;
-  assert.throws(() => afterContract(combined), /13 independent entries/);
+  assert.throws(() => afterContract(combined), /14 independent entries/);
 });
 test('eager imports traverse static edges only and count JS and associated CSS once', () => {
   const build = fixture();
@@ -162,7 +162,7 @@ function artifactPair(t) {
 }
 test('measurement preflight rechecks the comparison and exact disk manifests, bytes and hashes', t => {
   const { root, baseline, after } = artifactPair(t);
-  assert.equal(verifyMeasurementArtifacts(baseline, after, root).lazyEntries.length, 13);
+  assert.equal(verifyMeasurementArtifacts(baseline, after, root).lazyEntries.length, 14);
   writeFileSync(path.join(root, 'after/dist/assets/index-12345678.js'), 'B'.repeat(1000));
   assert.throws(() => verifyMeasurementArtifacts(baseline, after, root), /bytes or hashes differ/);
 });

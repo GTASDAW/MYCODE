@@ -38,6 +38,11 @@ export interface MyRegistration extends Registration {
   checkedInAt: string | null;
 }
 
+export interface FavoriteState { favorited: boolean; favoritedAt: string | null }
+export interface FavoriteQuery { page: number; pageSize: number }
+export interface FavoriteItem { activity: Activity; favoritedAt: string }
+export type FavoritePage = PageResult<FavoriteItem>;
+
 export interface MyRegistrationQuery {
   page: number;
   pageSize: number;

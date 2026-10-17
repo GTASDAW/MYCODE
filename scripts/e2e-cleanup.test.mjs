@@ -2,18 +2,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { databaseConfig, deleteOwnedFixtures, verifyDatabase, renameManifestWithRetry } from './e2e-cleanup.mjs';
 
-function fakeDatabase(activities, registrations = [], failDeleteId, users = [], failUserDeleteId, notifications = [], auditLogs = []) {
+function fakeDatabase(activities, registrations = [], failDeleteId, users = [], failUserDeleteId, notifications = [], auditLogs = [], favorites = []) {
   const state = { activities: structuredClone(activities), registrations: structuredClone(registrations), users: structuredClone(users),
-    notifications: structuredClone(notifications), auditLogs: structuredClone(auditLogs), queries: [], rollbacks: 0, commits: 0 };
+    notifications: structuredClone(notifications), auditLogs: structuredClone(auditLogs), favorites: structuredClone(favorites), queries: [], rollbacks: 0, commits: 0 };
   let snapshot;
   return {
     state,
-    async beginTransaction() { snapshot = structuredClone({ activities: state.activities, registrations: state.registrations, users: state.users, notifications: state.notifications, auditLogs: state.auditLogs }); },
+    async beginTransaction() { snapshot = structuredClone({ activities: state.activities, registrations: state.registrations, users: state.users, notifications: state.notifications, auditLogs: state.auditLogs, favorites: state.favorites }); },
     async commit() { state.commits++; },
     async rollback() { Object.assign(state, snapshot); state.rollbacks++; },
     async execute(sql, parameters = []) {
       state.queries.push({ sql, parameters });
       if (sql.startsWith('SET TRANSACTION')) return [];
+      if (sql.startsWith('SELECT user_id AS userId')) {
+        const activityCount=(sql.match(/activity_id IN \(([^)]+)\)/)?.[1].match(/\?/g)??[]).length;
+        const activityIds=parameters.slice(0,activityCount), userIds=parameters.slice(activityCount);
+        return [state.favorites.filter(row=>activityIds.includes(row.activity_id)||userIds.includes(row.user_id)).map(row=>({userId:row.user_id,activityId:row.activity_id}))];
+      }
+      if (sql.startsWith('DELETE FROM activity_favorites')) {
+        const previous=state.favorites.length; state.favorites=state.favorites.filter(row=>row.user_id!==parameters[0]||row.activity_id!==parameters[1]);
+        return [{affectedRows:previous-state.favorites.length}];
+      }
       if (sql.startsWith('SELECT a.activity_id')) return [state.auditLogs.map(row => ({ activityId: row.activity_id,
         registrationId: row.registration_id ?? null,
         registrationActivityId: state.registrations.find(registration => registration.id === row.registration_id)?.activity_id ?? null }))
@@ -371,28 +380,30 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.deepEqual(connection.state.users, [user]);
 });
 
-test('V8 and complete category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
-  for (const absent of ['migration', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table']) {
+test('V9 and complete favorite, category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table', 'favorite-table']) {
     const queries = [];
     const connection = { async execute(sql) {
       queries.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
-      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', ...(absent === 'migration' ? [] : ['8'])].map(version => ({ version }))]];
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', '8', ...(absent === 'migration' ? [] : ['9'])].map(version => ({ version }))]];
       if (sql.includes('description, category,') && absent === 'category-column') throw new Error('Activity category schema absent');
       if (sql.includes('credential_version') && absent === 'credential-column') throw new Error('Credential version schema absent');
       if (sql.includes('FROM registrations') && absent === 'check-in-columns') throw new Error('Check-in schema absent');
       if (sql.includes('FROM notifications') && absent === 'notification-table') throw new Error('Notification schema absent');
       if (sql.includes('FROM activity_audit_logs') && absent === 'audit-table') throw new Error('Audit schema absent');
+      if (sql.includes('FROM activity_favorites') && absent === 'favorite-table') throw new Error('Favorite schema absent');
       return [[]];
     } };
     await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
-      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : /Notification schema absent/);
+      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8\/V9/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : absent === 'favorite-table' ? /Favorite schema absent/ : /Notification schema absent/);
     assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
     if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
     else if (absent === 'category-column') assert.ok(queries.some(sql => sql.includes('description, category, registered_count')));
     else if (absent === 'notification-table') assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
     else if (absent === 'credential-column') assert.ok(queries.some(sql => sql.includes('role, credential_version FROM users LIMIT 0')));
     else if (absent === 'check-in-columns') assert.ok(queries.some(sql => sql.includes('status, checked_in_at, checked_in_by FROM registrations LIMIT 0')));
+    else if (absent === 'favorite-table') assert.ok(queries.some(sql => sql.includes('created_at FROM activity_favorites LIMIT 0')));
     else assert.ok(queries.some(sql => sql.includes('occurred_at, changes_json FROM activity_audit_logs LIMIT 0')));
   }
 });
@@ -580,4 +591,30 @@ test('a later failed user delete restores audit snapshots together with every ot
   assert.deepEqual(db.state.registrations, [registration]);
   assert.deepEqual(db.state.users, [user]);
   assert.equal(db.state.rollbacks, 1);
+});
+
+
+test('declared favorite pairs are deleted exactly and unrelated favorites remain', async () => {
+  const owned=fixture(901), other=fixture(902);
+  const original={user_id:2,activity_id:902};
+  const db=fakeDatabase([owned,other],[],undefined,[],undefined,[],[],[{user_id:2,activity_id:901},original]);
+  const result=await deleteOwnedFixtures(db,[owned],new Set(),async()=>{},{favorites:[{userId:2,activityId:901}]});
+  assert.equal(result.deletedFavorites,1); assert.deepEqual(db.state.favorites,[original]);
+  assert(db.state.queries.findIndex(q=>q.sql.startsWith('DELETE FROM activity_favorites')) < db.state.queries.findIndex(q=>q.sql.startsWith('DELETE FROM activities')));
+});
+test('undeclared favorites and temporary users favoriting outside activities reject all deletion', async () => {
+  for(const outside of [false,true]) {
+    const owned=fixture(911), other=fixture(912), user=account(921);
+    const favorite={user_id:921,activity_id:outside?912:911};
+    const db=fakeDatabase([owned,other],[],undefined,[user],undefined,[],[],[favorite]);
+    await assert.rejects(deleteOwnedFixtures(db,[owned],new Set(),async()=>{},{accounts:[user]}),/favorite reference/);
+    assert.equal(db.state.queries.filter(q=>q.sql.startsWith('DELETE')).length,0);
+    assert.deepEqual(db.state.favorites,[favorite]); assert.equal(db.state.rollbacks,1);
+  }
+});
+test('favorite deletion rolls back with a later activity deletion failure', async () => {
+  const owned=fixture(931), favorite={user_id:2,activity_id:931};
+  const db=fakeDatabase([owned],[],931,[],undefined,[],[],[favorite]);
+  await assert.rejects(deleteOwnedFixtures(db,[owned],new Set(),async()=>{},{favorites:[{userId:2,activityId:931}]}),/Simulated database failure/);
+  assert.deepEqual(db.state.favorites,[favorite]); assert.deepEqual(db.state.activities,[owned]);
 });

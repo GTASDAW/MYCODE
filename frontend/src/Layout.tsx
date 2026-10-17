@@ -21,6 +21,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ProfileOutlined,
+  StarOutlined,
   TeamOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -83,6 +84,7 @@ export function Layout() {
             label: "我的报名",
             icon: <TeamOutlined aria-hidden="true" />,
           },
+          {to: "/my-favorites", label: "我的收藏", icon: <StarOutlined aria-hidden="true" />},
           {
             to: "/profile",
             label: "个人中心",

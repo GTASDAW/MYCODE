@@ -28,6 +28,8 @@ const NotificationsPage = lazy(() => import("./pages/NotificationsPage")
   .then(module => ({ default: module.NotificationsPage })));
 const MyRegistrationsPage = lazy(() => import("./pages/MyRegistrationsPage")
   .then(module => ({ default: module.MyRegistrationsPage })));
+const MyFavoritesPage = lazy(() => import("./pages/MyFavoritesPage")
+  .then(module => ({ default: module.MyFavoritesPage })));
 const AdminDashboardPage = lazy(() => import("./pages/AdminDashboardPage")
   .then(module => ({ default: module.AdminDashboardPage })));
 const AdminActivitiesPage = lazy(() => import("./pages/AdminActivitiesPage")
@@ -74,6 +76,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
                 <Route path="notifications" element={<ProtectedRoute><NotificationsPage /></ProtectedRoute>} />
+                <Route path="my-favorites" element={<ProtectedRoute><MyFavoritesPage /></ProtectedRoute>} />
                 <Route
                   path="profile"
                   element={
