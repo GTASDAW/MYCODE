@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
+脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
 
 ## 演示账号
 
@@ -61,6 +61,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 活动另有技术交流、运动户外、文化艺术、其他及未分类五种固定单选分类。发布默认未分类，管理员可在允许编辑时修改；活动卡片、详情和管理列表显示分类，个人报名内嵌活动响应也包含分类，操作记录展示真实前后值。公开与管理列表可叠加分类、关键词和状态查询，管理列表也保存 URL 条件、刷新与历史；旧客户端省略分类仍兼容，旧活动不推断分类。接口、迁移和阅读路径见 [活动分类指南](docs/activity-category-guide.md)。
 
 “我的报名”支持全部、已报名、候补、已取消筛选，默认每页 10 条，提供 10、20、50 条选项与手动刷新。四项统计覆盖本人全部记录，已签到是有效报名的子集；页面只展示本人的签到时间，不提供自助签到或签到管理员资料。URL、详情与登录返回保留条件，返回后重新查询并校正越界页。新分页使用两次数据 SELECT，旧数组接口保留字段和排序并改为一次联表读取，消除逐条加载活动；快照、查询证据和学习路径见 [我的报名指南](docs/my-registrations-guide.md)。
+
+详情页支持收藏与取消收藏，匿名用户可登录后回原详情。“我的收藏”显示当前活动资料、分类、状态和北京时间收藏时间，支持分页、刷新、详情返回与末页修正。已开始、已取消活动仍可收藏；收藏只属于本人，不占名额，不触发报名、通知或审计。重复收藏保留首次时间，取消后再收藏使用新时间。
 
 登录后的顶栏铃铛与“通知中心”提供候补递补和活动取消消息，支持状态筛选、分页、手动刷新和单条标记已读。未读数来自本人全部通知，通知保存当时标题与公开取消原因；重复操作不重复生成，真正再次递补会产生新消息。没有定时轮询或外部消息发送，完整事务、权限与代码路径见 [站内通知指南](docs/notification-guide.md)。
 
@@ -137,6 +139,10 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `DELETE /api/activities/{id}/registration` | 取消报名或退出候补 | 登录 |
 | `GET /api/me/registrations` | 保留原报名数组、字段和排序 | 登录，普通用户与管理员均仅查询本人 |
 | `GET /api/me/registrations/search` | 本人状态筛选、分页、全量统计与只读签到时间 | 登录，身份只取可信 Session |
+| `GET /api/me/favorites` | 本人收藏分页，默认 10 条、最多 100 条 | 登录 |
+| `GET /api/me/favorites/{activityId}` | 本人收藏状态与首次时间，不存在活动 404 | 登录 |
+| `POST /api/me/favorites/{activityId}` | 收藏活动，重复保留首次时间 | 登录，需 CSRF |
+| `DELETE /api/me/favorites/{activityId}` | 取消本人收藏，重复成功 | 登录，需 CSRF |
 | `GET /api/me/notifications` | 本人通知，状态筛选、分页与全量未读数 | 登录 |
 | `GET /api/me/notifications/unread-count` | 本人全量未读数量 | 登录 |
 | `POST /api/me/notifications/{id}/read` | 单条标记已读，保留首次时间 | 登录且需要 CSRF，只能操作本人通知 |
@@ -212,7 +218,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
-这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表，V7 增加凭据版本和认证读取，V8 增加分类读取与筛选。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V8 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
+这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表，V7 增加凭据版本和认证读取，V8 增加分类读取与筛选。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V9 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -220,7 +226,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看五张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本及 V8 活动分类的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类及 V9 收藏表的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [四阶段学习指南](docs/learning-guide.md)
