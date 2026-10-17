@@ -625,7 +625,9 @@ test('签到真实CSRF错误迟到后浏览器返回并切换账号，不显示�
     await delay.fetched;
     await page.goBack();
     await expect(page.getByRole('heading', { name: fixture.title, exact: true })).toBeVisible();
-    await logout(page);
+    // The detail's private favorite read now detects the Session invalidated above.
+    await expect(page.getByRole('button', { name: '登录 / 体验', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '登录后收藏', exact: true })).toBeVisible();
     await loginViaUi(page, fixture.accounts[0]);
     delay.release(); await delay.completed; await settle(page);
     await expect(page.getByRole('button', { name: `账号菜单，${fixture.accounts[0].displayName}`, exact: true })).toBeVisible();
