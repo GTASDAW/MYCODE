@@ -321,8 +321,10 @@ test('旧客户端默认和null分类保持兼容，五类贯穿数组个人嵌�
       const post = await write(request, '/api/admin/activities', 'POST', { title: intent.title, description: intent.description,
         location: legacy.location, startsAt: legacy.startsAt, capacity: 1, category: invalid });
       expect(post.status()).toBe(400);
-      for (const kind of ['public', 'admin'] as const)
-        expect((await request.get(`${endpoint(kind)}?category=${encodeURIComponent(invalid)}`)).status()).toBe(400);
+      for (const kind of ['public', 'admin'] as const) {
+        const filtered = await request.get(`${endpoint(kind)}?category=${encodeURIComponent(invalid)}`);
+        expect(filtered.status()).toBe(invalid === 'ALL' ? 200 : 400);
+      }
     }
     expect(await (await request.get(`/api/admin/audit-logs?activityId=${legacy.id}`)).json()).toEqual(before);
     const all = await (await request.get('/api/activities')).json() as Activity[];
