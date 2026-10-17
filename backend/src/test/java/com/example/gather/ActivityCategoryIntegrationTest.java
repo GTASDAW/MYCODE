@@ -149,7 +149,7 @@ class ActivityCategoryIntegrationTest {
     @BeforeEach void verifyCurrentSchemaBeforeWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(8);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(9);
         jdbc.queryForList("SELECT id, category FROM activities LIMIT 0"); jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
     }
     @AfterEach void cleanOnlyOwnedFixtures() {
@@ -367,7 +367,7 @@ class ActivityCategoryIntegrationTest {
             AdminMapper.class.getName() + ".countActivities", AdminMapper.class.getName() + ".activities");
         assertSnapshot(adminQueries.subList(1, 3));
         var evidence = new StringBuilder("# Activity category query evidence\n\n")
-            .append("Dedicated MySQL activity_platform_test; schema V8; MySQL ").append(jdbc.queryForObject("SELECT VERSION()", String.class)).append(".\n")
+            .append("Dedicated MySQL activity_platform_test; schema V9; MySQL ").append(jdbc.queryForObject("SELECT VERSION()", String.class)).append(".\n")
             .append("Observed classification-filter business SELECT statements: public=2; administrator=2. Authenticated HTTP adds one credential-version SELECT.\n")
             .append("Both business reads use a single UTC microsecond time and a read-only REPEATABLE_READ snapshot.\n")
             .append("Bound category: CULTURE. Other parameter values are omitted.\n")

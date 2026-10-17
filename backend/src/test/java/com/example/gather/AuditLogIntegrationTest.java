@@ -147,7 +147,7 @@ class AuditLogIntegrationTest {
     void prepareVerifiedFixtures() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("8");
+        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("9");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category FROM activities LIMIT 0");
         actor = createUser("ADMIN", "审计管理员");
@@ -550,7 +550,7 @@ class AuditLogIntegrationTest {
 
     private Map<String, String> databaseSnapshotDigests() throws Exception {
         Map<String, String> snapshots = new LinkedHashMap<>();
-        for (String table : List.of("activity_audit_logs", "notifications", "registrations", "activities", "users")) {
+        for (String table : List.of("activity_favorites", "activity_audit_logs", "notifications", "registrations", "activities", "users")) {
             byte[] rows = json.writeValueAsBytes(jdbc.queryForList("SELECT * FROM " + table + " ORDER BY id"));
             snapshots.put(table, HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(rows)));
         }
