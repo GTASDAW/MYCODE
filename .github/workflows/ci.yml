@@ -104,6 +104,7 @@ jobs:
           name: backend-diagnostics
           path: |
             .runtime/ci/backend-verify.log
+            .runtime/category-query-evidence.md
             backend/target/surefire-reports/
           retention-days: 7
 
