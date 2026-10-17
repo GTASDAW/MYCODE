@@ -35,6 +35,7 @@ import { ActivityManagementActions } from "./ActivityManagementActions";
 import { safeActivityDetailReturn } from "../activityDetailNavigation";
 import { activityCategoryLabel } from "../activityCategory";
 import { FavoriteButton } from "./FavoriteButton";
+import { CalendarDownloadButton } from "./CalendarDownloadButton";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -171,6 +172,7 @@ function ActivityDetailPage() {
         extra={
             <Space wrap>
               <FavoriteButton activityId={activity.id} detailPath={detailPath} />
+              <CalendarDownloadButton activityId={activity.id} cancelled={activity.cancelled} detailPath={detailPath} refresh={resource.retry} />
               {auth.user?.role === "ADMIN" && <>
               <ActivityManagementActions activity={activity} onChanged={resource.setData} disabled={busy} />
               <Link to={`/admin/activities/${activity.id}/registrations`}>
@@ -213,6 +215,7 @@ function ActivityDetailPage() {
             <h2>活动介绍</h2>
             <p>{activity.description}</p>
           </section>
+          <p className="metadata">活动未提供结束时间，可在个人日历中自行设置；添加日历不代表报名成功。日历文件为下载时快照，后续修改或取消不会自动同步。</p>
           <Alert
             type="info"
             showIcon

@@ -1,5 +1,5 @@
 // The caller validates its account and page before handing a file to the browser.
-export function downloadCsv(blob: Blob, filename: string, isCurrent: () => boolean): void {
+export function downloadFile(blob: Blob, filename: string, isCurrent: () => boolean): void {
   if (!isCurrent()) return;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -14,3 +14,6 @@ export function downloadCsv(blob: Blob, filename: string, isCurrent: () => boole
     URL.revokeObjectURL(url);
   }
 }
+
+// Keep the existing CSV callers and their download lifecycle contract unchanged.
+export { downloadFile as downloadCsv };
