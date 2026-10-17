@@ -38,8 +38,9 @@ public class AdminController {
                           @RequestParam(defaultValue = "10") int pageSize,
                           @RequestParam(defaultValue = "") String keyword,
                           @RequestParam(defaultValue = "ALL") String status,
+                          @RequestParam(required = false) String category,
                           @AuthenticationPrincipal AppUserDetails principal) {
-        return admin.activities(page, pageSize, keyword, status, principal.id());
+        return admin.activities(page, pageSize, keyword, status, category == null ? "ALL" : category, principal.id());
     }
 
     @GetMapping("/activities/{id}/registrations")

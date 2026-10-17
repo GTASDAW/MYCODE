@@ -58,16 +58,18 @@ public class AuditLogService {
             new AuditChange("description", null, activity.description),
             new AuditChange("location", null, activity.location),
             new AuditChange("startsAt", null, activity.startsAt.toInstant(ZoneOffset.UTC).toString()),
-            new AuditChange("capacity", null, Integer.toString(activity.capacity))), utc(now));
+            new AuditChange("capacity", null, Integer.toString(activity.capacity)),
+            new AuditChange("category", null, activity.category)), utc(now));
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void edited(long activityId, long actorId, ActivityAuditText before,
-                        String title, String description, String location, Instant now) {
+                        String title, String description, String location, String category, Instant now) {
         List<AuditChange> changes = new ArrayList<>();
         if (!before.title().equals(title)) changes.add(new AuditChange("title", before.title(), title));
         if (!before.description().equals(description)) changes.add(new AuditChange("description", before.description(), description));
         if (!before.location().equals(location)) changes.add(new AuditChange("location", before.location(), location));
+        if (!before.category().equals(category)) changes.add(new AuditChange("category", before.category(), category));
         if (!changes.isEmpty()) append("EDIT", activityId, actorId, null, changes, utc(now));
     }
 

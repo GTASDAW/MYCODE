@@ -12,7 +12,7 @@ export function AdminDashboardPage() {
   const upcoming = useAdminRead(
     (signal) =>
       api.adminActivities(
-        { page: 1, pageSize: 5, keyword: "", status: "UPCOMING" },
+        { page: 1, pageSize: 5, keyword: "", status: "UPCOMING", category: "ALL" },
         signal,
       ),
     "dashboard-upcoming",

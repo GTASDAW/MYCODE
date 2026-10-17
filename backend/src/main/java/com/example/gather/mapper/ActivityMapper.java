@@ -13,7 +13,7 @@ import java.util.List;
 public interface ActivityMapper {
     String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
-        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason";
+        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category";
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} ORDER BY a.starts_at, a.id")
     List<ActivityRow> findAll(@Param("userId") Long userId);
@@ -26,12 +26,12 @@ public interface ActivityMapper {
         FROM activities a
         """ + ActivityQuerySql.FILTER + "</script>")
     ActivitySearchTotals searchTotals(@Param("now") LocalDateTime now, @Param("keyword") String keyword,
-                                      @Param("status") String status);
+                                      @Param("status") String status, @Param("category") String category);
 
     @Select("<script>SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} "
         + ActivityQuerySql.FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
     List<ActivityRow> search(@Param("userId") Long userId, @Param("now") LocalDateTime now,
-                             @Param("keyword") String keyword, @Param("status") String status,
+                             @Param("keyword") String keyword, @Param("status") String status, @Param("category") String category,
                              @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} WHERE a.id=#{id}")
@@ -42,19 +42,19 @@ public interface ActivityMapper {
     @Select("SELECT starts_at, capacity, registered_count, cancelled_at FROM activities WHERE id=#{id} FOR UPDATE")
     ActivityLockRow lockById(long id);
 
-    @Select("SELECT title, description, location FROM activities WHERE id=#{id}")
+    @Select("SELECT title, description, location, category FROM activities WHERE id=#{id}")
     ActivityAuditText auditText(long id);
 
-    @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy})")
+    @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy}, #{category})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(NewActivity activity);
 
     @Update("UPDATE activities SET registered_count=registered_count+#{delta} WHERE id=#{id}")
     int changeRegisteredCount(@Param("id") long id, @Param("delta") int delta);
 
-    @Update("UPDATE activities SET title=#{title}, description=#{description}, location=#{location} WHERE id=#{id}")
+    @Update("UPDATE activities SET title=#{title}, description=#{description}, location=#{location}, category=#{category} WHERE id=#{id}")
     int edit(@Param("id") long id, @Param("title") String title, @Param("description") String description,
-             @Param("location") String location);
+             @Param("location") String location, @Param("category") String category);
 
     @Update("UPDATE activities SET registered_count=0, cancelled_at=#{cancelledAt}, cancellation_reason=#{reason}, cancelled_by=#{adminId} WHERE id=#{id}")
     int cancel(@Param("id") long id, @Param("cancelledAt") java.time.LocalDateTime cancelledAt,

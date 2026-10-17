@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Input, Pagination, Select, Statistic } from "antd";
 import { PlusOutlined, SearchOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import {
   ActivityCard,
@@ -12,7 +12,9 @@ import {
   PageHeading,
 } from "../components";
 import { useResource } from "../useResource";
-import type { ActivityFilter, ActivitySearchQuery } from "../types";
+import type { ActivityCategoryFilter, ActivityFilter, ActivitySearchQuery } from "../types";
+import { activityCategoryFilterOptions } from "../activityCategory";
+import { readAccountResource } from "../authRequestGuard";
 import {
   activityListPath,
   defaultActivityQuery,
@@ -21,16 +23,30 @@ import {
 } from "../activityDiscovery";
 
 export function ActivitiesPage() {
-  const { user } = useAuth();
+  const auth = useAuth();
+  const { user } = auth;
+  const generation = auth.captureAuthenticationRequest();
   const location = useLocation();
   const navigate = useNavigate();
   const { query, notice } = parseActivityQuery(location.search);
   const canonicalSearch = serializeActivityQuery(query);
   const [keywordDraft, setKeywordDraft] = useState(query.keyword);
   const [normalizationNotice, setNormalizationNotice] = useState<string | null>(notice);
+  const [revision, setRevision] = useState(0);
+  const scope = `${generation}:${canonicalSearch}:${revision}`;
+  const currentScope = useRef<string | null>(scope);
+  currentScope.current = scope;
+  const current = () => currentScope.current === scope && auth.isCurrentAuthenticationRequest(generation);
+  const refresh = () => setRevision(value => value + 1);
+  useLayoutEffect(() => {
+    currentScope.current = scope;
+    return () => { if (currentScope.current === scope) currentScope.current = null; };
+  }, [scope]);
   const resource = useResource(
-    (signal) => api.searchActivities(query, signal),
-    [user?.id, query.keyword, query.status, query.page, query.pageSize],
+    signal => readAccountResource(requestSignal => api.searchActivities(query, requestSignal), signal,
+      current,
+      error => { if (error instanceof ApiError && error.status === 401) auth.expire(); }),
+    [scope],
   );
   const activities = resource.data?.items ?? [];
   const total = resource.data?.total ?? 0;
@@ -47,20 +63,20 @@ export function ActivitiesPage() {
   }, [location.search, canonicalSearch, query.keyword, notice, navigate]);
 
   useEffect(() => {
-    if (resource.loading || resource.error || !resource.data) return;
+    if (!current() || resource.loading || resource.error || !resource.data) return;
     const lastPage = Math.max(1, Math.ceil(resource.data.total / query.pageSize));
     if (query.page > lastPage) {
       navigate(activityListPath({ ...query, page: lastPage }), { replace: true });
     }
   }, [
     resource.data, resource.loading, resource.error,
-    query.keyword, query.status, query.page, query.pageSize, navigate,
+    scope, query.keyword, query.status, query.category, query.page, query.pageSize, navigate,
   ]);
 
   function changeQuery(next: ActivitySearchQuery) {
     setNormalizationNotice(null);
     const search = serializeActivityQuery(next);
-    if (search === canonicalSearch) resource.retry();
+    if (search === canonicalSearch) refresh();
     else navigate({ pathname: "/activities", search });
   }
 
@@ -69,7 +85,7 @@ export function ActivitiesPage() {
     changeQuery({ ...defaultActivityQuery, pageSize: query.pageSize });
   }
 
-  const hasFilters = query.keyword !== "" || query.status !== "ALL";
+  const hasFilters = query.keyword !== "" || query.status !== "ALL" || query.category !== "ALL";
   const pageSizeOptions = [...new Set([12, 24, 48, query.pageSize])].sort((a, b) => a - b);
   return (
     <div className="page-container">
@@ -133,6 +149,11 @@ export function ActivitiesPage() {
               ]}
             />
           </div>
+          <div className="filter-field filter-select">
+            <label htmlFor="discovery-category">活动分类</label>
+            <Select<ActivityCategoryFilter> id="discovery-category" aria-label="活动分类" value={query.category}
+              options={activityCategoryFilterOptions} onChange={category => changeQuery({ ...query, category, page: 1 })} />
+          </div>
           <div className="filter-actions">
             <Button type="primary" htmlType="submit" icon={<SearchOutlined aria-hidden="true" />}>
               查询
@@ -169,11 +190,11 @@ export function ActivitiesPage() {
         {resource.loading || correctingPage ? (
           <LoadingState cards />
         ) : resource.error ? (
-          <ErrorState error={resource.error} retry={resource.retry} />
+          <ErrorState error={resource.error} retry={refresh} />
         ) : activities.length === 0 ? (
           <EmptyState
             title={hasFilters ? "暂无符合条件的活动" : "还没有发布的活动"}
-            description={hasFilters ? "试试其他关键词或活动状态。" : "活动发布后会显示在这里。"}
+            description={hasFilters ? "试试其他关键词、活动状态或分类。" : "活动发布后会显示在这里。"}
             action={hasFilters ? <Button onClick={clearFilters}>清除筛选</Button> : undefined}
           />
         ) : (

@@ -6,6 +6,7 @@ import { formatDate, formatTime } from "../date";
 import type { Activity } from "../types";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { activityAuditLogPath } from "../auditLogQuery";
+import { activityCategoryLabel } from "../activityCategory";
 import { LoadingState } from "../components";
 import "./adminActivityTable.css";
 
@@ -19,6 +20,8 @@ const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Acti
       <Link to={`/activities/${row.id}`}>{title}</Link>
     ),
   },
+  { title: "活动分类", dataIndex: "category", key: "category", width: 120,
+    render: (value: string) => activityCategoryLabel(value) },
   {
     title: "开始时间（北京时间）",
     dataIndex: "startsAt",
@@ -85,6 +88,7 @@ export function AdminActivityTable({
         {activities.map(activity => <Card size="small" key={activity.id} data-activity-id={activity.id}
           title={<Link to={`/activities/${activity.id}`}>{activity.title}</Link>} extra={<ActivityStatus activity={activity} personal={false} />}>
           <p className="metadata">开始时间（北京时间）：{formatDate(activity.startsAt)} {formatTime(activity.startsAt)}</p>
+          <p className="metadata">活动分类：{activityCategoryLabel(activity.category)}</p>
           <p className="metadata">活动地点：{activity.location}</p>
           <p className="metadata">有效报名：{activity.registeredCount} / {activity.capacity}</p>
           <Space wrap size="middle" className="admin-activity-mobile-actions">
@@ -105,7 +109,7 @@ export function AdminActivityTable({
       dataSource={activities}
       loading={loading}
       pagination={pagination}
-      scroll={{ x: 1370 }}
+      scroll={{ x: 1490 }}
       locale={{ emptyText: "暂无符合条件的活动" }}
     />
   );

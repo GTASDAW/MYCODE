@@ -12,6 +12,7 @@ import { dateParts, formatDate, formatTime } from "./date";
 import { errorMessage } from "./api";
 import type { Activity } from "./types";
 import { activityDetailsPath } from "./activityDiscovery";
+import { activityCategoryLabel } from "./activityCategory";
 
 export function Logo() {
   return (
@@ -212,7 +213,7 @@ export function ActivityCard({ activity, from }: { activity: Activity; from?: st
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
   const detailsPath = activityDetailsPath(activity.id, from);
   return (
-    <article className="activity-card">
+    <article className="activity-card" data-activity-id={activity.id}>
       <div className="activity-card-top">
         <DateBadge startsAt={activity.startsAt} />
         <ActivityStatus activity={activity} />
@@ -220,6 +221,7 @@ export function ActivityCard({ activity, from }: { activity: Activity; from?: st
       <h3>
         <Link to={detailsPath}>{activity.title}</Link>
       </h3>
+      <Tag data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</Tag>
       <p className="card-description">{activity.description}</p>
       {activity.cancelled && <div className="card-cancellation"><ActivityCancellationNotice activity={activity} /></div>}
       <div className="card-meta">

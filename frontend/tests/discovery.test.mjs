@@ -10,7 +10,7 @@ import {
 } from '../src/activityDiscovery.ts';
 
 test('discovery URLs restore literal keywords, status and pagination without trimming or treating SQL wildcard characters specially', () => {
-  const query = { keyword: ' 上海 %_! +&? ', status: 'OPEN', page: 3, pageSize: 24 };
+  const query = { keyword: ' 上海 %_! +&? ', status: 'OPEN', category: 'ALL', page: 3, pageSize: 24 };
   const search = serializeActivityQuery(query);
   assert.deepEqual(parseActivityQuery(search), { query, notice: null });
   assert.equal(activityListPath(query), `/activities${search}`);

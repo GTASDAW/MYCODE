@@ -86,8 +86,9 @@ class AuthRateLimitIntegrationTest {
     void databaseIdentity() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("7");
+        assertThat(jdbc.queryForObject("SELECT MAX(version) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("8");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
+        jdbc.queryForList("SELECT id, category FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
     }
 

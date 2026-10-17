@@ -16,6 +16,7 @@ export interface Activity {
   title: string;
   description: string;
   location: string;
+  category: ActivityCategory;
   startsAt: string;
   capacity: number;
   registeredCount: number;
@@ -80,12 +81,14 @@ export interface NewActivity {
   location: string;
   startsAt: string;
   capacity: number;
+  category?: ActivityCategory | null;
 }
 
 export interface ActivityDetails {
   title: string;
   description: string;
   location: string;
+  category?: ActivityCategory | null;
 }
 
 export interface AdminOverview {
@@ -164,7 +167,7 @@ export interface AdminAuditLog {
   occurredAt: string;
 }
 
-export type AuditLogField = "title" | "description" | "location" | "startsAt" | "capacity" |
+export type AuditLogField = "title" | "description" | "location" | "category" | "startsAt" | "capacity" |
   "cancelledAt" | "cancellationReason" | "checkedInAt";
 
 export interface AdminAuditLogDetail extends AdminAuditLog {
@@ -172,6 +175,8 @@ export interface AdminAuditLogDetail extends AdminAuditLog {
 }
 
 export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING" | "CANCELLED";
+export type ActivityCategory = "UNCATEGORIZED" | "TECHNOLOGY" | "SPORTS" | "CULTURE" | "OTHER";
+export type ActivityCategoryFilter = "ALL" | ActivityCategory;
 export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";
 export type CheckInFilter = "ALL" | "CHECKED_IN" | "NOT_CHECKED_IN";
 
@@ -180,6 +185,7 @@ export interface AdminActivityQuery {
   pageSize: number;
   keyword: string;
   status: ActivityFilter;
+  category: ActivityCategoryFilter;
 }
 
 export type ActivitySearchQuery = AdminActivityQuery;

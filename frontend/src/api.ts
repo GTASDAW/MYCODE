@@ -333,6 +333,7 @@ export const api = {
       `/activities/search?${new URLSearchParams({
         keyword: query.keyword,
         status: query.status,
+        category: query.category ?? "ALL",
         page: String(query.page),
         pageSize: String(query.pageSize),
       })}`,
@@ -393,6 +394,7 @@ export const api = {
         pageSize: String(query.pageSize),
         keyword: query.keyword,
         status: query.status,
+        category: query.category ?? "ALL",
       })}`,
       { signal },
     ),
@@ -427,11 +429,12 @@ export const api = {
     })}`,
     { signal }, true, "csv",
   ),
-  createActivity: (activity: NewActivity) =>
+  createActivity: (activity: NewActivity, signal?: AbortSignal) =>
     request<Activity>("/admin/activities", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(activity),
+      signal,
     }),
   updateActivity: (id: number, details: ActivityDetails, signal?: AbortSignal) =>
     request<Activity>(`/admin/activities/${id}`, {
@@ -441,6 +444,7 @@ export const api = {
         title: details.title,
         description: details.description,
         location: details.location,
+        category: details.category,
       }),
       signal,
     }),

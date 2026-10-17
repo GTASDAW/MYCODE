@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { ApiError, errorMessage } from "../api";
 import { useAuth } from "../auth";
@@ -14,14 +14,21 @@ export function useActivityMutation() {
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(false);
   const submission = useRef<AbortController | null>(null);
+  const account = auth.captureAccountRequest();
+  const scope = `${pathname}:${account?.userId}:${account?.generation}`;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
+    setBusy(false);
+    setError(null);
     return () => {
       mounted.current = false;
       submission.current?.abort();
+      submission.current = null;
     };
-  }, [pathname]);
+  }, [scope]);
 
   async function run(
     request: (signal: AbortSignal) => Promise<Activity>,
@@ -29,13 +36,13 @@ export function useActivityMutation() {
   ) {
     if (submission.current) return;
     const account = auth.captureAccountRequest();
-    if (!account) return;
+    if (!account || auth.user?.role !== "ADMIN") return;
     const controller = new AbortController();
     submission.current = controller;
     setBusy(true);
     setError(null);
     const current = () => mounted.current && !controller.signal.aborted &&
-      auth.isCurrentAccountRequest(account);
+      currentScope.current === scope && submission.current === controller && auth.isCurrentAccountRequest(account);
     try {
       const activity = await request(controller.signal);
       if (current()) onSuccess(activity);
@@ -49,8 +56,9 @@ export function useActivityMutation() {
       } else setError(errorMessage(err));
     } finally {
       if (submission.current === controller) {
+        const stillCurrent = current();
         submission.current = null;
-        if (mounted.current) setBusy(false);
+        if (stillCurrent) setBusy(false);
       }
     }
   }

@@ -142,8 +142,9 @@ class MyRegistrationSearchIntegrationTest {
     void verifyDedicatedCurrentSchemaBeforeFixtureWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class))
-            .isEqualTo("7");
+            .isEqualTo("8");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
+        jdbc.queryForList("SELECT id, category FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
     }
 
@@ -203,6 +204,7 @@ class MyRegistrationSearchIntegrationTest {
         assertThat(item.has("id") && item.has("status") && item.has("activity")).isTrue();
         assertThat(item.get("id").asLong()).isEqualTo(registration);
         assertThat(item.get("activity").get("id").asLong()).isEqualTo(activity);
+        assertThat(item.get("activity").get("category").asString()).isEqualTo("UNCATEGORIZED");
         assertThat(registrations.mine(owner).getFirst().activity()).isEqualTo(activities.get(activity, owner));
         activities.cancel(activity, new CancelActivityRequest("历史取消原因"), adminId());
         var cancelled = registrations.mine(owner).getFirst();

@@ -28,11 +28,12 @@ public interface AdminMapper {
     @Select("<script>SELECT " + ActivityMapper.VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id = a.id AND r.user_id = #{userId} "
         + ActivityQuerySql.FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
     List<ActivityRow> activities(@Param("userId") long userId, @Param("now") LocalDateTime now,
-                                @Param("keyword") String keyword, @Param("status") String status,
+                                @Param("keyword") String keyword, @Param("status") String status, @Param("category") String category,
                                 @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("<script>SELECT COUNT(*) FROM activities a " + ActivityQuerySql.FILTER + "</script>")
-    long countActivities(@Param("now") LocalDateTime now, @Param("keyword") String keyword, @Param("status") String status);
+    long countActivities(@Param("now") LocalDateTime now, @Param("keyword") String keyword, @Param("status") String status,
+                         @Param("category") String category);
 
     String ROSTER_FILTER = """
         WHERE r.activity_id = #{activityId}

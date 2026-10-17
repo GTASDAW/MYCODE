@@ -11,7 +11,7 @@ public interface RegistrationMapper {
     String MY_VIEW_COLUMNS = "r.id AS registration_id, r.status, r.checked_in_at, "
         + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
-        + "a.cancelled_at, a.cancellation_reason";
+        + "a.cancelled_at, a.cancellation_reason, a.category";
 
     // The activity row already serializes every mutation. Do not lock a missing registration:
     // under REPEATABLE READ that would take gap locks shared by unrelated activities.

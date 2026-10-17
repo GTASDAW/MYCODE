@@ -1,0 +1,5 @@
+ALTER TABLE activities
+    ADD COLUMN category VARCHAR(20) NOT NULL DEFAULT 'UNCATEGORIZED',
+    ADD CONSTRAINT chk_activity_category CHECK (
+        BINARY category IN ('UNCATEGORIZED', 'TECHNOLOGY', 'SPORTS', 'CULTURE', 'OTHER')
+    );

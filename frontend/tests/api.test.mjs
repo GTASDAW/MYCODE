@@ -274,7 +274,7 @@ test('public discovery sends literal query parameters and cancellation to the se
   const requested = new URL(calls[0].url, 'http://localhost');
   assert.equal(requested.pathname, '/api/activities/search');
   assert.deepEqual(Object.fromEntries(requested.searchParams), {
-    keyword: query.keyword, status: 'OPEN', page: '2', pageSize: '24',
+    keyword: query.keyword, status: 'OPEN', category: 'ALL', page: '2', pageSize: '24',
   });
   assert.equal(calls[0].options.signal, controller.signal);
   assert.equal(calls[0].options.credentials, 'same-origin');
@@ -1063,4 +1063,66 @@ test('an old explicit CSRF rejection delivered after a new login cannot refresh 
   await api.register(26);
   assert.deepEqual(writes.at(-1), { url: '/api/activities/26/registration', token: 'token-2' });
   assert.equal(tokenFetches, 2);
+});
+
+test('public and admin category searches combine only their criteria and retain real category values in the response', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const page = { items: [{ id: 42, category: 'TECHNOLOGY' }], total: 13, page: 2, pageSize: 10,
+    summary: { upcomingActivities: 13, availableSeats: 99 } };
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response(200, page); };
+  const query = { keyword: ' 上海 %_ ', status: 'OPEN', category: 'TECHNOLOGY', page: 2, pageSize: 10, userId: 999 };
+  assert.deepEqual(await api.searchActivities(query, controller.signal), page);
+  assert.deepEqual(await api.adminActivities(query, controller.signal), page);
+  for (const { url, options } of calls) {
+    assert.deepEqual(Object.fromEntries(new URL(url, 'http://localhost').searchParams),
+      { keyword: query.keyword, status: 'OPEN', category: 'TECHNOLOGY', page: '2', pageSize: '10' });
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.body, undefined);
+    assert.equal(options.credentials, 'same-origin');
+  }
+});
+
+test('category writes retain old omitted/null calls, whitelist editable fields, and carry cancellation on publishing', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    writes.push({ url, options, body: JSON.parse(options.body) });
+    return response(200, { id: 42, category: JSON.parse(options.body).category ?? 'UNCATEGORIZED' });
+  };
+  const create = { title: '分类活动', description: '说明', location: '上海', startsAt: '2030-01-01T00:00:00Z', capacity: 10 };
+  for (const category of [undefined, null, 'SPORTS']) {
+    await api.createActivity({ ...create, category }, controller.signal);
+    await api.updateActivity(42, { title: '新标题', description: '说明', location: '上海', category, capacity: 999,
+      startsAt: '2100-01-01T00:00:00Z', createdBy: 999 }, controller.signal);
+  }
+  assert.equal(Object.hasOwn(writes[0].body, 'category'), false);
+  assert.equal(Object.hasOwn(writes[1].body, 'category'), false);
+  assert.equal(writes[2].body.category, null);
+  assert.equal(writes[3].body.category, null);
+  assert.deepEqual(writes[5].body, { title: '新标题', description: '说明', location: '上海', category: 'SPORTS' });
+  for (const write of writes) {
+    assert.equal(write.options.signal, controller.signal);
+    assert.equal(write.options.headers.get('X-CSRF-TOKEN'), 'valid');
+  }
+});
+
+test('invalid category errors remain explicit without automatic write replay and an abandoned publication never starts', async () => {
+  const { api } = await freshApi();
+  let writes = 0;
+  globalThis.fetch = async url => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    writes++;
+    return response(400, { code: 'VALIDATION_ERROR', message: '活动分类无效' });
+  };
+  await assert.rejects(api.updateActivity(42, { title: '标题', description: '说明', location: '上海', category: 'bad' }),
+    error => error.status === 400 && error.code === 'VALIDATION_ERROR');
+  assert.equal(writes, 1);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(api.createActivity({}, controller.signal), error => error.name === 'AbortError');
+  assert.equal(writes, 1);
 });

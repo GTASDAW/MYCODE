@@ -4,4 +4,4 @@ import java.time.LocalDateTime;
 
 public record ActivityRow(long id, String title, String description, String location,
                           LocalDateTime startsAt, int capacity, int registeredCount, int waitingCount,
-                          String registrationStatus, LocalDateTime cancelledAt, String cancellationReason) {}
+                          String registrationStatus, LocalDateTime cancelledAt, String cancellationReason, String category) {}

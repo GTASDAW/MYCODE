@@ -11,14 +11,21 @@ public class NewActivity {
     public final LocalDateTime startsAt;
     public final int capacity;
     public final long createdBy;
+    public final String category;
 
     public NewActivity(String title, String description, String location, LocalDateTime startsAt,
                        int capacity, long createdBy) {
+        this(title, description, location, startsAt, capacity, createdBy, "UNCATEGORIZED");
+    }
+
+    public NewActivity(String title, String description, String location, LocalDateTime startsAt,
+                       int capacity, long createdBy, String category) {
         this.title = title;
         this.description = description;
         this.location = location;
         this.startsAt = startsAt;
         this.capacity = capacity;
         this.createdBy = createdBy;
+        this.category = category;
     }
 }

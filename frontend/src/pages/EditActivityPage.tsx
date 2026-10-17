@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Alert, App as AntApp, Button, Card, Form, Input } from "antd";
+import { Alert, App as AntApp, Button, Card, Form, Input, Select } from "antd";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -7,26 +7,28 @@ import { canManageActivity } from "../activityLifecycle";
 import { ActivityCancellationNotice, ErrorState, LoadingState, PageHeading } from "../components";
 import { formatDate, formatTime } from "../date";
 import type { ActivityDetails } from "../types";
-import { useAuthenticatedResource } from "./useAuthenticatedResource";
 import { useActivityMutation } from "./useActivityMutation";
+import { activityCategoryOptions } from "../activityCategory";
+import type { ActivityCategory } from "../types";
+import { useAdminRead } from "./useAdminRead";
 
 export function EditActivityRoute() {
   const { id } = useParams();
-  const { user } = useAuth();
-  return <EditActivityPage key={`${id}:${user?.id}`} />;
+  const auth = useAuth();
+  const account = auth.captureAccountRequest();
+  return <EditActivityPage key={`${id}:${account?.userId}:${account?.generation}`} />;
 }
 
 function EditActivityPage() {
   const { id = "" } = useParams();
-  const { user } = useAuth();
-  const resource = useAuthenticatedResource((signal) => api.activity(id, signal), [id, user?.id]);
+  const resource = useAdminRead(signal => api.activity(id, signal), `activity-edit:${id}`);
   const [form] = Form.useForm<ActivityDetails>();
   const mutation = useActivityMutation();
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const activity = resource.data;
   useEffect(() => {
-    if (activity) form.setFieldsValue({ title: activity.title, description: activity.description, location: activity.location });
+    if (activity) form.setFieldsValue({ title: activity.title, description: activity.description, location: activity.location, category: activity.category });
   }, [activity, form]);
 
   async function submit(values: ActivityDetails) {
@@ -39,6 +41,7 @@ function EditActivityPage() {
           title: values.title.trim(),
           description: values.description.trim(),
           location: values.location.trim(),
+          category: values.category,
         }, signal);
       },
       (updated) => {
@@ -50,7 +53,7 @@ function EditActivityPage() {
 
   return (
     <div className="page-container">
-      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改标题、介绍和地点。开始时间与名额发布后固定。" />
+      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改标题、介绍、地点和分类。开始时间与名额发布后固定。" />
       {resource.loading ? <LoadingState /> : resource.error ? (
         <ErrorState error={resource.error} retry={resource.retry} />
       ) : activity && (
@@ -78,6 +81,9 @@ function EditActivityPage() {
               { max: 200, message: "地点最多 200 个字符" },
             ]}>
               <Input maxLength={200} />
+            </Form.Item>
+            <Form.Item name="category" label="活动分类" rules={[{ required: true, message: "请选择活动分类" }]}>
+              <Select<ActivityCategory> aria-label="活动分类" options={activityCategoryOptions} />
             </Form.Item>
             <div className="form-two-columns">
               <Form.Item label="开始时间（北京时间）" extra="开始时间发布后固定。">

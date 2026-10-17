@@ -45,6 +45,11 @@ public class ActivityService {
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ActivitySearchPageView search(int page, int pageSize, String keyword, String status, Long userId) {
+        return search(page, pageSize, keyword, status, "ALL", userId);
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ActivitySearchPageView search(int page, int pageSize, String keyword, String status, String category, Long userId) {
         if (page < 1 || pageSize < 1 || pageSize > 100) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码至少为 1，每页数量应在 1 到 100 之间");
         }
@@ -54,12 +59,13 @@ public class ActivityService {
         if (status == null || !SEARCH_STATUSES.contains(status)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "筛选状态不正确");
         }
+        ActivityCategories.filter(category);
         // One microsecond UTC instant and one InnoDB snapshot cover the aggregate and page response.
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         LocalDateTime utcNow = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
-        var totals = activities.searchTotals(utcNow, keyword, status);
+        var totals = activities.searchTotals(utcNow, keyword, status, category);
         long offset = ((long) page - 1L) * pageSize;
-        var items = activities.search(userId, utcNow, keyword, status, pageSize, offset).stream()
+        var items = activities.search(userId, utcNow, keyword, status, category, pageSize, offset).stream()
             .map(row -> ActivityView.from(row, now)).toList();
         return new ActivitySearchPageView(items, totals.total(), page, pageSize,
             new ActivitySearchSummary(totals.upcomingActivities(), totals.availableSeats()));
@@ -74,13 +80,14 @@ public class ActivityService {
 
     @Transactional
     public ActivityView create(CreateActivityRequest request, long creatorId) {
+        String category = ActivityCategories.value(request.category() == null ? "UNCATEGORIZED" : request.category());
         Instant now = clock.instant();
         Instant startsAt = request.startsAt().truncatedTo(ChronoUnit.MICROS);
         if (!startsAt.isAfter(now)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "开始时间必须在未来");
         }
         NewActivity row = new NewActivity(request.title().strip(), request.description().strip(), request.location().strip(),
-            LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId);
+            LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId, category);
         activities.insert(row);
         audit.created(row, creatorId, now);
         return get(row.id, creatorId);
@@ -96,9 +103,11 @@ public class ActivityService {
         String description = editText(request.description(), 10000, "介绍");
         String location = editText(request.location(), 200, "地点");
         var before = activities.auditText(id);
-        if (!before.title().equals(title) || !before.description().equals(description) || !before.location().equals(location)) {
-            activities.edit(id, title, description, location);
-            audit.edited(id, adminId, before, title, description, location, now);
+        String category = request.category() == null ? before.category() : ActivityCategories.value(request.category());
+        if (!before.title().equals(title) || !before.description().equals(description) || !before.location().equals(location)
+            || !before.category().equals(category)) {
+            activities.edit(id, title, description, location, category);
+            audit.edited(id, adminId, before, title, description, location, category, now);
         }
         return get(id, adminId);
     }

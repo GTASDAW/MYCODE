@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import {
   App as AntApp,
   Alert,
@@ -7,13 +6,16 @@ import {
   Form,
   Input,
   InputNumber,
+  Select,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router";
-import { api, ApiError, errorMessage } from "../api";
-import { useAuth } from "../auth";
+import { api } from "../api";
 import { PageHeading } from "../components";
 import { beijingInputMin, beijingInputToIso } from "../date";
+import { activityCategoryOptions } from "../activityCategory";
+import type { ActivityCategory } from "../types";
+import { useActivityMutation } from "./useActivityMutation";
 
 interface CreateActivityForm {
   title: string;
@@ -21,50 +23,25 @@ interface CreateActivityForm {
   location: string;
   startsAt: string;
   capacity: number;
+  category: ActivityCategory;
 }
 
 export function CreateActivityPage() {
-  const auth = useAuth();
   const navigate = useNavigate();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const mutation = useActivityMutation();
   const { message } = AntApp.useApp();
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
 
   async function submit(values: CreateActivityForm) {
-    setBusy(true);
-    setError(null);
-    try {
-      const activity = await api.createActivity({
-        ...values,
-        title: values.title.trim(),
-        description: values.description.trim(),
-        location: values.location.trim(),
-        startsAt: beijingInputToIso(values.startsAt),
-      });
-      if (!mounted.current) return;
+    await mutation.run(signal => api.createActivity({
+      ...values,
+      title: values.title.trim(),
+      description: values.description.trim(),
+      location: values.location.trim(),
+      startsAt: beijingInputToIso(values.startsAt),
+    }, signal), activity => {
       message.success("活动已发布");
       navigate(`/activities/${activity.id}`);
-    } catch (err) {
-      if (!mounted.current) return;
-      if (err instanceof ApiError && err.status === 401) {
-        auth.expire();
-        navigate("/login", {
-          state: {
-            from: "/admin/activities/new",
-            notice: "登录已过期，请重新登录后继续。",
-          },
-        });
-      } else setError(errorMessage(err));
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
+    });
   }
 
   return (
@@ -75,14 +52,15 @@ export function CreateActivityPage() {
         description="填写活动信息。发布后名额固定，活动开始时关闭报名与取消。"
       />
       <Card title="基本信息" className="create-form-panel">
-        {error && (
-          <Alert className="form-alert" type="error" showIcon title={error} />
+        {mutation.error && (
+          <Alert className="form-alert" type="error" showIcon title={mutation.error} />
         )}
         <Form<CreateActivityForm>
           layout="vertical"
           requiredMark={false}
           onFinish={submit}
-          initialValues={{ capacity: 20 }}
+          initialValues={{ capacity: 20, category: "UNCATEGORIZED" }}
+          disabled={mutation.busy}
         >
           <Form.Item
             name="title"
@@ -122,6 +100,9 @@ export function CreateActivityPage() {
             ]}
           >
             <Input maxLength={200} placeholder="填写场地名称和详细地址" />
+          </Form.Item>
+          <Form.Item name="category" label="活动分类" rules={[{ required: true, message: "请选择活动分类" }]}>
+            <Select<ActivityCategory> aria-label="活动分类" options={activityCategoryOptions} />
           </Form.Item>
           <div className="form-two-columns">
             <Form.Item
@@ -173,7 +154,9 @@ export function CreateActivityPage() {
             <Button
               type="primary"
               htmlType="submit"
-              loading={busy}
+              loading={mutation.busy}
+              aria-label="发布活动"
+              aria-busy={mutation.busy}
               icon={<PlusOutlined aria-hidden="true" />}
             >
               发布活动

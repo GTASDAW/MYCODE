@@ -33,6 +33,7 @@ import { useResource } from "../useResource";
 import { activityClosed } from "../activityLifecycle";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { safeActivityDetailReturn } from "../activityDetailNavigation";
+import { activityCategoryLabel } from "../activityCategory";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -187,6 +188,7 @@ function ActivityDetailPage() {
           <Descriptions
             column={1}
             items={[
+              { key: "category", label: "活动分类", children: <span data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</span> },
               {
                 key: "time",
                 label: "活动时间",

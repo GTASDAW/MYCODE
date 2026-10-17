@@ -52,7 +52,7 @@ test('audit changes retain literal long multiline text and distinguish an absent
   assert.equal(auditChangeText('title', ''), '');
   assert.equal(auditChangeText('title', null), '未设置');
   assert.deepEqual(Object.keys(auditActionLabels), ['CREATE', 'EDIT', 'CANCEL', 'CHECK_IN']);
-  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'startsAt', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt']);
+  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'category', 'startsAt', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt']);
 });
 
 function deferred() {
