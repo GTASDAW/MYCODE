@@ -278,15 +278,15 @@ async function snapshotDatabase(db, phase) {
   return JSON.stringify(tables);
 }
 
-async function verifyDatabase(db, settings) {
+export async function verifyPerformanceDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT credential_version FROM users LIMIT 0');
-    await db.query('SELECT cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
+    await db.query('SELECT category, cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
     await db.query('SELECT user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
     await db.query('SELECT checked_in_at, checked_in_by FROM registrations LIMIT 0');
     await db.query('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
@@ -313,12 +313,15 @@ async function verifyDatabase(db, settings) {
   assert(admin && demo && /^\$2[aby]\$\d\d\$/.test(demo.password_hash), 'Exact seed role and BCrypt identities are required.');
   const client = new ApiClient(settings.base);
   const api = await client.json('/api/activities');
-  const [activities] = await db.query('SELECT id, title, description, location, capacity, registered_count, starts_at FROM activities ORDER BY id');
+  const [activities] = await db.query(settings.phase === undefined
+    ? 'SELECT id, title, description, location, category, capacity, registered_count, starts_at FROM activities ORDER BY id'
+    : 'SELECT id, title, description, location, capacity, registered_count, starts_at FROM activities ORDER BY id');
   assert(Array.isArray(api) && api.length === activities.length, 'Public API seed data does not match the isolated database.');
   for (const row of activities) {
     const view = api.find(item => item.id === row.id);
     assert(view && view.title === row.title && view.description === row.description && view.location === row.location
       && view.capacity === row.capacity && view.registeredCount === row.registered_count
+      && (settings.phase !== undefined || view.category === row.category)
       && new Date(view.startsAt).getTime() === new Date(`${row.starts_at.replace(' ', 'T')}Z`).getTime(),
     'Public API is not backed by the verified isolated seed database.');
   }
@@ -345,7 +348,8 @@ async function verifyUniqueApiDatabase(db, settings, manifest) {
   intent.id = inserted.insertId;
   saveManifest(manifest);
   const probe = await new ApiClient(settings.base).json(`/api/activities/${intent.id}`);
-  assert(probe.id === intent.id && probe.title === intent.title && probe.description === intent.description,
+  assert(probe.id === intent.id && probe.title === intent.title && probe.description === intent.description
+    && (manifest.phase !== undefined || probe.category === 'UNCATEGORIZED'),
     'Unique UUID API probe differs from the isolated SQL fixture; application writes refused.');
 }
 
@@ -721,7 +725,7 @@ export async function runPerformanceChecks() {
     // Application/Flyway readiness is outside all measured request durations.
     await waitForApiReady(settings.base);
     db = await mysql.createConnection(settings.database);
-    const seed = await verifyDatabase(db, settings);
+    const seed = await verifyPerformanceDatabase(db, settings);
     baseline = await snapshotDatabase(db, settings.phase);
     manifest = { version: 1, runId: randomUUID(), project: RUN_PROJECT, database: RUN_DATABASE,
       serverUuid: seed.identity.serverUuid, adminId: seed.admin.id, phase: settings.phase, users: [], activities: [] };

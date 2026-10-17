@@ -165,7 +165,7 @@ async function waitHealthy() {
 
 async function snapshot() {
   const [users] = await db.query('SELECT * FROM users ORDER BY id');
-  const [activities] = await db.query('SELECT id, title, description, location, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
+  const [activities] = await db.query('SELECT id, title, description, location, category, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
@@ -199,9 +199,10 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8']);
   assert(migrations.every(row => row.success === 1));
-  check('fresh MySQL schema contains successful Flyway V1 through V7');
+  await db.query('SELECT category FROM activities LIMIT 0');
+  check('fresh MySQL schema contains successful Flyway V1 through V8 and the activity category column');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -211,6 +212,8 @@ try {
   const activities = await anonymous.json('/api/activities');
   assert(activities.length > 0, 'Fresh Compose startup must create demo activities.');
   assert(activities.every(row => Number.isInteger(row.waitingCount)));
+  assert(activities.every(row => ['UNCATEGORIZED', 'TECHNOLOGY', 'SPORTS', 'CULTURE', 'OTHER'].includes(row.category)),
+    'Every legacy activity must expose its stored category.');
   const discovery = await anonymous.json('/api/activities/search?page=1&pageSize=1&keyword=&status=ALL');
   assert.equal(discovery.total, activities.length, 'Public pagination must retain the full matching total.');
   assert.equal(discovery.items.length, 1);
@@ -237,6 +240,7 @@ try {
     startsAt: new Date(Date.now() + 48 * 3600000).toISOString(),
   });
   assert(Number.isSafeInteger(fixture.id));
+  assert.equal(fixture.category, 'UNCATEGORIZED', 'Old clients that omit category must retain the default.');
   const [ownedRows] = await db.execute('SELECT id, title, description FROM activities WHERE id=?', [fixture.id]);
   assert.equal(ownedRows.length, 1, 'The API-created fixture is absent from the configured smoke database.');
   assert.equal(ownedRows[0].title, title);
@@ -285,12 +289,23 @@ try {
   check('promotion creates one private notification; read authorization, CSRF and first-read idempotence hold');
 
   const edited = await admin.write(`/api/admin/activities/${fixture.id}`, 'PATCH', {
-    title, description, location: 'Updated isolated smoke location', capacity: 99,
+    title, description, location: 'Updated isolated smoke location', category: 'TECHNOLOGY', capacity: 99,
     startsAt: new Date(Date.now() + 72 * 3600000).toISOString(),
   });
   assert.equal(edited.location, 'Updated isolated smoke location');
+  assert.equal(edited.category, 'TECHNOLOGY');
   assert.equal(edited.capacity, fixture.capacity, 'Editing must preserve the fixed capacity.');
   assert.equal(edited.startsAt, fixture.startsAt, 'Editing must preserve the published start time.');
+  const categorized = await anonymous.json(`/api/activities/search?${new URLSearchParams({
+    keyword: title, status: 'FULL', category: 'TECHNOLOGY', pageSize: '1',
+  })}`);
+  assert.equal(categorized.total, 1);
+  assert.equal(categorized.items[0].id, fixture.id);
+  assert.equal(categorized.items[0].category, 'TECHNOLOGY');
+  assert.deepEqual(categorized.summary, { upcomingActivities: 1, availableSeats: 0 });
+  const otherCategory = await anonymous.json(`/api/activities/search?${new URLSearchParams({ keyword: title, category: 'SPORTS' })}`);
+  assert.equal(otherCategory.total, 0);
+  assert.deepEqual(otherCategory.summary, { upcomingActivities: 0, availableSeats: 0 });
   const cancelledActivity = await admin.write(`/api/admin/activities/${fixture.id}/cancel`, 'POST', { reason: 'Temporary smoke activity cancelled' });
   assert(cancelledActivity.cancelled && cancelledActivity.closed && cancelledActivity.registeredCount === 0
     && cancelledActivity.waitingCount === 0 && cancelledActivity.registrationStatus === 'CANCELLED',
@@ -306,13 +321,16 @@ try {
   assert(activityAuditPage.items.every(row => row.activityId === fixture.id && row.activityTitle === title
     && row.actorUserId === adminIdentity.id && row.actorUsername === 'admin' && !Object.hasOwn(row, 'changes')));
   const editAudit = await admin.json(`/api/admin/audit-logs/${activityAuditPage.items[1].id}`);
-  assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Compose isolated validation', after: edited.location }]);
+  assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Compose isolated validation', after: edited.location },
+    { field: 'category', before: 'UNCATEGORIZED', after: 'TECHNOLOGY' }]);
+  const createAudit = await admin.json(`/api/admin/audit-logs/${activityAuditPage.items[2].id}`);
+  assert.deepEqual(createAudit.changes.find(change => change.field === 'category'), { field: 'category', before: null, after: 'UNCATEGORIZED' });
   const filteredAudit = await admin.json(`/api/admin/audit-logs?activityId=${fixture.id}&action=CANCEL&pageSize=1`);
   assert.equal(filteredAudit.total, 1);
   assert.deepEqual(filteredAudit.items, [activityAuditPage.items[0]]);
   check('administrator-only CREATE, EDIT and first CANCEL audit snapshots and complete detail changes are persisted');
   const cancelledSearch = await anonymous.json(`/api/activities/search?${new URLSearchParams({
-    keyword: title, status: 'CANCELLED', page: '1', pageSize: '1',
+    keyword: title, status: 'CANCELLED', category: 'TECHNOLOGY', page: '1', pageSize: '1',
   })}`);
   assert.equal(cancelledSearch.total, 1);
   assert.equal(cancelledSearch.items[0].id, fixture.id);
@@ -425,6 +443,7 @@ try {
   const legacyPersonal = await admin.json('/api/me/registrations');
   assert.equal(legacyPersonal.length, 2);
   assert.deepEqual(legacyPersonal.map(row => row.activity.id), [fixture.id, startedFixture.id]);
+  assert.deepEqual(legacyPersonal.map(row => row.activity.category), ['TECHNOLOGY', 'UNCATEGORIZED']);
   assert(legacyPersonal.every(row => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(['activity', 'id', 'status'])));
   const matchingLegacy = legacyPersonal.find(row => row.id === personalItem.id);
   assert.deepEqual(matchingLegacy, { id: personalItem.id, status: personalItem.status, activity: personalItem.activity });

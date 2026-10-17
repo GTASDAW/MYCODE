@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { performanceSettings, performanceOutput, verifyApplicationArtifact, collectQueryEvidence, LOCK_QUERY_SQL, latencyStatistics, summarizeRequests,
-  verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView, verifyCurrentAuditCreation } from './performance-check.mjs';
+  verifyOwnershipManifest, cleanupOwned, waitForApiReady, monitoringView, verifyCurrentAuditCreation, verifyPerformanceDatabase } from './performance-check.mjs';
 
 const isolated = {
   COMPOSE_PROJECT_NAME: 'gather-perf-ci', PERF_BASE_URL: 'http://127.0.0.1:18098',
@@ -367,6 +367,39 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert(!db.calls.some(sql => sql.includes('checked_in')));
   assert(!db.calls.some(sql => sql.includes('activity_audit_logs')));
   assert(!db.calls.some(sql => sql.includes('credential_version')));
+  assert(!db.calls.some(sql => sql.includes('category')));
+});
+
+test('current performance preparation refuses missing V8 or category before seed reads or application writes', async () => {
+  for (const missing of ['migration', 'category']) {
+    const calls = [];
+    const db = { async query(sql) {
+      calls.push(sql);
+      if (sql.startsWith('SELECT DATABASE')) return [[{ name: 'activity_platform_perf', serverUuid: 'isolated-server', version: '8.4.7' }]];
+      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', ...(missing === 'migration' ? [] : ['8'])]
+        .map(version => ({ version, success: 1 }))];
+      if (sql.includes('category')) throw new Error('Category schema absent');
+      return [[]];
+    } };
+    await assert.rejects(verifyPerformanceDatabase(db, {}), missing === 'migration' ? /migrations must be applied/ : /Category schema absent/);
+    assert(!calls.some(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)));
+    assert(!calls.some(sql => sql.includes('COUNT(*) FROM users')));
+    assert.equal(calls.some(sql => sql.includes('category')), missing === 'category');
+  }
+});
+
+test('historical V2 performance preparation reaches seed checks without requiring V8 or querying current fields and tables', async () => {
+  const calls = [];
+  const seedBoundary = new Error('Reached unchanged V2 seed boundary');
+  const db = { async query(sql) {
+    calls.push(sql);
+    if (sql.startsWith('SELECT DATABASE')) return [[{ name: 'activity_platform_perf', serverUuid: 'isolated-server', version: '8.4.7' }]];
+    if (sql.includes('flyway_schema_history')) return [['1', '2'].map(version => ({ version, success: 1 }))];
+    if (sql.includes('COUNT(*) FROM users')) throw seedBoundary;
+    assert.fail('Historical V2 preparation queried a current-only field or table.');
+  } };
+  await assert.rejects(verifyPerformanceDatabase(db, { phase: 'A1' }), error => error === seedBoundary);
+  assert(!calls.some(sql => /category|credential_version|checked_in|notifications|activity_audit_logs/.test(sql)));
 });
 
 test('external check-in audit references reject performance cleanup before any deletion', async () => {

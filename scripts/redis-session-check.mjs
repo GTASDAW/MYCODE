@@ -365,6 +365,7 @@ export async function runRedisSessionChecks() {
       capacity: 1, startsAt: new Date(Date.now() + 48 * 3600000).toISOString(),
     });
     assert(Number.isSafeInteger(fixture.id) && fixture.id > 0, 'Activity creation returned an invalid ID.');
+    assert.equal(fixture.category, 'UNCATEGORIZED', 'A legacy create request must preserve the default category.');
     ownedFixture.id = fixture.id;
     const [created] = await db.execute('SELECT title, description FROM activities WHERE id = ?', [fixture.id]);
     assert(created.length === 1 && created[0].title === ownedFixture.title && created[0].description === ownedFixture.description,
@@ -588,10 +589,11 @@ export async function runRedisSessionChecks() {
 
     const edited = await admin.write(settings.b, `/api/admin/activities/${fixture.id}`, token, 'PATCH', {
       title: ownedFixture.title, description: ownedFixture.description, location: 'Updated lifecycle verification location',
-      capacity: 99, startsAt: new Date(Date.now() + 72 * 3600000).toISOString(),
+      category: 'SPORTS', capacity: 99, startsAt: new Date(Date.now() + 72 * 3600000).toISOString(),
     });
     assert(edited.capacity === fixture.capacity && edited.startsAt === fixture.startsAt
-      && edited.location === 'Updated lifecycle verification location', 'Editing must preserve the published time and capacity.');
+      && edited.location === 'Updated lifecycle verification location' && edited.category === 'SPORTS',
+    'Editing must update category while preserving the published time and capacity.');
     const signupToken = await accountClient.csrf(settings.a);
     const lifecycleResults = await Promise.allSettled([
       admin.write(settings.b, `/api/admin/activities/${fixture.id}/cancel`, token, 'POST', { reason: 'Isolated cross-instance lifecycle check' }),
@@ -624,7 +626,10 @@ export async function runRedisSessionChecks() {
     for (const base of [settings.a, settings.b, settings.web]) {
       assert.deepEqual(await admin.json(base, `/api/admin/audit-logs?activityId=${fixture.id}`), auditPage);
       const editAudit = await admin.json(base, `/api/admin/audit-logs/${auditPage.items[1].id}`);
-      assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Redis isolated lifecycle verification', after: edited.location }]);
+      assert.deepEqual(editAudit.changes, [{ field: 'location', before: 'Redis isolated lifecycle verification', after: edited.location },
+        { field: 'category', before: 'UNCATEGORIZED', after: 'SPORTS' }]);
+      const createAudit = await admin.json(base, `/api/admin/audit-logs/${auditPage.items[2].id}`);
+      assert.deepEqual(createAudit.changes.find(change => change.field === 'category'), { field: 'category', before: null, after: 'UNCATEGORIZED' });
       const attendanceAudit = await admin.json(base, `/api/admin/audit-logs?activityId=${ownedCheckInFixture.id}&action=CHECK_IN`);
       assert.equal(attendanceAudit.total, 1);
       const detail = await admin.json(base, `/api/admin/audit-logs/${attendanceAudit.items[0].id}`);
@@ -643,13 +648,23 @@ export async function runRedisSessionChecks() {
     passed('cross-instance editing preserves immutable fields; racing signup and activity cancellation retains history with zero active or waiting rows');
 
     const searchPath = `/api/activities/search?${new URLSearchParams({
-      keyword: ownedFixture.title, status: 'CANCELLED', page: '1', pageSize: '1',
+      keyword: ownedFixture.title, status: 'CANCELLED', category: 'SPORTS', page: '1', pageSize: '1',
     })}`;
     for (const current of [admin, accountClient]) for (const base of [settings.a, settings.b, settings.web]) {
       const page = await current.json(base, searchPath);
       assert(page.total === 1 && page.items.length === 1 && page.items[0].id === fixture.id
-        && page.items[0].registrationStatus === 'CANCELLED' && page.summary.upcomingActivities === 0
+        && page.items[0].registrationStatus === 'CANCELLED' && page.items[0].category === 'SPORTS' && page.summary.upcomingActivities === 0
         && page.summary.availableSeats === 0, 'Both replicas must return the correct scoped search, history and filtered statistics.');
+    }
+    for (const base of [settings.a, settings.b, settings.web]) {
+      const emptyCategory = await admin.json(base, `${searchPath.replace('category=SPORTS', 'category=TECHNOLOGY')}`);
+      assert.equal(emptyCategory.total, 0);
+      assert.deepEqual(emptyCategory.summary, { upcomingActivities: 0, availableSeats: 0 });
+      const categorizedAdmin = await admin.json(base, `/api/admin/activities?${new URLSearchParams({ keyword: ownedFixture.title,
+        status: 'CANCELLED', category: 'SPORTS', page: '1', pageSize: '1' })}`);
+      assert.equal(categorizedAdmin.total, 1);
+      assert.equal(categorizedAdmin.items[0].id, fixture.id);
+      assert.equal(categorizedAdmin.items[0].category, 'SPORTS');
     }
     const anonymousSearch = await new ApiClient().json(settings.web, `${searchPath}&userId=${user.id}`);
     assert(anonymousSearch.total === 1 && anonymousSearch.items.length === 1 && anonymousSearch.items[0].id === fixture.id
@@ -682,6 +697,7 @@ export async function runRedisSessionChecks() {
       const full = await current.json(settings.a, '/api/me/registrations/search?page=1&pageSize=100&status=ALL');
       assert.equal(full.total, 2);
       assert.deepEqual(full.items.map(row => row.activity.id), [fixture.id, ownedCheckInFixture.id]);
+      assert.deepEqual(full.items.map(row => row.activity.category), ['SPORTS', 'UNCATEGORIZED']);
       assert.deepEqual(full.summary, { activeRegistrations: 1, waitingRegistrations: 0, cancelledRegistrations: 1,
         checkedInRegistrations: current === admin ? 0 : 1 });
       assert.deepEqual(full.items.map(({ checkedInAt, ...oldFields }) => oldFields), legacy);

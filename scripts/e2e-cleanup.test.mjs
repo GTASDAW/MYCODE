@@ -371,13 +371,14 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.deepEqual(connection.state.users, [user]);
 });
 
-test('V7 and complete credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
-  for (const absent of ['migration', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table']) {
+test('V8 and complete category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table']) {
     const queries = [];
     const connection = { async execute(sql) {
       queries.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
-      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', ...(absent === 'migration' ? [] : ['7'])].map(version => ({ version }))]];
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', ...(absent === 'migration' ? [] : ['8'])].map(version => ({ version }))]];
+      if (sql.includes('description, category,') && absent === 'category-column') throw new Error('Activity category schema absent');
       if (sql.includes('credential_version') && absent === 'credential-column') throw new Error('Credential version schema absent');
       if (sql.includes('FROM registrations') && absent === 'check-in-columns') throw new Error('Check-in schema absent');
       if (sql.includes('FROM notifications') && absent === 'notification-table') throw new Error('Notification schema absent');
@@ -385,9 +386,10 @@ test('V7 and complete credential, notification, check-in and audit schemas are r
       return [[]];
     } };
     await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
-      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : /Notification schema absent/);
+      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : /Notification schema absent/);
     assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
     if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
+    else if (absent === 'category-column') assert.ok(queries.some(sql => sql.includes('description, category, registered_count')));
     else if (absent === 'notification-table') assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
     else if (absent === 'credential-column') assert.ok(queries.some(sql => sql.includes('role, credential_version FROM users LIMIT 0')));
     else if (absent === 'check-in-columns') assert.ok(queries.some(sql => sql.includes('status, checked_in_at, checked_in_by FROM registrations LIMIT 0')));
