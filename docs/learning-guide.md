@@ -2,6 +2,8 @@
 
 学习目标是理解每段代码为什么存在，并能修改一个功能、定位一个问题。按下面检查点推进，每一步都运行并观察结果。
 
+日历下载沿 `CalendarDownloadButton → api.activity → buildActivityCalendar → downloadFile` 阅读：已有接口如何提供最新快照，为什么读取不应覆盖并发报名状态，稳定 UID 为什么只含 origin/活动 ID，以及 UTC、文本转义、UTF-8 字节折行如何组合。比较 `.ics` 无 BOM 与既有 CSV 的 BOM/Tab 策略，解释“生成标准文件”和“某日历客户端实际导入成功”的区别；对照单元及双端下载回归，不引入额外服务。
+
 收藏流程沿 `FavoriteButton / MyFavoritesPage → api → FavoriteController → FavoriteService → FavoriteMapper → V9` 阅读。解释唯一键为何让重复收藏保留首次时间、取消后重收为何是新时间，以及收藏为何不改变报名和人数。比较两次分页查询的同一快照、认证的额外读取、URL 返回与旧响应保护；清理前的 `trackFavorite` 声明用于防止误删外部收藏，不是业务接口权限来源。实际结果见验证记录。
 
 完成基本查询后，可沿 [活动分类指南](activity-category-guide.md) 跟踪同一个字段如何经过 V8、请求兼容规则、Service 白名单、共享 SQL、个人独立投影、前端类型与表单、URL 和审计中文展示。解释为什么编辑省略分类不能覆盖现值、分类统计不能从当前页推算、分类读取不应扩大报名热锁投影，以及后台筛选为什么也写入 URL。
