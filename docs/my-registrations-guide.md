@@ -47,6 +47,8 @@ sequenceDiagram
 
 V7 后每个已登录 HTTP 请求另加一次仅取凭据版本的认证 SELECT：旧接口共一次认证加一次业务，新分页一次认证加两次业务。版本检查在业务事务快照之外；直接调用 Service 的查询证据仍是原业务次数，不包含 HTTP 认证。测试分别断言这两种范围，原因见 [改密指南](password-change-guide.md)。
 
+V8 的活动分类通过 `MY_VIEW_COLUMNS → MyRegistrationRow.activity()` 同一联表直接读取，旧数组和新分页都在内嵌活动增加 `category`。个人页面保留原展示，不新增分类筛选，也不改变排序、统计、SELECT 次数或签到权限。分类业务合同见 [分类指南](activity-category-guide.md)。
+
 2026-10-13 的真实 MySQL 8.4.11、专属 `activity_platform_test` 验证使用 13 场准确归属活动与 13 条本人记录，捕获结果为旧数组 1 次、新分页 2 次。对捕获的实际 SQL 执行 `EXPLAIN`：小表中的报名主表 `r` 选择 `ALL` 扫描，列表带 `Using filesort`；活动 `a` 以主键 `eq_ref` 关联；候补 `rw` 为 `DEPENDENT SUBQUERY`，使用 `uq_registration` 的活动前缀 `ref`。
 
 这些是该测试数据上的计划和语句计数，不是生产容量证据。候补人数仍使用关联 COUNT，可能随外层行增加内部工作；排序与 OFFSET 也不是恒定成本。个人列表迭代未测接口延迟或吞吐，没有为小表扫描追加未经测量的索引。历史 V2 报名锁定查询对照继续按 [原实验合同](query-optimization-review.md) 复现，不将当时 V5 的读取变化混入其数字。

@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
+脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
 
 ## 演示账号
 
@@ -54,9 +54,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 
 管理员可以使用概览、活动管理、发布活动、报名名单、操作记录和运行指标页面；普通用户能够报名、进入候补、取消和查看个人报名记录。前端参考 Ant Design Pro 的蓝白侧栏布局，手机通过抽屉导航访问页面。首次启动写入演示用户和未来活动，重启时保留已有数据。
 
-活动开始前，管理员可在详情或管理列表编辑标题、介绍和地点，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
+活动开始前，管理员可在详情或管理列表编辑标题、介绍、地点和分类，或填写原因取消整场活动；开始时间与名额固定。活动取消后关闭报名、人数归零，有效报名和候补保留为取消历史，用户能查看首次取消原因与时间。操作、并发设计和学习路径见 [活动编辑与取消](docs/activity-lifecycle.md)。
 
 发现页支持标题或地点搜索、六种状态筛选和真实后端分页，默认每页 12 条。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
+
+活动另有技术交流、运动户外、文化艺术、其他及未分类五种固定单选分类。发布默认未分类，管理员可在允许编辑时修改；活动卡片、详情和管理列表显示分类，个人报名内嵌活动响应也包含分类，操作记录展示真实前后值。公开与管理列表可叠加分类、关键词和状态查询，管理列表也保存 URL 条件、刷新与历史；旧客户端省略分类仍兼容，旧活动不推断分类。接口、迁移和阅读路径见 [活动分类指南](docs/activity-category-guide.md)。
 
 “我的报名”支持全部、已报名、候补、已取消筛选，默认每页 10 条，提供 10、20、50 条选项与手动刷新。四项统计覆盖本人全部记录，已签到是有效报名的子集；页面只展示本人的签到时间，不提供自助签到或签到管理员资料。URL、详情与登录返回保留条件，返回后重新查询并校正越界页。新分页使用两次数据 SELECT，旧数组接口保留字段和排序并改为一次联表读取，消除逐条加载活动；快照、查询证据和学习路径见 [我的报名指南](docs/my-registrations-guide.md)。
 
@@ -129,7 +131,7 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 确认已开始活动的有效报名者签到，保留首次记录 | 管理员且需要 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 导出全部符合两类筛选的 CSV，超 20,000 条返回 413 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
-| `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍和地点 | 管理员 |
+| `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍、地点和分类 | 管理员 |
 | `POST /api/admin/activities/{id}/cancel` | 取消整场活动并保存原因和历史 | 管理员 |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补 | 登录 |
 | `DELETE /api/activities/{id}/registration` | 取消报名或退出候补 | 登录 |
@@ -210,7 +212,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
-这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表，V7 增加凭据版本和认证读取。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V7 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
+这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表，V7 增加凭据版本和认证读取，V8 增加分类读取与筛选。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V8 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
 
 查看 [Actions 运行结果](https://github.com/GTASDAW/MYCODE/actions)，失败诊断包含日志、后端报告、浏览器截图与 trace。容器浏览器与 Redis 任务各自使用独立的 `activity_platform_e2e`；性能任务使用 `activity_platform_perf`，均不使用本机演示库。具体环境、复现命令和清理机制见 [交付指南](docs/delivery-guide.md)。本次实际执行结论见 [验证记录](docs/verification.md)。
 
@@ -218,7 +220,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看五张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录及 V7 用户凭据版本的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看五张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本及 V8 活动分类的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [四阶段学习指南](docs/learning-guide.md)

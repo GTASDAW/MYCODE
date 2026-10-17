@@ -1,6 +1,6 @@
 # 活动发现：搜索、筛选、分页与 URL 状态
 
-用户可以在 `/activities` 按标题或地点搜索活动、筛选状态并翻页。页面读取新的分页接口，当前页卡片、匹配总数和两项统计都来自 MySQL；查看详情、刷新、登录后返回列表时，已提交的查询条件保留。
+用户可以在 `/activities` 按标题或地点搜索活动、筛选状态和分类并翻页。页面读取分页接口，当前页卡片、匹配总数和两项统计都来自 MySQL；查看详情、刷新、登录后返回列表时，已提交的查询条件保留。
 
 ## 接口与兼容性
 
@@ -10,6 +10,7 @@
 | --- | --- | --- |
 | `keyword` | 空字符串 | 标题或地点的字面子串，最多 200 个 UTF-16 代码单元；不裁剪首尾空格 |
 | `status` | `ALL` | `ALL`、`OPEN`、`FULL`、`STARTED`、`CANCELLED`、`UPCOMING`，区分大小写 |
+| `category` | `ALL` | 全部或五种固定分类代码，区分大小写；空串或未知值拒绝，见 [分类指南](activity-category-guide.md) |
 | `page` | `1` | 正整数，按 Java `int` 接收 |
 | `pageSize` | `12` | 1–100 的整数 |
 
@@ -47,7 +48,7 @@ interface ActivitySearchPage {
 | `CANCELLED` | 已取消 | 取消时间非空，不受原开始时间影响 |
 | `UPCOMING` | 即将开始 | 未取消且尚未开始，包含满员活动 |
 
-`total` 是关键词与状态共同筛选出的全部活动数。`summary` 也基于整个匹配集合：`upcomingActivities` 只统计其中未取消、尚未开始的活动，`availableSeats` 只累加这些活动的 `capacity - registeredCount`。候补不占名额，已开始或已取消活动不提供剩余名额。因此筛选 `CANCELLED` 或 `STARTED` 时两项统计为 0；筛选 `FULL` 时剩余名额为 0。
+`total` 是关键词、状态与分类共同筛选出的全部活动数。`summary` 也基于整个匹配集合：`upcomingActivities` 只统计其中未取消、尚未开始的活动，`availableSeats` 只累加这些活动的 `capacity - registeredCount`。候补不占名额，已开始或已取消活动不提供剩余名额。因此筛选 `CANCELLED` 或 `STARTED` 时两项统计为 0；筛选 `FULL` 时剩余名额为 0。
 
 例如 13 场符合条件的未来活动，每场有 2 个未占用名额，第一页只有 12 张卡片，但总数仍为 13，统计仍为 13 场、26 个名额。前端不能根据当前页卡片推算这些数字。加载和读取失败时显示 `—`，不会把未知统计伪装成 0。
 
@@ -65,16 +66,16 @@ SQL 使用 `LOCATE(#{keyword}, a.title)` 和地点的同类条件。`%`、`_`、
 
 ## URL、表单和返回导航
 
-`activityDiscovery.ts` 负责解析和序列化列表查询。已提交的 `keyword/status/page/pageSize` 来自 URL；输入框有独立草稿，键入文字不会立即替换现有结果。
+`activityDiscovery.ts` 负责公开列表 URL，分类迭代后公共字段解析由 `activityListQuery.ts` 复用。已提交的 `keyword/status/category/page/pageSize` 来自 URL；输入框有独立草稿，键入文字不会立即替换现有结果。非法 URL 分类规范为 `ALL`；列表读取及页码修正同时检查认证代次，避免同账号重登后的旧个人状态覆盖新结果。
 
 - “查询”提交草稿并回第一页；在第一页、条件相同时也会真正重新请求。
-- 改状态或每页数量立即请求并回第一页，状态筛选沿用已提交关键词。每页数量提供 12、24、48；URL 中其他合法数量也加入选项。
-- “重置”与“清除筛选”清空关键词和状态，回第一页，保留每页数量。
-- URL 省略空关键词、`ALL`、第一页和默认 12 条；接口请求仍携带四个参数。
+- 改状态、分类或每页数量立即请求并回第一页，筛选沿用已提交关键词。每页数量提供 12、24、48；URL 中其他合法数量也加入选项。
+- “重置”与“清除筛选”清空关键词、状态和分类，回第一页，保留每页数量。
+- URL 省略空关键词、`ALL`、第一页和默认 12 条；接口请求携带五个参数，包括分类。
 - 未知参数被移除，非法状态与数字回到默认值。超过 200 的关键词清空并显示提示，其他合法条件保留，不偷偷截成另一个搜索词。
 - 页码越界时用 `replace` 回最后一个合法页；总数为 0 时最多回第一页一次，之后显示空结果。校正期间显示加载，不展示非法分页。
 
-卡片的详情链接把规范列表路径编码到 `from` 参数。详情的“返回活动列表”保留搜索、状态、页码和数量；刷新详情、前往登录再回详情也保留来源。没有来源的直接详情仍显示“返回全部活动”。来源只接受精确内部 `/activities` 路径及规范化查询，不接受外部网址、其他页面、片段或非法路径字符。
+卡片的详情链接把规范列表路径编码到 `from` 参数。详情的“返回活动列表”保留搜索、状态、分类、页码和数量；刷新详情、从详情报名入口前往登录再回详情也保留来源。顶栏通用登录保持原默认入口。没有来源的直接详情仍显示“返回全部活动”。来源只接受精确内部 `/activities` 路径及规范化查询，不接受外部网址、其他页面、片段或非法路径字符。
 
 返回列表后重新读取接口，因此报名后能看到最新个人状态和剩余名额。`useResource` 在条件、账号或页面切换时中止旧读取；只有当前依赖与请求版本的结果能显示，迟到旧查询不能覆盖新卡片或统计。没有轮询或额外认证状态副本。
 
@@ -86,7 +87,7 @@ SQL 使用 `LOCATE(#{keyword}, a.title)` 和地点的同类条件。`%`、`_`、
 
 1. `frontend/src/activityDiscovery.ts`：参数、默认值、来源路径安全。
 2. `frontend/src/pages/ActivitiesPage.tsx`：草稿与查询、统计、刷新与越界修正。
-3. `frontend/src/api.ts` 与 `useResource.ts`：四参数请求、中止与过期结果保护。
+3. `frontend/src/api.ts`、`authRequestGuard.ts` 与 `useResource.ts`：五参数请求、认证代次、中止与过期结果保护。
 4. `ActivityController → ActivityService.search → ActivityMapper.searchTotals/search → ActivityQuerySql`：可信身份、校验、时间与快照、共享筛选 SQL。
 5. `frontend/src/components.tsx` 与 `pages/ActivityDetailPage.tsx`：详情来源、登录与返回。
 

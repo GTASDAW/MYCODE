@@ -36,7 +36,7 @@ flowchart LR
 ## 五张业务表
 
 - **用户**：保存唯一登录名、密码哈希、展示名、角色和 V7 凭据版本。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名、昵称与密码修改请求不能自行指定操作人。
-- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
+- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数，V8 增加固定单选分类，旧活动为未分类。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
 - **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5 增加成对的可空签到时间、操作人；非空时必须为 `ACTIVE`，操作人关联用户且外键限制删除。
 - **站内通知**：V4 保存收件人、活动、事件类型、当时标题、公开取消原因、UTC 创建与首次已读时间。只在实际递补或首次活动取消时写入，同业务事务提交；外键保留历史，真正再次递补可产生新记录。
 - **管理员操作记录**：V6 保存发布、真实编辑、首次取消和首次签到的动作、活动与名称快照、可信操作人、可空签到目标、UTC 微秒时间和完整字段变化。与业务同事务追加，不回填旧历史；活动、操作人、报名分别为限制删除的独立外键，签到同活动归属由业务查询检查。
@@ -65,7 +65,7 @@ flowchart LR
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 活动开始后为有效报名者保存首次签到 | 管理员，需 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 全筛选范围 CSV，最多 20,000 条 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
-| `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍和地点 | 管理员，需 CSRF |
+| `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍、地点和分类 | 管理员，需 CSRF |
 | `POST /api/admin/activities/{id}/cancel` | 取消活动，保存首次原因、时间和报名历史 | 管理员，需 CSRF |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补；满员时返回 `WAITING` 状态 | 已登录用户 |
 | `DELETE /api/activities/{id}/registration` | 取消有效报名或退出候补 | 已登录用户 |
@@ -95,6 +95,8 @@ flowchart LR
 
 `/activities` 通过 `GET /api/activities/search` 查询分页对象 `{items,total,page,pageSize,summary}`，旧 `/api/activities` 数组接口继续保留。公开分页默认 12 条，最多 100 条；关键词最多 200 个 UTF-16 代码单元，在标题或地点中作字面子串匹配，不裁剪空格。公开和管理查询共用 `ActivityQuerySql.FILTER`，六种状态沿用下表口径。查询身份来自 Session，客户端不能指定其他人的 `registrationStatus`。
 
+V8 为活动响应增加 `category`，公开及管理列表接受默认 `ALL` 的分类过滤，与状态和关键词共同作用于聚合和当前页，维持原快照、时间和排序。创建缺失/null 分类默认未分类，编辑缺失/null 保留现值，分类编辑和真实审计共用原活动锁及事务；个人报名的独立联表同步字段，报名热锁四列保持。固定代码、兼容规则、URL 与执行计划阅读路径见 [分类指南](activity-category-guide.md)。
+
 公开查询在只读 `REPEATABLE_READ` 事务中固定一次 UTC 微秒时间，聚合与分页共享快照；`total` 和 `summary` 覆盖整个筛选集合，统计不由当前页卡片计算。排序为 `starts_at ASC, id ASC`，越界返回真实总数、统计与空 `items`。公开读取不增加活动写锁，也不改变报名的 `READ_COMMITTED` 事务。
 
 前端已提交的筛选与页码来自 URL，输入草稿独立。状态或每页数量改变回第一页，相同条件查询也真正刷新；结果减少时以 `replace` 回合法页。详情 `from` 只接受规范内部列表路径，刷新与登录再返回仍保存条件，返回后重新读取个人状态和统计。完整合同、时间边界及测试路径见 [活动发现指南](activity-discovery.md)。任意字面子串使用绑定参数 `LOCATE`，本轮没有声称 B-tree 索引可直接加速此类匹配或增加未经验证的索引。
@@ -113,7 +115,7 @@ flowchart LR
 
 管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations`、操作记录 `/admin/audit-logs` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
 
-`GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）和 `status`（默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。
+`GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）、`status` 和 `category`（均默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。管理页面已提交条件来自 URL，草稿单独保存，刷新及历史保留，改变分类或数量回第一页，越界 replace 校正。
 
 | 活动筛选 | 口径 |
 | --- | --- |
@@ -154,7 +156,7 @@ flowchart LR
 
 ## 组织者编辑与取消
 
-编辑与整场取消也在 `READ_COMMITTED` 事务中先锁活动主键行。编辑只改三个展示字段；取消把该活动的 `ACTIVE`/`WAITING` 报名变为 `CANCELLED`，人数置 0，并同时保存首次原因、UTC 微秒时间和管理员 ID。已有取消报名的 ID 与更新时间保留，取消整场活动不递补候补。并发报名、用户取消或编辑无论先后顺序，都受同一活动行锁保护；失败全部回滚。
+编辑与整场取消也在 `READ_COMMITTED` 事务中先锁活动主键行。编辑只改标题、介绍、地点和分类；取消把该活动的 `ACTIVE`/`WAITING` 报名变为 `CANCELLED`，人数置 0，并同时保存首次原因、UTC 微秒时间和管理员 ID。已有取消报名的 ID 与更新时间保留，取消整场活动不递补候补。并发报名、用户取消或编辑无论先后顺序，都受同一活动行锁保护；失败全部回滚。
 
 已取消活动返回 `cancelled=true`、原因、时间及 `closed=true`。有效的重复组织者取消保留首次结果，越过原开始时间仍幂等；报名、用户取消和编辑返回 409 `ACTIVITY_CANCELLED`。未取消活动开始后拒绝首次编辑或组织者取消，检查时间发生在取得锁后。V3 的外键和 CHECK 保证取消元数据完整与人数为 0，跨表状态不变量还依赖事务。详细 API、迁移、页面认证代次保护和真实验证路径见 [活动生命周期](activity-lifecycle.md)。
 
