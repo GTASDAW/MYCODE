@@ -12,6 +12,10 @@
     "measure:loading": "node scripts/frontend-loading-measure.mjs",
     "test:cleanup": "node --test scripts/e2e-cleanup.test.mjs",
     "cleanup:e2e": "node scripts/e2e-cleanup.mjs",
+    "test:backup": "node --test scripts/database-backup.test.mjs scripts/backup-restore-drill.test.mjs",
+    "backup:database": "node scripts/database-backup.mjs backup",
+    "restore:database": "node scripts/database-backup.mjs restore",
+    "verify:restore": "node scripts/backup-restore-drill.mjs",
     "test:performance-safety": "node --test scripts/performance-check.test.mjs scripts/performance-compare.test.mjs",
     "check:performance": "node scripts/performance-check.mjs"
   },

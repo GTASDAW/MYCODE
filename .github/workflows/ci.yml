@@ -68,7 +68,9 @@ jobs:
         with:
           node-version: '24.21.0'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            package-lock.json
       - name: Install, test and build
         shell: bash
         run: |
@@ -85,7 +87,10 @@ jobs:
           npm run build:loading 2>&1 | tee .runtime/ci/frontend-loading-build.log
           npm run check:loading 2>&1 | tee .runtime/ci/frontend-loading-contract.log
       - name: Verify CI image reuse and quality gate contracts
-        run: node --test scripts/ci-images.test.mjs
+        run: |
+          npm ci
+          node --test scripts/ci-images.test.mjs
+          npm run test:backup
       - name: Preserve frontend diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
