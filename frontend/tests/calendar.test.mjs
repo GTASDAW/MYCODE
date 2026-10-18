@@ -27,6 +27,22 @@ test('Beijing midnight and explicit UTC offsets represent the same calendar inst
   assert.equal(beijing,utc);
   assert(unfold(build({...activity,startsAt:'2001-01-01T00:00:00Z',closed:true})).includes('DTSTART:20010101T000000Z'));
 });
+
+test('a supplied end is exported in UTC, including Beijing next-day conversion, while old and null responses omit it',()=>{
+  const result=unfold(build({...activity,endsAt:'2035-01-02T02:30:59.123456+08:00'}));
+  assert(result.includes('DTEND:20350101T183059Z\r\n'));
+  assert(!result.includes('未提供结束时间'));
+  assert(!/^DURATION:/m.test(result));
+  assert.equal(unfold(build({...activity,endsAt:null})),unfold(build()));
+  assert.equal((result.match(/^DTEND:/gm)||[]).length,1);
+});
+
+test('end validation rejects invalid, reversed and equal instants, including offsets and subsecond-only calendar ranges',()=>{
+  for(const endsAt of ['invalid','2035-01-01T16:30:59.123456Z','2035-01-02T00:30:59.123455+08:00'])
+    assert.throws(()=>build({...activity,endsAt}));
+  assert.throws(()=>build({...activity,endsAt:'2035-01-01T16:30:59.123457Z'}),/精度不足一秒/);
+  assert(unfold(build({...activity,endsAt:'2035-01-01T16:31:00.000001Z'})).includes('DTEND:20350101T163100Z\r\n'));
+});
 test('text escapes backslashes, commas, semicolons and all newline styles without injecting properties',()=>{
   const result=unfold(build({...activity,title:'活动,;\\"😀',location:'地点\r\n第二行\r第三行\n第四行',
     description:'说明\r\nEND:VEVENT\nBEGIN:VEVENT\rATTENDEE:mailto:person@example.com'}));

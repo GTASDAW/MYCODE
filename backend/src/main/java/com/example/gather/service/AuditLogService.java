@@ -58,6 +58,7 @@ public class AuditLogService {
             new AuditChange("description", null, activity.description),
             new AuditChange("location", null, activity.location),
             new AuditChange("startsAt", null, activity.startsAt.toInstant(ZoneOffset.UTC).toString()),
+            new AuditChange("endsAt", null, activity.endsAt == null ? null : activity.endsAt.toInstant(ZoneOffset.UTC).toString()),
             new AuditChange("capacity", null, Integer.toString(activity.capacity)),
             new AuditChange("category", null, activity.category)), utc(now));
     }

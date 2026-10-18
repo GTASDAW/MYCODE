@@ -1,10 +1,14 @@
 import type { Activity, AdminRegistration } from "./types";
+import { instantMicroseconds } from "./date.ts";
 
 export function canCheckInRegistration(
-  activity: Pick<Activity, "closed" | "cancelled">,
+  activity: Pick<Activity, "closed" | "cancelled"> & Partial<Pick<Activity, "startsAt" | "endsAt">>,
   registration: Pick<AdminRegistration, "status" | "checkedInAt">,
+  now = Date.now(),
 ): boolean {
-  return activity.closed && !activity.cancelled && registration.status === "ACTIVE" && !registration.checkedInAt;
+  const start = activity.startsAt ? instantMicroseconds(activity.startsAt) : null;
+  const started = activity.closed || start !== null && start <= BigInt(Math.trunc(now)) * 1000n;
+  return started && !activity.cancelled && registration.status === "ACTIVE" && !registration.checkedInAt;
 }
 
 export function checkInLabel(registration: Pick<AdminRegistration, "status" | "checkedInAt">): string {

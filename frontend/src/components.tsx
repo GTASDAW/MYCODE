@@ -8,12 +8,13 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router";
-import { dateParts, formatDate, formatTime } from "./date";
+import { dateParts, formatActivityEnd, formatDate, formatTime } from "./date";
 import { errorMessage } from "./api";
 import type { Activity } from "./types";
 import { activityDetailsPath } from "./activityDiscovery";
 import { activityCategoryLabel } from "./activityCategory";
 import { ActivityCover } from "./ActivityCoverImage";
+import { activityClosed, activityPhase, activityPhaseLabels } from "./activityLifecycle";
 
 export function Logo() {
   return (
@@ -142,31 +143,18 @@ export function ActivityStatus({
   activity: Activity;
   personal?: boolean;
 }) {
-  if (activity.cancelled) return <Tag className="status-tag" color="red">活动已取消</Tag>;
-  if (activity.closed) return <Tag className="status-tag">已开始</Tag>;
-  if (personal && activity.registrationStatus === "ACTIVE")
-    return (
-      <Tag className="status-tag" color="green">
-        已报名
-      </Tag>
-    );
-  if (personal && activity.registrationStatus === "WAITING")
-    return (
-      <Tag className="status-tag" color="orange">
-        候补中
-      </Tag>
-    );
-  if (activity.registeredCount >= activity.capacity)
-    return (
-      <Tag className="status-tag" color="orange">
-        已满员
-      </Tag>
-    );
-  return (
-    <Tag className="status-tag" color="blue">
-      报名中
-    </Tag>
-  );
+  const phase = activityPhase(activity);
+  const color = phase === "CANCELLED" ? "red" : phase === "UPCOMING" ? "blue" : phase === "ONGOING" ? "green" : undefined;
+  return <span className="activity-status">
+    <Tag className="status-tag" color={color}>{activityPhaseLabels[phase]}</Tag>
+    {personal && !activity.cancelled && (activity.registrationStatus === "ACTIVE"
+      ? <Tag className="status-tag" color="green">已报名</Tag>
+      : activity.registrationStatus === "WAITING"
+        ? <Tag className="status-tag" color="orange">候补中</Tag>
+        : phase === "UPCOMING" && <Tag className="status-tag" color={activity.registeredCount >= activity.capacity ? "orange" : "blue"}>
+          {activity.registeredCount >= activity.capacity ? "已满员" : "报名中"}
+        </Tag>)}
+  </span>;
 }
 
 export function ActivityCancellationNotice({ activity }: { activity: Activity }) {
@@ -232,6 +220,7 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
           {formatDate(activity.startsAt, false)} ·{" "}
           {formatTime(activity.startsAt)}
         </span>
+        <span>结束：{formatActivityEnd(activity.endsAt)}</span>
         <span>
           <EnvironmentOutlined aria-hidden="true" />
           <span className="location-text">{activity.location}</span>
@@ -241,7 +230,7 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
         <span>
           <TeamOutlined aria-hidden="true" />
           {activity.registeredCount} / {activity.capacity} 人
-          {!activity.closed && remaining > 0 && (
+          {!activityClosed(activity) && remaining > 0 && (
             <small>余 {remaining} 席</small>
           )}
           {(activity.waitingCount ?? 0) > 0 && (

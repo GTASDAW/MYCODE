@@ -9,6 +9,7 @@ import { formatDate, formatTime } from "../date";
 import { favoriteListPath, parseFavoriteQuery, serializeFavoriteQuery } from "../favoriteQuery";
 import { myRegistrationDetailsPath } from "../activityDetailNavigation";
 import { useFavoriteRead } from "./useFavoriteRead";
+import { useActivityClock } from "../useActivityClock";
 
 export function MyFavoritesPage() {
   const auth = useAuth();
@@ -17,6 +18,7 @@ export function MyFavoritesPage() {
   const query = parseFavoriteQuery(search);
   const canonical = serializeFavoriteQuery(query);
   const resource = useFavoriteRead(signal => api.favorites(query, signal), canonical);
+  useActivityClock(resource.data?.items.map(item => item.activity) ?? []);
   const [busy, setBusy] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const submission = useRef<AbortController | null>(null);

@@ -6,7 +6,7 @@
 
 | 动作 | 产生时机 | `changes` 中的字段 |
 | --- | --- | --- |
-| `CREATE` | 每次成功创建一场新活动 | `title`、`description`、`location`、`startsAt`、`capacity`、`category`；变更前均为 `null` |
+| `CREATE` | 每次成功创建一场新活动 | `title`、`description`、`location`、`startsAt`、`endsAt`、`capacity`、`category`；变更前均为 `null` |
 | `EDIT` | 文本规范化后或分类代码至少一个真实变化 | 只保存实际变化的 `title`、`description`、`location`、`category`，保留完整前后值 |
 | `CANCEL` | 首次成功取消整场活动 | `cancelledAt`、`cancellationReason`；变更前均为 `null` |
 | `CHECK_IN` | 首次成功为有效报名者签到 | `checkedInAt`；变更前为 `null`，关联报名 ID 与目标用户名称快照 |
@@ -27,7 +27,7 @@ V8 起新创建记录另保存 `category` 初始代码，真实编辑比较加�
 
 数据库分别为活动、操作人、报名建立 `ON DELETE RESTRICT` 外键；它们是三条独立外键，**不是**报名 ID 与活动 ID 的复合外键。CHECK 限定四种动作、签到目标字段配对以及变化必须为非空 JSON 数组；签到归属由 `findRosterRegistration(activityId, registrationId)` 和审计上下文查询的活动条件共同验证，不能声称外键已保证跨表活动一致。
 
-时间按 UTC 微秒保存和返回，界面转换为北京时间，并保留服务端的小数六位。发布时先把提交的开始时间截为微秒，再检查落库值仍严格晚于本次当前时刻；纳秒输入截断后不再是未来时返回 400，不写活动或记录。发布快照中的 `startsAt` 使用与数据库相同的微秒值。取消、签到事件和相应业务字段使用同一个时间。
+时间按 UTC 微秒保存和返回，界面转换为北京时间，并保留服务端的小数六位。发布时先把提交的开始时间截为微秒，再检查落库值仍严格晚于本次当前时刻；纳秒输入截断后不再是未来时返回 400，不写活动或记录。发布快照中的 `startsAt`、可空 `endsAt` 使用与数据库相同的微秒值。非空结束必须在截断后仍严格晚于开始；旧审计不补字段。取消、签到事件和相应业务字段使用同一个时间。
 
 ## 为什么必须与业务一起提交
 

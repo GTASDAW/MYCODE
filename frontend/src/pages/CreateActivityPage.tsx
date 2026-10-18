@@ -12,7 +12,7 @@ import { PlusOutlined } from "@ant-design/icons";
 import { Link, useNavigate } from "react-router";
 import { api } from "../api";
 import { PageHeading } from "../components";
-import { beijingInputMin, beijingInputToIso } from "../date";
+import { activityEndInputError, beijingInputMin, beijingInputToIso, instantMicroseconds } from "../date";
 import { activityCategoryOptions } from "../activityCategory";
 import type { ActivityCategory } from "../types";
 import { useActivityMutation } from "./useActivityMutation";
@@ -22,6 +22,7 @@ interface CreateActivityForm {
   description: string;
   location: string;
   startsAt: string;
+  endsAt?: string;
   capacity: number;
   category: ActivityCategory;
 }
@@ -38,6 +39,7 @@ export function CreateActivityPage() {
       description: values.description.trim(),
       location: values.location.trim(),
       startsAt: beijingInputToIso(values.startsAt),
+      endsAt: values.endsAt ? beijingInputToIso(values.endsAt) : null,
     }, signal), activity => {
       message.success("活动已发布");
       navigate(`/activities/${activity.id}`);
@@ -49,7 +51,7 @@ export function CreateActivityPage() {
       <PageHeading
         title="发布活动"
         section="活动管理"
-        description="填写活动信息。发布后可在编辑页上传封面；名额固定，活动开始时关闭报名与取消。"
+        description="填写活动信息，可选填结束时间。开始、结束时间与名额发布后固定，活动开始时关闭报名与取消。"
       />
       <Card title="基本信息" className="create-form-panel">
         {mutation.error && (
@@ -114,7 +116,7 @@ export function CreateActivityPage() {
                   validator: (_, value?: string) => {
                     if (!value) return Promise.resolve();
                     try {
-                      if (Date.parse(beijingInputToIso(value)) > Date.now())
+                      if (instantMicroseconds(beijingInputToIso(value))! > BigInt(Date.now()) * 1000n)
                         return Promise.resolve();
                     } catch {
                       /* The validation message below covers invalid dates. */
@@ -126,6 +128,20 @@ export function CreateActivityPage() {
             >
               <Input type="datetime-local" min={beijingInputMin()} step={60} />
             </Form.Item>
+            <Form.Item
+              name="endsAt"
+              label="结束时间（北京时间，可选）"
+              dependencies={["startsAt"]}
+              extra="必须晚于开始时间；留空显示未提供。开始与结束时间发布后固定。"
+              rules={[({ getFieldValue }) => ({ validator: (_, value?: string) => {
+                const error = activityEndInputError(getFieldValue("startsAt"), value);
+                return error ? Promise.reject(new Error(error)) : Promise.resolve();
+              } })]}
+            >
+              <Input type="datetime-local" step={60} aria-label="结束时间（北京时间，可选）" />
+            </Form.Item>
+          </div>
+          <div className="form-two-columns">
             <Form.Item
               name="capacity"
               label="报名名额"

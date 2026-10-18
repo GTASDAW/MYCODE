@@ -26,6 +26,16 @@ test('only an unsigned active participant of a started and uncancelled activity 
   for (const status of ['WAITING', 'CANCELLED']) assert.equal(checkInLabel({ status, checkedInAt: null }), '不适用');
 });
 
+test('a stale pre-start snapshot opens check-in on time and an ended activity still supports make-up attendance', () => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  const activity = { closed: false, cancelled: false, startsAt: '2030-01-01T00:00:00Z', endsAt: '2030-01-01T01:00:00Z' };
+  const registration = { status: 'ACTIVE', checkedInAt: null };
+  assert.equal(canCheckInRegistration(activity, registration, start - 1), false);
+  assert.equal(canCheckInRegistration(activity, registration, start), true);
+  assert.equal(canCheckInRegistration(activity, registration, start + 86400_000), true);
+  assert.equal(canCheckInRegistration({ ...activity, cancelled: true }, registration, start + 86400_000), false);
+});
+
 function browserDownload() {
   const events = [];
   const link = { style: {}, click() { events.push(['click', this.download]); }, remove() { events.push(['remove']); } };

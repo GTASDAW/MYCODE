@@ -120,8 +120,8 @@ class ActivityCoverIntegrationTest {
     @BeforeEach void gate() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(10);
-        jdbc.queryForList("SELECT id,category,cover_hash,cover_image FROM activities LIMIT 0");
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(11);
+        jdbc.queryForList("SELECT id,category,cover_hash,cover_image,ends_at FROM activities LIMIT 0");
     }
     @AfterEach void cleanup() {
         queries.failAudit.set(false); queries.afterLock.set(null); queries.locks.clear();

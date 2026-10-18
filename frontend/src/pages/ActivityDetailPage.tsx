@@ -28,9 +28,10 @@ import {
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatTime } from "../date";
 import { useResource } from "../useResource";
-import { activityClosed } from "../activityLifecycle";
+import { activityClosed, activityPhase, activityPhaseLabels } from "../activityLifecycle";
+import { useActivityClock } from "../useActivityClock";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { safeActivityDetailReturn } from "../activityDetailNavigation";
 import { activityCategoryLabel } from "../activityCategory";
@@ -87,9 +88,10 @@ function ActivityDetailPage() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const activity = resource.data;
+  useActivityClock([activity ?? undefined]);
 
   async function mutate(cancel: boolean) {
-    if (!activity || submission.current) return;
+    if (!activity || submission.current || activityClosed(activity)) return;
     const account = auth.captureAccountRequest();
     if (!account) return;
     const controller = new AbortController();
@@ -164,6 +166,7 @@ function ActivityDetailPage() {
   const cancelled = activity.registrationStatus === "CANCELLED";
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
   const closed = activityClosed(activity);
+  const phaseLabel = activityPhaseLabels[activityPhase(activity)];
 
   return (
     <div className="page-container detail-page">
@@ -198,9 +201,10 @@ function ActivityDetailPage() {
               { key: "category", label: "活动分类", children: <span data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</span> },
               {
                 key: "time",
-                label: "活动时间",
+                label: "开始时间",
                 children: `${formatDate(activity.startsAt)} · ${formatTime(activity.startsAt)}`,
               },
+              { key: "end-time", label: "结束时间", children: formatActivityEnd(activity.endsAt) },
               {
                 key: "location",
                 label: "活动地点",
@@ -217,7 +221,7 @@ function ActivityDetailPage() {
             <h2>活动介绍</h2>
             <p>{activity.description}</p>
           </section>
-          <p className="metadata">活动未提供结束时间，可在个人日历中自行设置；添加日历不代表报名成功。日历文件为下载时快照，后续修改或取消不会自动同步。</p>
+          <p className="metadata">{!activity.endsAt && "活动未提供结束时间，可在个人日历中自行设置；"}添加日历不代表报名成功。日历文件为下载时快照，后续修改或取消不会自动同步。</p>
           <Alert
             type="info"
             showIcon
@@ -235,7 +239,7 @@ function ActivityDetailPage() {
                 : waiting
                   ? "你已进入候补"
                   : closed
-                    ? "活动已经开始"
+                    ? `活动${phaseLabel}`
                     : remaining === 0
                       ? "本场名额已满"
                       : "报名参加活动"}
@@ -277,7 +281,7 @@ function ActivityDetailPage() {
             <div className="registered-notice">
               <CheckCircleFilled aria-hidden="true" />
               <span>{registered ? "已成功报名" : "已进入候补"}</span>
-              {closed && <Tag>活动已开始</Tag>}
+              {closed && <Tag>{phaseLabel}</Tag>}
             </div>
           )}
           {cancelled && !activity.cancelled && (
@@ -287,7 +291,7 @@ function ActivityDetailPage() {
           )}
           {closed ? (
             <Button block disabled>
-              {activity.cancelled ? "活动已取消" : "活动已开始"}
+              {phaseLabel}
             </Button>
           ) : auth.loading ? (
             <Button block loading>

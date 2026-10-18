@@ -380,13 +380,14 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.deepEqual(connection.state.users, [user]);
 });
 
-test('V10 and complete cover, favorite, category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
-  for (const absent of ['migration', 'cover-columns', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table', 'favorite-table']) {
+test('V11 and complete end-time, cover, favorite, category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'end-time-column', 'cover-columns', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table', 'favorite-table']) {
     const queries = [];
     const connection = { async execute(sql) {
       queries.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
-      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', '8', '9', ...(absent === 'migration' ? [] : ['10'])].map(version => ({ version }))]];
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', ...(absent === 'migration' ? [] : ['11'])].map(version => ({ version }))]];
+      if (sql.includes('ends_at') && absent === 'end-time-column') throw new Error('Activity end-time schema absent');
       if (sql.includes('cover_hash, cover_image') && absent === 'cover-columns') throw new Error('Cover schema absent');
       if (sql.includes('description, category,') && absent === 'category-column') throw new Error('Activity category schema absent');
       if (sql.includes('credential_version') && absent === 'credential-column') throw new Error('Credential version schema absent');
@@ -397,9 +398,10 @@ test('V10 and complete cover, favorite, category, credential, notification, chec
       return [[]];
     } };
     await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
-      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8\/V9\/V10/ : absent === 'cover-columns' ? /Cover schema absent/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : absent === 'favorite-table' ? /Favorite schema absent/ : /Notification schema absent/);
+      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8\/V9\/V10\/V11/ : absent === 'end-time-column' ? /Activity end-time schema absent/ : absent === 'cover-columns' ? /Cover schema absent/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : absent === 'favorite-table' ? /Favorite schema absent/ : /Notification schema absent/);
     assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
     if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
+    else if (absent === 'end-time-column') assert.ok(queries.some(sql => sql.includes('starts_at, ends_at FROM activities LIMIT 0')));
     else if (absent === 'cover-columns') assert.ok(queries.some(sql => sql.includes('cover_hash, cover_image FROM activities LIMIT 0')));
     else if (absent === 'category-column') assert.ok(queries.some(sql => sql.includes('description, category, registered_count')));
     else if (absent === 'notification-table') assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));

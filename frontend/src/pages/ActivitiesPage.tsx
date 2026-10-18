@@ -12,6 +12,7 @@ import {
   PageHeading,
 } from "../components";
 import { useResource } from "../useResource";
+import { useActivityClock } from "../useActivityClock";
 import type { ActivityCategoryFilter, ActivityFilter, ActivitySearchQuery } from "../types";
 import { activityCategoryFilterOptions } from "../activityCategory";
 import { readAccountResource } from "../authRequestGuard";
@@ -49,6 +50,7 @@ export function ActivitiesPage() {
     [scope],
   );
   const activities = resource.data?.items ?? [];
+  useActivityClock(activities);
   const total = resource.data?.total ?? 0;
   const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
   const correctingPage = !resource.loading && !resource.error &&

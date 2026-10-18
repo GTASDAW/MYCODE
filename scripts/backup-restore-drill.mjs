@@ -77,7 +77,8 @@ function pngFixture() {
 }
 async function createActivity(admin,title,capacity=1) {
   return admin.call('/api/admin/activities',{method:'POST',status:201,data:{title,description:'恢复演练：中文、emoji 😀、逗号,引号"与换行\n第二行',
-    location:'恢复演练会场',startsAt:new Date(Date.now()+72*3600000).toISOString(),capacity,category:'TECHNOLOGY'}});
+    location:'恢复演练会场',startsAt:new Date(Date.now()+72*3600000).toISOString(),
+    endsAt:new Date(Date.now()+74*3600000).toISOString(),capacity,category:'TECHNOLOGY'}});
 }
 async function bindApiToDatabase(config,api,runId) {
   const db=await connection(config);
@@ -88,7 +89,7 @@ async function bindApiToDatabase(config,api,runId) {
     const [insert]=await db.execute("INSERT INTO activities(title,description,location,starts_at,capacity,created_by) VALUES(?,?,?,UTC_TIMESTAMP(6)+INTERVAL 3 DAY,1,(SELECT id FROM users WHERE username='admin' AND role='ADMIN'))",
       [title,runId,'独立恢复探针']);
     const activity=await api.call(`/api/activities/${insert.insertId}`);
-    check(activity.title===title&&activity.description===runId,'恢复 API 未绑定已核对的新数据库');
+    check(activity.title===title&&activity.description===runId&&activity.endsAt===null,'恢复 API 未绑定已核对的新数据库或历史空结束时间未保留');
   } finally {await db.end();}
 }
 async function prepareFixture(config,origin,runId,adminPassword) {
@@ -102,6 +103,7 @@ async function prepareFixture(config,origin,runId,adminPassword) {
   const first=new Api(origin),second=new Api(origin);
   await first.login(users[0].username,password);await second.login(users[1].username,password);
   const main=await createActivity(admin,`备份恢复：中文 😀, 分号; ${runId.slice(0,8)}`);
+  check(main.endsAt&&Date.parse(main.endsAt)>Date.parse(main.startsAt),'恢复样本非空结束时间缺失');
   check((await first.call(`/api/activities/${main.id}/registration`,{method:'POST'})).registrationStatus==='ACTIVE','恢复样本有效报名失败');
   check((await second.call(`/api/activities/${main.id}/registration`,{method:'POST'})).registrationStatus==='WAITING','恢复样本候补失败');
   await first.call(`/api/activities/${main.id}/registration`,{method:'DELETE'});
@@ -149,17 +151,20 @@ async function startWeb(port,apiPort) {
 async function verifyRecovered(origin,fixture,adminPassword) {
   const admin=new Api(origin);await admin.login('admin',adminPassword);
   check(digest(await admin.call(fixture.main.coverUrl))===fixture.imageHash,'恢复后的 JPEG 字节摘要不一致');
+  const recovered=await admin.call(`/api/activities/${fixture.main.id}`);
+  check(recovered.endsAt===fixture.main.endsAt,'恢复后的非空结束时间不一致');
+  check((await admin.call(`/api/activities/${fixture.startedId}`)).endsAt===null,'恢复后的历史空结束时间不一致');
   const first=new Api(origin),second=new Api(origin);
   await first.login(fixture.users[0].username,fixture.password);await second.login(fixture.users[1].username,fixture.password);
   const history=await first.call('/api/me/registrations/search?pageSize=100');
   check(history.items.some(row=>row.activity.id===fixture.startedId&&row.checkedInAt),'恢复后的本人签到记录缺失');
-  check(history.items.some(row=>row.activity.id===fixture.main.id&&row.status==='WAITING'),'恢复后的候补记录缺失');
+  check(history.items.some(row=>row.activity.id===fixture.main.id&&row.status==='WAITING'&&row.activity.endsAt===fixture.main.endsAt),'恢复后的候补记录缺失');
   check(history.items.some(row=>row.activity.id===fixture.cancelledId&&row.status==='CANCELLED'),'恢复后的取消历史缺失');
   const favorites=await first.call('/api/me/favorites');
-  check(favorites.items.some(row=>row.activity.id===fixture.main.id),'恢复后的收藏缺失');
+  check(favorites.items.some(row=>row.activity.id===fixture.main.id&&row.activity.endsAt===fixture.main.endsAt),'恢复后的收藏或结束时间缺失');
   check((await second.call('/api/me/notifications?status=ALL')).total>0,'恢复后的递补通知缺失');
   check((await admin.call(`/api/admin/audit-logs?activityId=${fixture.main.id}`)).total>=2,'恢复后的操作记录缺失');
-  return {admin,checks:['cover-byte-sha256','credentials-and-roles','active-waiting-cancelled-history','check-in','favorites','notifications','audit-log']};
+  return {admin,checks:['nullable-and-nonnull-end-time','cover-byte-sha256','credentials-and-roles','active-waiting-cancelled-history','check-in','favorites','notifications','audit-log']};
 }
 async function verifyConstraints(config,fixture) {
   const db=await connection(config);
@@ -170,10 +175,12 @@ async function verifyConstraints(config,fixture) {
       ['INSERT INTO activity_favorites(user_id,activity_id) VALUES(-1,-1)',[],'ER_NO_REFERENCED_ROW_2'],
       ['INSERT INTO activity_favorites(user_id,activity_id) VALUES(?,?)',[fixture.users[0].id,fixture.main.id],'ER_DUP_ENTRY'],
       ['UPDATE activities SET registered_count=capacity+1 WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE activities SET ends_at=starts_at WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE activities SET ends_at=starts_at-INTERVAL 1 MICROSECOND WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
     ]) {
       let rejected=false;
       try {await db.execute(sql,args);} catch(error) {rejected=error.code===code;}
-      check(rejected,'恢复后的外键、唯一键或名额约束未按预期拒绝非法数据');
+      check(rejected,'恢复后的外键、唯一键、名额或结束时间约束未按预期拒绝非法数据');
     }
     await db.rollback();
   } finally {await db.end();}
@@ -268,7 +275,7 @@ export async function runDrill() {
     const originB=await application(second,ports.b,'b');await bindApiToDatabase(second,new Api(originB),randomUUID());
     await verifyConstraints(second,fixture);
     const verified=await verifyRecovered(originB,fixture,process.env.BACKUP_DEMO_ADMIN_PASSWORD);report.checks=verified.checks;
-    report.checks.push('foreign-key-unique-and-capacity-enforcement');
+    report.checks.push('foreign-key-unique-capacity-and-end-time-enforcement');
     webServers.push(await startWeb(ports.web,ports.b));
     report.phase='verify-browser';
     report.browser=await verifyBrowser(`http://127.0.0.1:${ports.web}`,fixture,verified.admin,directory);

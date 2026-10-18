@@ -488,6 +488,12 @@ main:focus {
   margin: 0 !important;
   font-size: 12px !important;
 }
+.activity-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
 .activity-card h3 {
   font-size: 16px;
   line-height: 1.6;

@@ -1,6 +1,7 @@
 import type { Activity } from "./types";
+import { instantMicroseconds } from "./date.ts";
 
-export type CalendarActivity = Pick<Activity, "id" | "title" | "description" | "location" | "startsAt" | "cancelled">;
+export type CalendarActivity = Pick<Activity, "id" | "title" | "description" | "location" | "startsAt" | "endsAt" | "cancelled">;
 export const calendarContentType = "text/calendar;charset=utf-8";
 
 function utcDate(value: string | Date): string {
@@ -36,11 +37,20 @@ export function buildActivityCalendar(activity: CalendarActivity, origin: string
   if (!["http:", "https:"].includes(site.protocol) || site.username || site.password)
     throw new Error("活动链接不正确，无法导出日历。");
   const canonical = new URL(`/activities/${activity.id}`, site.origin).href;
-  const description = activity.description + "\n\n活动未提供结束时间，可在个人日历中自行设置；添加日历不代表报名成功。\n此文件为下载时快照，活动后续修改或取消不会自动同步。";
+  const start = utcDate(activity.startsAt);
+  let end: string | null = null;
+  if (activity.endsAt != null) {
+    end = utcDate(activity.endsAt);
+    if (instantMicroseconds(activity.endsAt)! <= instantMicroseconds(activity.startsAt)!)
+      throw new Error("活动结束时间必须晚于开始时间，无法导出日历。");
+    if (end <= start) throw new Error("活动起止时间精度不足一秒，无法准确导出日历。");
+  }
+  const description = activity.description + "\n\n" + (end ? "" : "活动未提供结束时间，可在个人日历中自行设置；") +
+    "添加日历不代表报名成功。\n此文件为下载时快照，活动后续修改或取消不会自动同步。";
   const lines = [
     "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Gather//Activity Calendar//ZH-CN",
     "BEGIN:VEVENT", `UID:${canonical}`, `DTSTAMP:${utcDate(generatedAt)}`,
-    `DTSTART:${utcDate(activity.startsAt)}`, `SUMMARY:${text(activity.title)}`,
+    `DTSTART:${start}`, ...(end ? [`DTEND:${end}`] : []), `SUMMARY:${text(activity.title)}`,
     `DESCRIPTION:${text(description)}`, `LOCATION:${text(activity.location)}`, `URL:${canonical}`,
     "END:VEVENT", "END:VCALENDAR",
   ];

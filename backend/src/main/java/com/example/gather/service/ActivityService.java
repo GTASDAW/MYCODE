@@ -86,8 +86,13 @@ public class ActivityService {
         if (!startsAt.isAfter(now)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "开始时间必须在未来");
         }
+        Instant endsAt = request.endsAt() == null ? null : request.endsAt().truncatedTo(ChronoUnit.MICROS);
+        if (endsAt != null && !endsAt.isAfter(startsAt)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "结束时间必须晚于开始时间");
+        }
         NewActivity row = new NewActivity(request.title().strip(), request.description().strip(), request.location().strip(),
-            LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId, category);
+            LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId, category,
+            endsAt == null ? null : LocalDateTime.ofInstant(endsAt, ZoneOffset.UTC));
         activities.insert(row);
         audit.created(row, creatorId, now);
         return get(row.id, creatorId);

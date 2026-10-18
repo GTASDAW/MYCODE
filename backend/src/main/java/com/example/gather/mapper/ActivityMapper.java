@@ -11,7 +11,7 @@ import java.util.List;
 
 @Mapper
 public interface ActivityMapper {
-    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, "
+    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
         + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
 
@@ -45,7 +45,7 @@ public interface ActivityMapper {
     @Select("SELECT title, description, location, category FROM activities WHERE id=#{id}")
     ActivityAuditText auditText(long id);
 
-    @Insert("INSERT INTO activities(title, description, location, starts_at, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{capacity}, #{createdBy}, #{category})")
+    @Insert("INSERT INTO activities(title, description, location, starts_at, ends_at, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{endsAt}, #{capacity}, #{createdBy}, #{category})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(NewActivity activity);
 

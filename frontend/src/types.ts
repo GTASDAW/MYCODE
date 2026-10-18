@@ -19,6 +19,7 @@ export interface Activity {
   category: ActivityCategory;
   coverUrl: string | null;
   startsAt: string;
+  endsAt?: string | null;
   capacity: number;
   registeredCount: number;
   waitingCount: number;
@@ -86,6 +87,7 @@ export interface NewActivity {
   description: string;
   location: string;
   startsAt: string;
+  endsAt?: string | null;
   capacity: number;
   category?: ActivityCategory | null;
 }
@@ -173,7 +175,7 @@ export interface AdminAuditLog {
   occurredAt: string;
 }
 
-export type AuditLogField = "title" | "description" | "location" | "category" | "coverHash" | "startsAt" | "capacity" |
+export type AuditLogField = "title" | "description" | "location" | "category" | "coverHash" | "startsAt" | "endsAt" | "capacity" |
   "cancelledAt" | "cancellationReason" | "checkedInAt";
 
 export interface AdminAuditLogDetail extends AdminAuditLog {

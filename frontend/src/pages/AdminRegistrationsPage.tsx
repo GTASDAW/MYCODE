@@ -11,7 +11,9 @@ import {
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { activityClosed } from "../activityLifecycle";
+import { useActivityClock } from "../useActivityClock";
 import { downloadCsv } from "../fileDownload";
 import { canCheckInRegistration } from "../registrationCheckIn";
 import type {
@@ -84,6 +86,7 @@ function AdminRegistrationsPage() {
     );
   }, [resource.data, resource.loading, resource.error, query]);
   const activity = resource.data?.activity;
+  useActivityClock([activity]);
   const summary = resource.data?.summary;
   const correctingPage = !!resource.data && query.page > Math.max(1, Math.ceil(resource.data.total / query.pageSize));
   const canConfirm = !!selected && !!activity && canCheckInRegistration(activity, selected);
@@ -138,6 +141,7 @@ function AdminRegistrationsPage() {
                 label: "开始时间",
                 children: dateTime(activity.startsAt),
               },
+              { key: "end-time", label: "结束时间", children: formatActivityEnd(activity.endsAt) },
               {
                 key: "location",
                 label: "活动地点",
@@ -156,7 +160,7 @@ function AdminRegistrationsPage() {
               {
                 key: "remaining",
                 label: "可报名剩余",
-                children: `${activity.closed ? 0 : Math.max(0, activity.capacity - activity.registeredCount)} 个`,
+                children: `${activityClosed(activity) ? 0 : Math.max(0, activity.capacity - activity.registeredCount)} 个`,
               },
               {
                 key: "status",
@@ -223,7 +227,7 @@ function AdminRegistrationsPage() {
           </span>
         </div>
         {activity && !activity.cancelled && <p className="roster-guidance metadata">
-          {activity.closed ? "活动已开始，可确认有效报名者到场。签到后不可撤销，支持补录。" : "活动开始后开放签到，到达开始时间请刷新名单。"}
+          {activityClosed(activity) ? "活动已开始，可确认有效报名者到场。签到后不可撤销，活动结束后仍支持补录。" : "活动开始后开放签到。"}
         </p>}
         {actions.error && !selected && <Alert type="error" showIcon title={actions.error} className="form-alert" />}
         {resource.error ? (

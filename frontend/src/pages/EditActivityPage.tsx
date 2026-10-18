@@ -5,7 +5,8 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { canManageActivity } from "../activityLifecycle";
 import { ActivityCancellationNotice, ErrorState, LoadingState, PageHeading } from "../components";
-import { formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { useActivityClock } from "../useActivityClock";
 import type { ActivityDetails } from "../types";
 import { useActivityMutation } from "./useActivityMutation";
 import { activityCategoryOptions } from "../activityCategory";
@@ -28,6 +29,7 @@ function EditActivityPage() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const activity = resource.data;
+  useActivityClock([activity ?? undefined]);
   useEffect(() => {
     if (activity) form.setFieldsValue({ title: activity.title, description: activity.description, location: activity.location, category: activity.category });
   }, [activity, form]);
@@ -54,7 +56,7 @@ function EditActivityPage() {
 
   return (
     <div className="page-container">
-      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改封面、标题、介绍、地点和分类。开始时间与名额发布后固定。" />
+      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改封面、标题、介绍、地点和分类。开始、结束时间与名额发布后固定。" />
       {mutation.error && <Alert className="form-alert" type="error" showIcon title={mutation.error} />}
       {resource.loading ? <LoadingState /> : resource.error ? (
         <ErrorState error={resource.error} retry={resource.retry} />
@@ -92,6 +94,11 @@ function EditActivityPage() {
               <Form.Item label="开始时间（北京时间）" extra="开始时间发布后固定。">
                 <Input readOnly value={`${formatDate(activity.startsAt)} ${formatTime(activity.startsAt)}`} aria-label="开始时间（北京时间）" />
               </Form.Item>
+              <Form.Item label="结束时间（北京时间）" extra="结束时间发布后固定。">
+                <Input readOnly value={formatActivityEnd(activity.endsAt)} aria-label="结束时间（北京时间）" />
+              </Form.Item>
+            </div>
+            <div className="form-two-columns">
               <Form.Item label="报名名额" extra="活动发布后，名额数量固定。">
                 <Input readOnly value={`${activity.capacity} 人`} aria-label="报名名额" />
               </Form.Item>

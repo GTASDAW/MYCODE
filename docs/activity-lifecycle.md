@@ -2,7 +2,27 @@
 
 管理员可以在活动开始前修改标题、介绍、地点和分类，或填写原因取消整场活动。取消会关闭报名，把有效报名和候补转为历史记录，并保留活动、报名 ID、首次取消原因和时间。用户在公开详情和“我的报名”中可以查看原因；后台列表、报名名单和概览同步使用数据库状态。
 
-活动创建即发布，没有草稿或再次发布阶段；总名额和开始时间创建后固定。已取消活动不能恢复，当前不提供活动删除。首次取消会向当时的有效报名及候补者写入站内通知，重复取消不重复通知。网站继续只在本机和临时 CI 环境运行。
+活动创建即发布，没有草稿或再次发布阶段；总名额及开始、结束时间创建后固定。已取消活动不能恢复，当前不提供活动删除。首次取消会向当时的有效报名及候补者写入站内通知，重复取消不重复通知。网站继续只在本机和临时 CI 环境运行。
+
+## 结束时间与展示状态
+
+创建接口接受可选的 UTC Instant 字段 endsAt，缺失或 null 均不提供结束时间。开始、结束先截断到微秒，非空结束必须严格晚于开始，否则返回 400；V11 新增可空 DATETIME(6) 与同样的数据库 CHECK。旧活动不回填，开始、结束与名额创建后固定。
+
+所有活动响应（包括旧数组、分页、详情、管理名单、本人报名及收藏中的活动）增加 endsAt，其余字段保持兼容。closed 继续表示报名/用户取消已关闭，不表示活动已经结束；STARTED 筛选仍包含所有未取消且已开始的活动，既有统计口径不变。
+
+| 时间条件（取消优先） | 页面状态 |
+| --- | --- |
+| 已取消 | 已取消 |
+| 当前时刻早于开始 | 未开始 |
+| 开始 ≤ 当前时刻 < 非空结束 | 进行中 |
+| 当前时刻 ≥ 非空结束 | 已结束 |
+| 已开始且结束为空 | 已开始；结束时间显示“未提供” |
+
+接口与存储使用 UTC，表单和页面使用北京时间，表单不随浏览器所在时区改变解释。页面用一个可清理的时间边界计时器更新状态，不轮询接口；本地时间决定展示，写入权限仍由服务端核时。签到只检查已经开始、未取消及 ACTIVE 报名，结束后仍允许管理员补录。
+
+字段路径：CreateActivityPage / beijingInputToIso → api.createActivity → CreateActivityRequest.endsAt → ActivityService.create → NewActivity / ActivityMapper.insert → V11 ends_at → ActivityRow / ActivityView → activityPhase / 页面；日历沿 CalendarDownloadButton 的最新详情读取到 buildActivityCalendar。创建审计由 AuditLogService.created 同事务保存。
+
+日历有结束时输出 UTC DTEND，没有结束时不输出 DTEND 或 DURATION。日历为秒精度：合法的微秒起止若截断后落在同一秒，下载明确报错，不生成结束等于开始的无效事件。详见 [架构](architecture.md#活动日历导出)。
 
 ## 接口与输入
 
@@ -17,7 +37,7 @@
 
 Controller 的 `@Size` 也对原始字符串检查同一长度上限；不能发送超过上限的空白后指望服务层去除再接受。前端提交会先去除首尾空白，后端仍独立校验。
 
-客户端只能提交上述业务字段。额外的 `capacity`、`startsAt`、`cancelledBy` 或用户身份字段不会写入；实际操作人来自 Spring Security 的可信身份，角色由 `/api/admin/**` 权限规则检查。未登录返回 401，普通用户在真实有效 CSRF 下仍返回 403 `FORBIDDEN`，无效 CSRF 返回 403 `CSRF_INVALID`。不存在的活动返回 404 `ACTIVITY_NOT_FOUND`。
+客户端只能提交上述业务字段。额外的 `capacity`、`startsAt`、`endsAt`、`cancelledBy` 或用户身份字段不会写入；实际操作人来自 Spring Security 的可信身份，角色由 `/api/admin/**` 权限规则检查。未登录返回 401，普通用户在真实有效 CSRF 下仍返回 403 `FORBIDDEN`，无效 CSRF 返回 403 `CSRF_INVALID`。不存在的活动返回 404 `ACTIVITY_NOT_FOUND`。
 
 新增响应字段为：
 

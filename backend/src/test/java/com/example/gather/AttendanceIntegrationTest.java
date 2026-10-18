@@ -146,9 +146,9 @@ class AttendanceIntegrationTest {
     void verifyDedicatedDatabaseBeforeOwnedFixtureWrites() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(10);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(11);
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
-        jdbc.queryForList("SELECT id, category, cover_hash, cover_image FROM activities LIMIT 0");
+        jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, checked_in_at, checked_in_by FROM registrations LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id FROM activity_audit_logs LIMIT 0");
     }

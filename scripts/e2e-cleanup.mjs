@@ -34,12 +34,13 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10') ORDER BY installed_rank");
-  if (!['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8/V9/V10 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8/V9/V10/V11 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, category, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
+  await connection.execute('SELECT starts_at, ends_at FROM activities LIMIT 0');
   await connection.execute('SELECT cover_hash, cover_image FROM activities LIMIT 0');
   await connection.execute('SELECT id, activity_id, user_id, status, checked_in_at, checked_in_by FROM registrations LIMIT 0');
   await connection.execute('SELECT id, username, display_name, role, credential_version FROM users LIMIT 0');
@@ -153,7 +154,7 @@ export async function initializeRun(baseUrl) {
     const response = await fetch(new URL(`/api/activities/${created.insertId}`, url), { signal: AbortSignal.timeout(10000) });
     const activity = response.ok ? await response.json() : null;
     if (!activity || activity.id !== created.insertId || activity.title !== probe.title || activity.description !== probe.description
-        || activity.category !== 'UNCATEGORIZED') {
+        || activity.category !== 'UNCATEGORIZED' || activity.endsAt !== null) {
       throw new Error('The local API and E2E_DB_* database are different. Tests stopped before API fixture writes.');
     }
     return manifestPath;

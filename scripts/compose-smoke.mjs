@@ -165,7 +165,7 @@ async function waitHealthy() {
 
 async function snapshot() {
   const [users] = await db.query('SELECT * FROM users ORDER BY id');
-  const [activities] = await db.query('SELECT id, title, description, location, category, starts_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by, cover_hash, SHA2(cover_image,256) AS cover_checksum FROM activities ORDER BY id');
+  const [activities] = await db.query('SELECT id, title, description, location, category, starts_at, ends_at, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by, cover_hash, SHA2(cover_image,256) AS cover_checksum FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
@@ -200,10 +200,10 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
   assert(migrations.every(row => row.success === 1));
-  await db.query('SELECT category, cover_hash, cover_image FROM activities LIMIT 0');
-  check('fresh MySQL schema contains successful Flyway V1 through V10 and activity category/cover columns');
+  await db.query('SELECT category, starts_at, ends_at, cover_hash, cover_image FROM activities LIMIT 0');
+  check('fresh MySQL schema contains successful Flyway V1 through V11 and activity end-time/category/cover columns');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -242,6 +242,7 @@ try {
   });
   assert(Number.isSafeInteger(fixture.id));
   assert.equal(fixture.category, 'UNCATEGORIZED', 'Old clients that omit category must retain the default.');
+  assert.equal(fixture.endsAt, null, 'Old clients that omit the end time must retain an unknown end.');
   const [ownedRows] = await db.execute('SELECT id, title, description FROM activities WHERE id=?', [fixture.id]);
   assert.equal(ownedRows.length, 1, 'The API-created fixture is absent from the configured smoke database.');
   assert.equal(ownedRows[0].title, title);

@@ -106,7 +106,12 @@ async function loginViaUi(page: Page, account: Account) {
 
 async function logout(page: Page) {
   await page.getByRole('button', { name: /账号菜单/ }).click();
-  await page.getByRole('menuitem', { name: /退出登录/ }).click();
+  const [response] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/auth/logout'),
+    page.getByRole('menuitem', { name: /退出登录/ }).click(),
+  ]);
+  expect(response.status()).toBe(200);
   await expect(page.getByRole('button', { name: '登录 / 体验', exact: true })).toBeVisible();
 }
 
@@ -369,7 +374,7 @@ test('签到资格和管理权限由后端验证，前未开始和已取消名�
     await login(page);
     const upcomingRoster = await openRoster(page, upcoming.id);
     await expect(page.getByRole('button', { name: `确认报名 ${upcomingRoster.items[0].id} 签到`, exact: true })).toBeDisabled();
-    await expect(page.getByText('活动开始后开放签到，到达开始时间请刷新名单。', { exact: true })).toBeVisible();
+    await expect(page.getByText('活动开始后开放签到。', { exact: true })).toBeVisible();
     const cancelledRoster = await openRoster(page, cancelled.id);
     await expect(page.getByRole('button', { name: /确认报名 .* 签到/ })).toHaveCount(0);
     await expect(page.locator(`[data-registration-id="${cancelledRoster.items[0].id}"]`)).toContainText('不适用');

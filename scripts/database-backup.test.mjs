@@ -32,12 +32,12 @@ function fixture() {
   return {
     users: [{ id: '1', username: 'admin', role: 'ADMIN', password_hash: '$2a$10$unit-secret-hash', credential_version: '7' },
       { id: '2', username: 'demo', role: 'USER', password_hash: '$2a$10$another-secret-hash', credential_version: '1' }],
-    activities: [{ id: '3', title: '含中文与换行\n活动', description: 'literal \\n', cover_image: Buffer.from([0, 255, 128, 10]), cover_hash: 'f'.repeat(64), starts_at: '2026-10-01 01:02:03.123456' }],
+    activities: [{ id: '3', title: '含中文与换行\n活动', description: 'literal \\n', cover_image: Buffer.from([0, 255, 128, 10]), cover_hash: 'f'.repeat(64), starts_at: '2026-10-01 01:02:03.123456', ends_at: '2026-10-01 03:02:03.123456' }],
     registrations: [{ id: '4', activity_id: '3', user_id: '2', status: 'ACTIVE', checked_in_at: null }],
     notifications: [{ id: '5', user_id: '2', activity_id: '3', read_at: null }],
     activity_audit_logs: [{ id: '6', activity_id: '3', changes_json: '{"category":{"before":"OTHER","after":"CULTURE"}}' }],
     activity_favorites: [{ id: '7', user_id: '2', activity_id: '3' }],
-    flyway_schema_history: Array.from({ length: 10 }, (_, index) => ({ installed_rank: index + 1, version: String(index + 1), checksum: index * 100 - 100, success: 1 })),
+    flyway_schema_history: Array.from({ length: 11 }, (_, index) => ({ installed_rank: index + 1, version: String(index + 1), checksum: index * 100 - 100, success: 1 })),
   };
 }
 
@@ -146,19 +146,24 @@ test('snapshots use one read-only RR transaction, all columns and primary-key or
   assert.equal(connection.state.rollbacks, 0);
   assert.equal(Object.keys(result.tables).length, 7);
   assert.equal(result.tables.users.rows, 2);
-  assert.equal(result.migrations.length, 10);
+  assert.equal(result.migrations.length, 11);
   for (const name of tableNames) assert.ok(connection.state.queries.includes(`SELECT * FROM \`${name}\` ORDER BY \`${name === 'flyway_schema_history' ? 'installed_rank' : 'id'}\``));
   assert.doesNotMatch(JSON.stringify(result), /secret-hash|含中文/);
   connection.state.data.activities[0].cover_image[1] = 254;
   const changed = await snapshotDatabase(connection);
   assert.notEqual(changed.tables.activities.contentSha256, result.tables.activities.contentSha256);
   assert.equal(changed.tables.users.contentSha256, result.tables.users.contentSha256);
+  connection.state.data.activities[0].ends_at = null;
+  const legacy = await snapshotDatabase(connection);
+  assert.notEqual(legacy.tables.activities.contentSha256, changed.tables.activities.contentSha256);
+  assert.equal(legacy.migrations.length, 11);
 });
 
 test('snapshot refuses invalid migrations, preset roles and non-InnoDB tables and rolls back', async () => {
   for (const [mutate, code] of [
-    [connection => { connection.state.data.flyway_schema_history[9].success = 0; }, 'MIGRATIONS_REFUSED'],
+    [connection => { connection.state.data.flyway_schema_history[10].success = 0; }, 'MIGRATIONS_REFUSED'],
     [connection => { connection.state.data.flyway_schema_history.pop(); }, 'MIGRATIONS_REFUSED'],
+    [connection => { delete connection.state.data.activities[0].ends_at; }, 'SCHEMA_REFUSED'],
     [connection => { connection.state.data.users[1].role = 'ADMIN'; }, 'PRESET_ACCOUNTS_REFUSED'],
   ]) {
     const connection = database(); mutate(connection);
@@ -230,6 +235,7 @@ test('backup rejects the wrong server UUID and non-8.4 servers before invoking m
 test('source changes, dump failure and empty output never publish a manifest or retry', async () => {
   for (const [action, code] of [
     [async ({ connection, path }) => { await writeFile(path, dumpSql); connection.state.data.users[1].credential_version = '2'; }, 'SOURCE_CHANGED'],
+    [async ({ connection, path }) => { await writeFile(path, dumpSql); connection.state.data.activities[0].ends_at = null; }, 'SOURCE_CHANGED'],
     [async () => { throw new Error('raw client SQL/password output'); }, 'BACKUP_FAILED'],
     [async () => {}, 'DUMP_EMPTY'],
   ]) {
@@ -297,7 +303,8 @@ test('restore refuses tampered bytes, incomplete manifests, unpublished packages
   for (const action of [
     async directory => writeFile(join(directory, 'dump.sql'), Buffer.concat([dumpSql, Buffer.from('tampered')])),
     async directory => editManifest(directory, manifest => { delete manifest.snapshot.tables.users; }),
-    async directory => editManifest(directory, manifest => { manifest.snapshot.migrations[9].checksum = null; }),
+    async directory => editManifest(directory, manifest => { manifest.snapshot.migrations[10].checksum = null; }),
+    async directory => editManifest(directory, manifest => { manifest.snapshot.migrations.pop(); }),
     async directory => writeFile(join(directory, 'manifest.json'), 'not JSON / PRIVATE RAW SECRET'),
     async directory => unlink(join(directory, 'manifest.json')),
     async directory => writeFile(join(directory, 'dump.partial.sql'), 'partial'),
@@ -341,6 +348,7 @@ test('import failure and post-import mismatch retain the target, never clear dat
   for (const run of [
     async () => { throw new Error('raw import diagnostic with password and SQL'); },
     async connection => { connection.state.data.activities[0].cover_image[0] = 3; },
+    async connection => { connection.state.data.activities[0].ends_at = null; },
   ]) {
     const connection = database({ config: targetConfig });
     await assert.rejects(importBackup(directory, { connection, run }), error => !/raw import|password|SQL/.test(error.message));

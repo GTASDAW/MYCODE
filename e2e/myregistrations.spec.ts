@@ -206,7 +206,7 @@ test('我的报名真实分页和全量统计一致，本人签到只读，URL�
     const beijing = new Date(Date.parse(checked.checkedInAt!) + 8 * 3600000).toISOString();
     await expect(checkedRow).toContainText(`${Number(beijing.slice(0, 4))}年${Number(beijing.slice(5, 7))}月${Number(beijing.slice(8, 10))}日`);
     await expect(checkedRow).toContainText(beijing.slice(11, 16));
-    await expect(checkedRow.getByText('活动已开始', { exact: true })).toBeVisible();
+    await expect(checkedRow.getByText('已开始', { exact: true })).toBeVisible();
     await expect(checkedRow).not.toContainText(fixture.admin.displayName);
     await expect(page.getByRole('button', { name: /确认.*签到/ })).toHaveCount(0);
     for (const row of first.items.filter(item => item.status === 'ACTIVE' && item.checkedInAt === null)) await expect(page.getByTestId(`myregistration-${row.id}`)).toContainText('未签到');

@@ -8,12 +8,14 @@ import { readAccountResource } from "../authRequestGuard";
 import {
   DateBadge,
   ActivityCancellationNotice,
+  ActivityStatus,
   EmptyState,
   ErrorState,
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { useActivityClock } from "../useActivityClock";
 import { useResource } from "../useResource";
 import { checkInLabel } from "../registrationCheckIn";
 import { myRegistrationDetailsPath } from "../activityDetailNavigation";
@@ -51,6 +53,7 @@ export function MyRegistrationsPage() {
     );
   }, [accountKey, query.status, query.page, query.pageSize]);
   const records = resource.data?.items ?? [];
+  useActivityClock(records.map(record => record.activity));
   const total = resource.data?.total ?? 0;
   const lastPage = Math.max(1, Math.ceil(total / query.pageSize));
   const correctingPage = !resource.loading && !resource.error && !!resource.data && query.page > lastPage;
@@ -123,6 +126,7 @@ export function MyRegistrationsPage() {
                   <div className="registration-row-main">
                     <h2><Link to={detailPath}>{activity.title}</Link></h2>
                     <p><CalendarOutlined aria-hidden="true" />{formatDate(activity.startsAt)} · {formatTime(activity.startsAt)}</p>
+                    <p>结束时间（北京时间）：{formatActivityEnd(activity.endsAt)}</p>
                     <p><EnvironmentOutlined aria-hidden="true" />{activity.location}</p>
                     <ActivityCancellationNotice activity={activity} />
                     <p className="myregistration-checkin" data-testid={`myregistration-checkin-${id}`}>
@@ -136,7 +140,7 @@ export function MyRegistrationsPage() {
                     <Tag color={activity.cancelled ? "red" : status === "ACTIVE" ? "green" : status === "WAITING" ? "orange" : "default"}>
                       {activity.cancelled ? "活动已取消" : status === "ACTIVE" ? "已报名" : status === "WAITING" ? "候补中" : "已取消"}
                     </Tag>
-                    {activity.closed && !activity.cancelled && <span className="metadata">活动已开始</span>}
+                    {!activity.cancelled && <ActivityStatus activity={activity} personal={false} />}
                     <Link to={detailPath}>查看活动</Link>
                   </div>
                 </article>

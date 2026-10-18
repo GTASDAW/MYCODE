@@ -6,6 +6,7 @@ interface ActivityResponse {
   title: string;
   location: string;
   startsAt: string;
+  endsAt: string | null;
   capacity: number;
   registeredCount: number;
   waitingCount: number;
@@ -144,7 +145,10 @@ test('活动列表显示真实接口数据，详情可直接访问且没有横�
   await page.goto(`/activities/${activities[0].id}`);
   await expect(page.getByRole('heading', { name: activities[0].title, exact: true })).toBeVisible();
   await expect(page.getByText(activities[0].location, { exact: true })).toBeVisible();
-  const expectedAction = activities[0].cancelled ? '活动已取消' : activities[0].closed ? '活动已开始'
+  const startedAction = activities[0].endsAt
+    ? Date.parse(activities[0].endsAt) <= Date.now() ? '已结束' : '进行中'
+    : '已开始';
+  const expectedAction = activities[0].cancelled ? '活动已取消' : activities[0].closed ? startedAction
     : activities[0].registeredCount >= activities[0].capacity ? '登录后加入候补' : '登录后报名';
   await expect(page.getByRole('button', { name: expectedAction, exact: true })).toBeVisible();
   await noDocumentOverflow(page);

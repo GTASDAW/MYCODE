@@ -2,12 +2,13 @@ import { Card, Empty, Grid, Pagination, Space, Table } from "antd";
 import type { TableColumnsType, TablePaginationConfig } from "antd";
 import { Link } from "react-router";
 import { ActivityStatus } from "../components";
-import { formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatTime } from "../date";
 import type { Activity } from "../types";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { activityAuditLogPath } from "../auditLogQuery";
 import { activityCategoryLabel } from "../activityCategory";
 import { LoadingState } from "../components";
+import { useActivityClock } from "../useActivityClock";
 import "./adminActivityTable.css";
 
 const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Activity> => [
@@ -34,6 +35,13 @@ const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Acti
         <span className="metadata">{formatTime(value)}</span>
       </span>
     ),
+  },
+  {
+    title: "结束时间（北京时间）",
+    dataIndex: "endsAt",
+    key: "endsAt",
+    width: 240,
+    render: (value: string | null | undefined) => formatActivityEnd(value),
   },
   {
     title: "活动地点",
@@ -82,12 +90,14 @@ export function AdminActivityTable({
   onChanged: (activity: Activity) => void;
 }) {
   const screens = Grid.useBreakpoint();
+  useActivityClock(activities);
   if (!screens.md) return <>
     {loading ? <LoadingState /> : activities.length === 0 ? <Empty description="暂无符合条件的活动" /> :
       <div className="admin-activity-mobile-list" aria-label="活动管理列表">
         {activities.map(activity => <Card size="small" key={activity.id} data-activity-id={activity.id}
           title={<Link to={`/activities/${activity.id}`}>{activity.title}</Link>} extra={<ActivityStatus activity={activity} personal={false} />}>
           <p className="metadata">开始时间（北京时间）：{formatDate(activity.startsAt)} {formatTime(activity.startsAt)}</p>
+          <p className="metadata">结束时间（北京时间）：{formatActivityEnd(activity.endsAt)}</p>
           <p className="metadata">活动分类：{activityCategoryLabel(activity.category)}</p>
           <p className="metadata">活动地点：{activity.location}</p>
           <p className="metadata">有效报名：{activity.registeredCount} / {activity.capacity}</p>
@@ -109,7 +119,7 @@ export function AdminActivityTable({
       dataSource={activities}
       loading={loading}
       pagination={pagination}
-      scroll={{ x: 1490 }}
+      scroll={{ x: 1730 }}
       locale={{ emptyText: "暂无符合条件的活动" }}
     />
   );
