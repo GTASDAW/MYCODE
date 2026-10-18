@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
+脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表，V10 增加活动封面及内容摘要；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
 
 ## 演示账号
 
@@ -77,6 +77,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 管理概览的“活动签到分析”按北京时间开始日期筛选已开始、未取消的活动，展示全量有效报名、已签到、未签到与加权签到比例，并逐场比较和进入名单。筛选分页保存在 URL，没有有效报名时比例不适用；支持补录的当前进度不代表最终出勤结算。口径、查询快照和演示路径见 [活动签到分析](docs/attendance-guide.md)。
 
 前端按路由加载页面：发现页直接打开，其他页面在访问时加载，受保护页面先校验权限再加载。慢加载和失败只影响内容区域，导航与登录状态保持；失败可手动重新加载当前地址或返回活动列表。静态资源缓存、真实浏览器恢复和优化前后证据见 [前端加载与恢复](docs/frontend-loading-guide.md)。
+
+管理员发布活动后可在编辑页上传、更换和移除封面，发现页、个人记录卡片及详情展示当前图片。仅未开始且未取消活动可修改；支持 PNG/JPEG、最多 2 MiB、宽高最多 4096 且总像素最多 1600 万。服务端校验真实图片并缩放至最长 1600、白底重编码 JPEG，二进制及 SHA-256 摘要与活动保存在 MySQL；两个实例不需要共享文件目录。封面独立保存，不覆盖基本信息草稿；相同内容及重复移除不重复审计，真实变化与 `EDIT` 操作记录同事务。旧活动默认无封面，图片失败可手动重新加载。当前范围是本地演示，不接外部对象存储。
 
 ## Docker Compose 部署
 
@@ -124,6 +126,7 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `PATCH /api/me/profile` | 修改当前用户昵称 | 登录且需要 CSRF |
 | `POST /api/me/password` | 验证原密码后修改本人密码，撤销旧登录 | 登录且需要 CSRF、改密尝试限流 |
 | `GET /api/activities`、`GET /api/activities/{id}` | 保留原数组列表、详情 | 公开 |
+| `GET /api/activities/{id}/cover` | 当前 JPEG 封面，支持 ETag 校验；未设置返回 404 | 公开，不含个人状态 |
 | `GET /api/activities/search` | 搜索、状态筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
 | `GET /api/admin/attendance` | 按北京时间活动开始日期查看当前签到分析，全量统计与分页对比 | 管理员 |
@@ -136,6 +139,8 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `GET /api/admin/activities/{id}/registrations/export` | 导出全部符合两类筛选的 CSV，超 20,000 条返回 413 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍、地点和分类 | 管理员 |
+| `POST /api/admin/activities/{id}/cover` | multipart `file` 上传或替换封面 | 管理员且需要 CSRF |
+| `DELETE /api/admin/activities/{id}/cover` | 移除活动封面，重复成功 | 管理员且需要 CSRF |
 | `POST /api/admin/activities/{id}/cancel` | 取消整场活动并保存原因和历史 | 管理员 |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补 | 登录 |
 | `DELETE /api/activities/{id}/registration` | 取消报名或退出候补 | 登录 |

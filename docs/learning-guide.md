@@ -2,6 +2,8 @@
 
 学习目标是理解每段代码为什么存在，并能修改一个功能、定位一个问题。按下面检查点推进，每一步都运行并观察结果。
 
+封面流程沿 `ActivityCoverEditor → api.uploadActivityCover → ActivityCoverImages → ActivityCoverService → ActivityCoverMapper → V10` 阅读。解释为什么格式、大小和像素需要分别检查，为什么图片解码不应拿活动锁，BLOB 与 hash 同事务如何避免孤儿文件，以及为什么列表只查 hash、相同内容不重复审计。对照真实 MySQL 回滚和桌面/手机上传测试；当前创建先发布文字，再独立上传封面，不把两次请求描述为一次原子创建。
+
 日历下载沿 `CalendarDownloadButton → api.activity → buildActivityCalendar → downloadFile` 阅读：已有接口如何提供最新快照，为什么读取不应覆盖并发报名状态，稳定 UID 为什么只含 origin/活动 ID，以及 UTC、文本转义、UTF-8 字节折行如何组合。比较 `.ics` 无 BOM 与既有 CSV 的 BOM/Tab 策略，解释“生成标准文件”和“某日历客户端实际导入成功”的区别；对照单元及双端下载回归，不引入额外服务。
 
 收藏流程沿 `FavoriteButton / MyFavoritesPage → api → FavoriteController → FavoriteService → FavoriteMapper → V9` 阅读。解释唯一键为何让重复收藏保留首次时间、取消后重收为何是新时间，以及收藏为何不改变报名和人数。比较两次分页查询的同一快照、认证的额外读取、URL 返回与旧响应保护；清理前的 `trackFavorite` 声明用于防止误删外部收藏，不是业务接口权限来源。实际结果见验证记录。
