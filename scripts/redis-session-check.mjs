@@ -82,6 +82,7 @@ function dockerRead(argumentsList) {
 }
 
 function verifyRunningComposeSettings(settings, declared) {
+  let redisContainerId;
   const ports = { web: ['80/tcp', String(settings.web.port)], mysql: ['3306/tcp', String(settings.database.port)],
     backend: ['8080/tcp', String(settings.a.port)], backend2: ['8080/tcp', String(settings.b.port)], redis: null };
   for (const service of ['mysql', 'redis', 'backend', 'backend2', 'web']) {
@@ -93,6 +94,7 @@ function verifyRunningComposeSettings(settings, declared) {
     const actual = containers[0];
     assert(actual.State?.Running && actual.Config?.Labels?.['com.docker.compose.project'] === 'gather-redis-ci'
       && actual.Config.Labels['com.docker.compose.service'] === service, 'Running Redis-stack container ownership changed.');
+    if (service === 'redis') redisContainerId = actual.Id;
     const actualEnvironment = Object.fromEntries(actual.Config.Env.map(item => {
       const separator = item.indexOf('=');
       return [item.slice(0, separator), item.slice(separator + 1)];
@@ -110,6 +112,56 @@ function verifyRunningComposeSettings(settings, declared) {
         && bindings[0].HostPort === port, `Running ${service} must use its exact isolated loopback binding.`);
     }
   }
+  return { containerId: redisContainerId, namespace: declared.services.backend.environment.SESSION_NAMESPACE };
+}
+
+const sessionUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const requiredSessionFields = ['creationTime', 'lastAccessedTime', 'maxInactiveInterval'];
+
+export function decodeOwnedSessionCookie(cookie) {
+  // Spring Session 4.1.1 DefaultCookieSerializer uses standard Base64 by default.
+  // Accept one UUID only: never a route suffix, cookie list, URL escape or Redis pattern.
+  assert(typeof cookie === 'string' && [36, 48].includes(cookie.length), 'The newly created owned session cookie is missing or malformed.');
+  if (sessionUuid.test(cookie)) return cookie;
+  const decoded = Buffer.from(cookie, 'base64').toString('utf8');
+  assert(Buffer.from(decoded, 'utf8').toString('base64') === cookie && sessionUuid.test(decoded),
+    'The owned session cookie must encode exactly one canonical UUID.');
+  return decoded;
+}
+
+export function ownedSessionHashProbe(identity, execute = execFileSync) {
+  assert(identity?.namespace === 'gather:session' && /^[0-9a-f]{64}$/.test(identity.containerId),
+    'Exact inspected isolated Redis container ownership and its declared namespace are required.');
+  const { containerId, namespace } = identity;
+  const ownedKeys = new Set();
+  return cookie => {
+    const key = `${namespace}:sessions:${decodeOwnedSessionCookie(cookie)}`;
+    assert(!ownedKeys.has(key), 'Each partial-hash scenario requires a newly created dedicated session.');
+    ownedKeys.add(key);
+    function integer(command, field) {
+      assert(['EXISTS', 'HEXISTS', 'HDEL'].includes(command)
+        && (command === 'EXISTS' ? field === undefined : requiredSessionFields.includes(field)),
+      'Only exact owned-session existence checks or one required hash-field deletion are permitted.');
+      let output;
+      try {
+        // Keys and fields are string-serialized by Spring Session's RedisTemplate.
+        // Password stays in the already inspected container environment; no shell input contains a key/value.
+        output = execute('docker', ['exec', '-i', containerId, 'sh', '-c',
+          'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli --raw'], {
+          input: `${command} ${key}${field === undefined ? '' : ` ${field}`}\n`,
+          encoding: 'utf8', stdio: 'pipe', timeout: 10000, maxBuffer: 1024, windowsHide: true,
+        });
+      } catch { throw new Error('The exact owned-session Redis operation failed; command details are withheld.'); }
+      assert(typeof output === 'string' && /^[01]\r?\n$/.test(output),
+        'The exact owned-session Redis operation did not return one safe integer.');
+      return Number(output.trim());
+    }
+    return {
+      exists: () => integer('EXISTS'),
+      hasRequired: field => integer('HEXISTS', field),
+      omitRequired: field => integer('HDEL', field),
+    };
+  };
 }
 
 async function verifyAllApiDatabasesBeforeWrites(settings) {
@@ -264,6 +316,79 @@ async function expectedError(response, status, code) {
   assert((await response.json()).code === code, `Expected ${code} response.`);
 }
 
+async function verifyPartialSessionHashes(settings, redisIdentity, client) {
+  const ownHash = ownedSessionHashProbe(redisIdentity);
+  const username = 'admin', password = process.env.DEMO_ADMIN_PASSWORD ?? 'Admin123!';
+  const control = client();
+  const { user } = await control.login(settings.a, username, password);
+  const controlToken = await control.csrf(settings.a);
+  const controlHash = ownHash(control.cookies.get('JSESSIONID'));
+  assert(controlHash.exists() === 1, 'The dedicated valid control session is missing.');
+  for (const field of requiredSessionFields) {
+    // Each first request must encounter its own damaged authenticated hash, rather than a hash already removed by a prior read.
+    for (const entry of ['identity-a', 'profile-b', 'logout-b']) {
+      const owned = client();
+      const loggedIn = await owned.login(settings.a, username, password);
+      assert(loggedIn.user.id === user.id, 'The dedicated partial-hash session authenticated the wrong account.');
+      const token = await owned.csrf(settings.a);
+      for (const base of [settings.a, settings.b]) {
+        assert((await owned.json(base, '/api/auth/me')).id === user.id,
+          'The dedicated session must authenticate on both replicas before its hash is changed.');
+      }
+      const damagedCookie = owned.clone();
+      const hash = ownHash(owned.cookies.get('JSESSIONID'));
+      assert(hash.exists() === 1 && requiredSessionFields.every(name => hash.hasRequired(name) === 1),
+        'All required metadata must exist in the dedicated authenticated session before one field is removed.');
+      assert(hash.omitRequired(field) === 1 && hash.exists() === 1 && hash.hasRequired(field) === 0,
+        'Exactly one required field must be removed while the owned session hash still exists.');
+      if (entry === 'logout-b') {
+        await expectedError(await owned.response(settings.b, '/api/auth/logout', {
+          method: 'POST', headers: { [token.headerName]: token.token },
+        }), 403, 'CSRF_INVALID');
+      } else {
+        await expectedError(await owned.response(entry === 'identity-a' ? settings.a : settings.b,
+          entry === 'identity-a' ? '/api/auth/me' : '/api/me/profile'), 401, 'UNAUTHENTICATED');
+      }
+      assert(hash.exists() === 0, 'The repository must discard the exact incomplete session hash on its first read.');
+      for (const base of [settings.a, settings.b]) {
+        for (const path of ['/api/auth/me', '/api/me/profile']) {
+          await expectedError(await damagedCookie.clone().response(base, path), 401, 'UNAUTHENTICATED');
+        }
+        const publicActivities = await damagedCookie.clone().json(base, '/api/activities');
+        assert(Array.isArray(publicActivities) && publicActivities.length > 0
+          && publicActivities.every(activity => activity.registrationStatus === null),
+        'The damaged cookie must read public activities anonymously without a server error.');
+        assert((await control.json(base, '/api/auth/me')).id === user.id,
+          'Discarding a damaged session must preserve the independent valid session identity.');
+        const sharedToken = await control.csrf(base);
+        assert(sharedToken.headerName === controlToken.headerName && sharedToken.token === controlToken.token,
+          'The independent valid session must retain its shared CSRF token across both replicas.');
+      }
+      assert(controlHash.exists() === 1 && requiredSessionFields.every(name => controlHash.hasRequired(name) === 1),
+        'Only the exact incomplete session may be discarded; the independent valid hash must remain complete.');
+      // Recovery is an explicit new CSRF read and login, never an automatic retry of the rejected write.
+      assert((await owned.login(settings.a, username, password)).user.id === user.id,
+        'Explicit CSRF refresh and login must recover the dedicated client.');
+      const recoveredToken = await owned.csrf(settings.a);
+      const recoveredHash = ownHash(owned.cookies.get('JSESSIONID'));
+      const recoveredCookie = owned.clone();
+      for (const base of [settings.a, settings.b]) {
+        assert((await owned.json(base, '/api/auth/me')).id === user.id,
+          'The recovered session must authenticate on both replicas.');
+        const sharedToken = await owned.csrf(base);
+        assert(sharedToken.headerName === recoveredToken.headerName && sharedToken.token === recoveredToken.token,
+          'The recovered session must share the refreshed CSRF token across both replicas.');
+      }
+      assert(recoveredHash.exists() === 1, 'The recovered authenticated session hash is missing.');
+      await owned.write(settings.b, '/api/auth/logout', recoveredToken);
+      assert(recoveredHash.exists() === 0, 'Successful recovered-session logout must remove its exact hash.');
+      await expectedError(await recoveredCookie.response(settings.a, '/api/auth/me'), 401, 'UNAUTHENTICATED');
+    }
+  }
+  await control.write(settings.b, '/api/auth/logout', controlToken);
+  assert(controlHash.exists() === 0, 'The independent control session must log out normally with its preserved CSRF token.');
+}
+
 export async function withActivityRowLock(connection, activityId, action, settle = async () => {}, beforeLock = async () => {}) {
   let transactionStarted = false;
   let result;
@@ -327,7 +452,7 @@ export async function runRedisSessionChecks() {
   try {
     settings = isolatedSettings();
     const declared = verifyComposeSettings(settings);
-    verifyRunningComposeSettings(settings, declared);
+    const redisIdentity = verifyRunningComposeSettings(settings, declared);
     await waitForStack(settings);
     db = await mysql.createConnection({ ...settings.database, timezone: 'Z', dateStrings: true });
     await waitForDemoSeed(db);
@@ -353,6 +478,9 @@ export async function runRedisSessionChecks() {
     }
     await expectedError(await admin.response(settings.b, '/api/auth/logout', { method: 'POST' }), 403, 'CSRF_INVALID');
     passed('JSESSIONID flags are compatible; login rotates session/CSRF; identical cookie authenticates A and B; missing/old CSRF is rejected on B');
+
+    await verifyPartialSessionHashes(settings, redisIdentity, client);
+    passed('each missing required Redis hash field is discarded on identity/profile/logout entry; old cookies are anonymous, new CSRF/login recovers across A/B and an independent valid session remains intact');
 
     const demo = client();
     await demo.login(settings.a, 'demo', process.env.DEMO_USER_PASSWORD ?? 'Demo123!');

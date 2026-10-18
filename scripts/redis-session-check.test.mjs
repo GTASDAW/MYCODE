@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isolatedSettings, withActivityRowLock, settleImmediately } from './redis-session-check.mjs';
+import { isolatedSettings, withActivityRowLock, settleImmediately, decodeOwnedSessionCookie, ownedSessionHashProbe } from './redis-session-check.mjs';
 
 const isolatedEnvironment = {
   COMPOSE_PROJECT_NAME: 'gather-redis-ci',
@@ -34,6 +34,72 @@ test('Redis lifecycle requires normal timeout/namespace and explicit isolated pa
     { SESSION_COOKIE_SECURE: 'true' },
     { E2E_DB_PASSWORD: undefined }, { REDIS_PASSWORD: undefined },
   ]) assert.throws(() => isolatedSettings({ ...isolatedEnvironment, ...override }));
+});
+
+const ownedSessionId = '12345678-1234-4567-89ab-123456789abc';
+const inspectedRedis = () => ({ containerId: 'a'.repeat(64), namespace: 'gather:session' });
+
+test('owned Redis session cookies permit only a single canonical UUID or its exact standard Base64 encoding', () => {
+  assert.equal(decodeOwnedSessionCookie(ownedSessionId), ownedSessionId);
+  assert.equal(decodeOwnedSessionCookie(Buffer.from(ownedSessionId).toString('base64')), ownedSessionId);
+  for (const value of [undefined, '', '*', `${ownedSessionId}.route`, `${ownedSessionId};other=value`,
+    ownedSessionId.toUpperCase(), Buffer.from(`${ownedSessionId}.route`).toString('base64'),
+    ` ${Buffer.from(ownedSessionId).toString('base64')}`, Buffer.from(ownedSessionId.replace('-4567-', '-1567-')).toString('base64'),
+    Buffer.from('gather:session:sessions:*').toString('base64')]) {
+    assert.throws(() => decodeOwnedSessionCookie(value), error => !value || !error.message.includes(value));
+  }
+});
+
+test('partial-hash probes fix the inspected container and exact owned key, allow only required fields and keep credentials out of arguments', () => {
+  const calls = [], identity = inspectedRedis();
+  const ownHash = ownedSessionHashProbe(identity, (program, args, options) => { calls.push({ program, args, options }); return '1\n'; });
+  identity.containerId = 'b'.repeat(64); identity.namespace = 'other';
+  const cookie = Buffer.from(ownedSessionId).toString('base64');
+  const hash = ownHash(cookie);
+  assert.equal(hash.exists(), 1);
+  for (const field of ['creationTime', 'lastAccessedTime', 'maxInactiveInterval']) {
+    assert.equal(hash.hasRequired(field), 1); assert.equal(hash.omitRequired(field), 1);
+  }
+  assert.throws(() => ownHash(cookie), /newly created dedicated session/);
+  assert.equal(calls.length, 7);
+  for (const call of calls) {
+    assert.equal(call.program, 'docker');
+    assert.deepEqual(call.args, ['exec', '-i', 'a'.repeat(64), 'sh', '-c', 'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli --raw']);
+    assert.match(call.options.input, new RegExp(`^(?:EXISTS gather:session:sessions:${ownedSessionId}|(?:HEXISTS|HDEL) gather:session:sessions:${ownedSessionId} (?:creationTime|lastAccessedTime|maxInactiveInterval))\\n$`));
+    assert(!call.args.join(' ').includes(ownedSessionId));
+    assert(!call.args.includes('-a'));
+    assert.equal(call.options.timeout, 10000); assert.equal(call.options.maxBuffer, 1024);
+    assert.equal(call.options.stdio, 'pipe'); assert.equal(call.options.windowsHide, true);
+  }
+  for (const field of ['*', 'sessionAttr:SPRING_SECURITY_CONTEXT', 'creationTime\nFLUSHDB', undefined]) {
+    assert.throws(() => hash.hasRequired(field)); assert.throws(() => hash.omitRequired(field));
+  }
+  assert.equal(calls.length, 7, 'Refused fields must never dispatch a Docker command.');
+});
+
+test('partial-hash probes refuse unverified targets and malformed ownership before invoking Docker', () => {
+  let calls = 0;
+  const execute = () => { calls++; return '1\n'; };
+  for (const identity of [undefined, {}, { ...inspectedRedis(), namespace: 'shared:session' },
+    { ...inspectedRedis(), containerId: 'redis' }, { ...inspectedRedis(), containerId: '-all' }]) {
+    assert.throws(() => ownedSessionHashProbe(identity, execute));
+  }
+  const ownHash = ownedSessionHashProbe(inspectedRedis(), execute);
+  for (const cookie of ['*', `${ownedSessionId}\nDEL other`, 'not-a-session']) assert.throws(() => ownHash(cookie));
+  assert.equal(calls, 0);
+});
+
+test('partial-hash Redis failures and non-integer output never expose a key, cookie or subprocess diagnostic', () => {
+  const secret = 'PRIVATE redis password command details';
+  for (const output of ['0\n', '1\r\n']) {
+    const hash = ownedSessionHashProbe(inspectedRedis(), () => output)(ownedSessionId);
+    assert.equal(hash.exists(), Number(output.trim()));
+  }
+  for (const execute of [() => { throw new Error(`${secret} ${ownedSessionId}`); },
+    ...['', '2\n', `1\n${secret}`, `${ownedSessionId}\n`, '1\n0\n'].map(output => () => output)]) {
+    const hash = ownedSessionHashProbe(inspectedRedis(), execute)(ownedSessionId);
+    assert.throws(() => hash.exists(), error => !error.message.includes(secret) && !error.message.includes(ownedSessionId));
+  }
 });
 
 function rowLockConnection(events, { rows = [{ id: 7 }], failLock, failRollback, failClose } = {}) {

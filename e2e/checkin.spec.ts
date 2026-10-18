@@ -107,8 +107,9 @@ async function loginViaUi(page: Page, account: Account) {
 async function logout(page: Page) {
   await page.getByRole('button', { name: /账号菜单/ }).click();
   const [response] = await Promise.all([
+    // An expired session can reject the old CSRF once before the client's permitted refresh/retry.
     page.waitForResponse(response => response.request().method() === 'POST'
-      && new URL(response.url()).pathname === '/api/auth/logout'),
+      && new URL(response.url()).pathname === '/api/auth/logout' && response.status() === 200),
     page.getByRole('menuitem', { name: /退出登录/ }).click(),
   ]);
   expect(response.status()).toBe(200);

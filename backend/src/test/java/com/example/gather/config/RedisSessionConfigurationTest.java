@@ -7,8 +7,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.session.autoconfigure.SessionAutoConfiguration;
+import org.springframework.boot.web.server.autoconfigure.ServerProperties;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -25,6 +28,9 @@ import org.springframework.session.MapSessionRepository;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import jakarta.servlet.http.Cookie;
@@ -35,8 +41,8 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class RedisSessionConfigurationTest {
     @AfterEach void clearThreadAuthentication() { SecurityContextHolder.clearContext(); }
@@ -63,6 +69,101 @@ class RedisSessionConfigurationTest {
             assertThat(session.getMaxInactiveInterval()).isEqualTo(Duration.ofSeconds(3));
             assertThat(application).hasBean("sessionRepositoryFilterRegistration");
         });
+    }
+
+    @Test
+    void completeRedisSessionUsesDefaultMappingWithoutChangingIdentityCsrfOrTimes() {
+        RedisOperations<String, Object> redis = mock(RedisOperations.class);
+        HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+        when(redis.<Object, Object>opsForHash()).thenReturn(hashes);
+        var fields = completeFields();
+        when(hashes.entries("gather:test:session:sessions:complete")).thenReturn(fields);
+
+        Session session = configuredRepository(redis).findById("complete");
+
+        assertThat(session).isNotNull();
+        assertThat(session.getId()).isEqualTo("complete");
+        assertThat(session.getCreationTime()).isEqualTo(Instant.ofEpochMilli((Long) fields.get("creationTime")));
+        assertThat(session.getLastAccessedTime()).isEqualTo(Instant.ofEpochMilli((Long) fields.get("lastAccessedTime")));
+        assertThat(session.getMaxInactiveInterval()).isEqualTo(Duration.ofSeconds(1800));
+        assertThat(session.getAttributeNames()).containsExactlyInAnyOrder("SPRING_SECURITY_CONTEXT", "csrf");
+        assertThat((Object) session.getAttribute("SPRING_SECURITY_CONTEXT")).isSameAs(fields.get("sessionAttr:SPRING_SECURITY_CONTEXT"));
+        assertThat((Object) session.getAttribute("csrf")).isSameAs(fields.get("sessionAttr:csrf"));
+        verify(redis, never()).delete(anyString());
+    }
+
+    @Test
+    void missingOrNullRequiredMetadataReturnsNoSessionAndRepositoryDeletesOnlyItsExactHash() {
+        for (String missing : List.of("creationTime", "lastAccessedTime", "maxInactiveInterval")) {
+            for (boolean explicitNull : new boolean[] {false, true}) {
+                RedisOperations<String, Object> redis = mock(RedisOperations.class);
+                HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+                when(redis.<Object, Object>opsForHash()).thenReturn(hashes);
+                var fields = completeFields();
+                if (explicitNull) fields.put(missing, null);
+                else fields.remove(missing);
+                String id = missing + explicitNull;
+                String key = "gather:test:session:sessions:" + id;
+                when(hashes.entries(key)).thenReturn(fields);
+
+                assertThat(configuredRepository(redis).findById(id)).as("%s null=%s", missing, explicitNull).isNull();
+
+                verify(hashes).entries(key);
+                verify(redis).delete(key);
+                verifyNoMoreInteractions(hashes);
+                verify(redis, times(1)).delete(anyString());
+            }
+        }
+    }
+
+    @Test
+    void completeMetadataTypeErrorsStillFollowTheDefaultMapperAndAreNotDeleted() {
+        RedisOperations<String, Object> redis = mock(RedisOperations.class);
+        HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+        when(redis.<Object, Object>opsForHash()).thenReturn(hashes);
+        var fields = completeFields(); fields.put("creationTime", "invalid-time-type");
+        when(hashes.entries("gather:test:session:sessions:bad-type")).thenReturn(fields);
+
+        assertThatThrownBy(() -> configuredRepository(redis).findById("bad-type")).isInstanceOf(ClassCastException.class);
+
+        verify(redis, never()).delete(anyString());
+    }
+
+    @Test
+    void redisReadAndIncompleteHashDeleteFailuresPropagateRatherThanBecomingAnonymousSuccess() {
+        RedisOperations<String, Object> redis = mock(RedisOperations.class);
+        HashOperations<String, Object, Object> hashes = mock(HashOperations.class);
+        when(redis.<Object, Object>opsForHash()).thenReturn(hashes);
+        var failedRead = new org.springframework.dao.DataAccessResourceFailureException("test-only read failure");
+        when(hashes.entries("gather:test:session:sessions:read-failure")).thenThrow(failedRead);
+        var repository = configuredRepository(redis);
+        assertThatThrownBy(() -> repository.findById("read-failure")).isSameAs(failedRead);
+        verify(redis, never()).delete(anyString());
+
+        var incomplete = completeFields(); incomplete.remove("creationTime");
+        when(hashes.entries("gather:test:session:sessions:delete-failure")).thenReturn(incomplete);
+        var failedDelete = new org.springframework.dao.DataAccessResourceFailureException("test-only delete failure");
+        when(redis.delete("gather:test:session:sessions:delete-failure")).thenThrow(failedDelete);
+        assertThatThrownBy(() -> repository.findById("delete-failure")).isSameAs(failedDelete);
+    }
+
+    private static RedisSessionRepository configuredRepository(RedisOperations<String, Object> redis) {
+        var repository = new RedisSessionRepository(redis);
+        repository.setRedisKeyNamespace("gather:test:session");
+        var server = new ServerProperties(); server.getServlet().getSession().setTimeout(Duration.ofSeconds(3));
+        new RedisSessionConfiguration().redisSessionTimeout(server).customize(repository);
+        return repository;
+    }
+
+    private static Map<Object, Object> completeFields() {
+        var fields = new HashMap<Object, Object>();
+        long now = Instant.now().toEpochMilli();
+        fields.put("creationTime", now - 1000); fields.put("lastAccessedTime", now); fields.put("maxInactiveInterval", 1800);
+        var principal = new AppUserDetails(new UserRow(42L, "demo", "unused-hash", "演示用户", "USER", 9));
+        var authentication = UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities());
+        fields.put("sessionAttr:SPRING_SECURITY_CONTEXT", new SecurityContextImpl(authentication));
+        fields.put("sessionAttr:csrf", new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "test-token"));
+        return fields;
     }
 
     @Test
