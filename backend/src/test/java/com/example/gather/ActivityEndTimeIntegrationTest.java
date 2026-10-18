@@ -26,6 +26,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -41,9 +42,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Dedicated real MySQL: microsecond boundaries, additive API compatibility and late check-in. */
-@SpringBootTest
+@SpringBootTest(properties = "spring.datasource.hikari.maximum-pool-size=4")
 @AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(ActivityEndTimeIntegrationTest.Configuration.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ActivityEndTimeIntegrationTest {
     static final Instant NOW = Instant.parse("2046-10-01T09:00:00.123456Z");
     static final Instant START = NOW.plusSeconds(3600);
