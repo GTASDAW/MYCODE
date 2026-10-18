@@ -6,13 +6,16 @@
 
 快速了解：[真实界面展示](docs/showcase.md) · [项目讲解与简历素材](docs/interview-kit.md) · [五分钟业务演示](docs/demo-guide.md) · [架构与请求流程](docs/architecture.md)
 
-## 三个技术亮点
+第一次学习按 [分阶段路线](docs/learning-guide.md#第一轮阅读顺序) 逐项实操，再录一次 [五分钟演示](docs/demo-guide.md#五分钟流程)，最后用 [二十分钟模拟面试](docs/interview-kit.md#二十分钟模拟面试) 检查理解；不需要从头通读全部文档。
+
+## 四个技术亮点
 
 | 问题 | 实现方式 | 可以核对的证据 |
 | --- | --- | --- |
 | 多人同时报名，如何保持名额和候补正确？ | 在 `READ_COMMITTED` 事务中先锁活动主键，再更新报名与人数；有效报名取消时按 FIFO 递补，通知与状态一起提交 | [并发设计与真实 MySQL 回归](docs/concurrency-review.md)、[通知事务](docs/notification-guide.md) |
-| 两个 Java 实例，如何共享登录且保留 CSRF 防护？ | 默认使用内存 Session；显式启用 Redis profile 后，由 Spring Session 共享会话，业务一致性仍由 MySQL 保证 | [真实双实例登录、退出、重启及闲置失效验证](docs/shared-session.md) |
+| 两个 Java 实例，如何共享登录，改密后又怎样让旧身份失效？ | 显式 Redis profile 共享 Session 与 CSRF，数据库凭据版本逐请求校验；默认仍为内存 Session，业务一致性由 MySQL 保证 | [共享 Session](docs/shared-session.md)、[改密与版本校验](docs/password-change-guide.md) |
 | “我的报名”如何分页，且不逐条查询活动？ | 聚合与当前页联表查询共用只读快照；旧数组一次数据 SELECT，新分页两次，统计覆盖本人全部记录 | [SQL、执行计划与查询次数证据](docs/my-registrations-guide.md) |
+| 有了 SQL 备份，怎样确认恢复后能用？ | 无写入/DDL 窗口导出，在独立 MySQL 新空库恢复；核对七表结构、数据及图片，再用专属后端与浏览器验收 | [恢复边界](docs/delivery-guide.md#备份与恢复边界)、[实际本机演练](docs/verification.md#一致性备份与独立恢复演练2026-10-18) |
 
 真实 MySQL、桌面和手机浏览器、默认容器与 Redis 双实例的实际结果见[验证记录](docs/verification.md)，其中注明了测试环境和结论范围。
 
@@ -257,10 +260,10 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类及 V9 收藏表的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类、V9 收藏表及 V10 活动封面的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
-- [四阶段学习指南](docs/learning-guide.md)
+- [分阶段学习路线与源码检查点](docs/learning-guide.md)
 - [架构与接口说明](docs/architecture.md)
 - [用户注册与个人中心](docs/account-guide.md)
 - [活动编辑、取消与历史记录](docs/activity-lifecycle.md)

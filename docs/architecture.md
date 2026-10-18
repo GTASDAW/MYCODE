@@ -7,13 +7,13 @@
 | 层次 | 技术 | 负责的事情 |
 | --- | --- | --- |
 | 页面 | React、TypeScript、Vite、Ant Design、React Router | 页面路由、表单、加载状态、错误反馈 |
-| HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON 或名单 CSV |
+| HTTP 接口 | Java 21、Spring Boot 4.1.1 | 接收请求、参数校验、返回 JSON、名单 CSV 或封面 JPEG |
 | 请求追踪与指标 | 请求观察 Filter、MDC、结构化日志、Micrometer Timer | 关联请求与安全错误日志，记录当前实例耗时与连接池快照 |
-| 身份与权限 | Spring Security、Cookie Session、CSRF | 注册、登录、识别当前用户、校验管理员权限 |
+| 身份与权限 | Spring Security、Cookie Session、CSRF | 注册、登录、凭据版本校验、管理员权限与改密后的旧身份失效 |
 | 会话存储 | 默认 Java 内存；可选 Spring Session Redis | 默认单实例或两个实例共享同一登录与 CSRF |
 | 业务与事务 | Java 服务层、Spring 事务 | 报名规则、取消规则、事务边界 |
 | 数据访问 | MyBatis Spring Boot Starter 4.0.0 | 执行明确的 SQL，包括行锁查询 |
-| 数据存储 | MySQL 8.4、InnoDB | 用户、活动、报名记录、通知与管理员操作历史以及约束 |
+| 数据存储 | MySQL 8.4、InnoDB | 用户、活动（含封面）、报名、通知、审计、收藏六表及约束 |
 | 运行环境 | Maven Wrapper、npm、Docker Compose、Nginx | 构建、启动、同源部署 |
 
 ```mermaid
@@ -21,15 +21,20 @@ flowchart LR
     B[浏览器 / React 页面] --> P[统一入口]
     P -->|静态文件| F[React 构建产物]
     P -->|/api 请求| O[请求观察 Filter：UUID / 日志 / 计时]
-    O --> S[Spring Security：CSRF / 入口限流 / 身份与权限]
-    S --> C[Controller：参数与响应]
+    O --> S[Spring Security：Session / CSRF / 认证限流]
+    S --> K[已登录身份：凭据版本校验]
+    K --> A[业务授权 / 改密限流]
+    A --> C[Controller：参数与响应]
     C --> V[Service：业务规则与事务]
     V --> M[MyBatis：SQL]
     M --> D[(MySQL / InnoDB)]
+    K -->|已登录业务请求一次版本 SELECT| D
     S <--> H[Session：默认 Java 内存 / 可选共享 Redis]
 ```
 
 开发时，统一入口是 Vite：页面发出相对路径的 `/api` 请求，由 Vite 代理到 Java 服务。部署时，统一入口是 Nginx：它提供前端静态文件，并把 `/api` 请求转发给后端。两种方式都让浏览器通过同一个来源访问页面和接口。
+
+上图把匿名请求也画在同一路径上：匿名请求跳过版本查询；旧版本身份访问公开活动时清除身份后匿名读取，访问受保护接口返回 401，版本查询故障返回 503。版本读取发生在业务授权和业务事务前，与后文的列表快照分开计算。
 
 发现页直接加载，其他业务页面通过模块级懒加载按路由进入。Router、Layout、认证及通知 Provider 保持原实例，权限门禁在懒页面外；只有内容区域进入加载或错误状态。手动恢复执行真实当前地址刷新，不用重挂同一懒组件假装重试；正常 query/hash 改变不重挂页面。构建默认拆包、HTML 重新验证与带 hash 资源缓存、缺失资源真实 404 的合同及证据见 [前端加载指南](frontend-loading-guide.md)。
 
@@ -37,7 +42,7 @@ flowchart LR
 
 - **用户**：保存唯一登录名、密码哈希、展示名、角色和 V7 凭据版本。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名、昵称与密码修改请求不能自行指定操作人。
 - **收藏**：V9 `activity_favorites` 保存本人和活动的唯一组合及 UTC 微秒时间，外键保护关联，按本人收藏时间/ID 倒序分页。重复插入保留首次信息，取消物理删除本人的收藏，不删除活动历史。收藏不加入活动报名锁或审计流程。
-- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数，V8 增加固定单选分类，旧活动为未分类。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
+- **活动**：保存标题、介绍、地点、开始时间、总名额和当前有效报名人数，V8 增加固定单选分类，旧活动为未分类。V10 在同一活动行保存成对的封面 JPEG 与 hash，列表只读 hash，报名热锁不读图片。候补人数由报名记录按活动实时统计。开始时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
 - **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5 增加成对的可空签到时间、操作人；非空时必须为 `ACTIVE`，操作人关联用户且外键限制删除。
 - **站内通知**：V4 保存收件人、活动、事件类型、当时标题、公开取消原因、UTC 创建与首次已读时间。只在实际递补或首次活动取消时写入，同业务事务提交；外键保留历史，真正再次递补可产生新记录。
 - **管理员操作记录**：V6 保存发布、真实编辑、首次取消和首次签到的动作、活动与名称快照、可信操作人、可空签到目标、UTC 微秒时间和完整字段变化。与业务同事务追加，不回填旧历史；活动、操作人、报名分别为限制删除的独立外键，签到同活动归属由业务查询检查。
@@ -56,6 +61,7 @@ flowchart LR
 | `GET /api/activities` | 查看活动列表 | 可匿名调用 |
 | `GET /api/activities/search` | 搜索、状态筛选、分页与匹配集合统计 | 可匿名调用，个人状态来自可信当前身份 |
 | `GET /api/activities/{id}` | 查看活动详情 | 可匿名调用 |
+| `GET /api/activities/{id}/cover` | 读取公开 JPEG 封面，需重新验证缓存 | 可匿名调用 |
 | `GET /api/admin/overview` | 管理概览的八项真实统计（含候补和取消活动数） | 管理员 |
 | `GET /api/admin/attendance` | 按北京时间开始日期筛选的当前签到分析，全量统计与逐场分页 | 管理员 |
 | `GET /api/admin/monitoring` | 当前 Java 实例的请求、耗时和连接池快照 | 管理员 |
@@ -67,6 +73,8 @@ flowchart LR
 | `GET /api/admin/activities/{id}/registrations/export` | 全筛选范围 CSV，最多 20,000 条 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍、地点和分类 | 管理员，需 CSRF |
+| `POST /api/admin/activities/{id}/cover` | 校验并重编码上传封面，与真实变更审计同事务 | 管理员，需 CSRF，活动未开始且未取消 |
+| `DELETE /api/admin/activities/{id}/cover` | 移除封面，重复移除不新增审计 | 管理员，需 CSRF，活动未开始且未取消 |
 | `POST /api/admin/activities/{id}/cancel` | 取消活动，保存首次原因、时间和报名历史 | 管理员，需 CSRF |
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补；满员时返回 `WAITING` 状态 | 已登录用户 |
 | `DELETE /api/activities/{id}/registration` | 取消有效报名或退出候补 | 已登录用户 |
@@ -210,6 +218,23 @@ Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保�
 默认 Redis Session 自动配置被明确关闭，仅 `redis` profile 手动启用 Spring Session；默认健康检查不连接 Redis，Redis 模式纳入 Redis 连接检查。连接、命名空间、Cookie 和实际验证方式见 [共享 Session 指南](shared-session.md)。
 
 登录与注册在 CSRF 之后进入限流 Filter，复用 Security 的 POST 路径匹配语义，编码路径同样受保护。登录同时检查来源及来源/规范用户名组合，注册只检查来源；获准后再执行原认证或 MVC 注册。默认内存存储，`redis` profile 用 HASH/ZSET 的一次 Lua 原子处理计数、过期和容量，命名空间独立于 Session。429 携带等待秒数，前端不自动重试；来源、参数及 503/500 边界见 [限流指南](auth-rate-limit.md)。
+
+## 备份恢复验证路径
+
+这是本地运维脚本流程，独立于上面的业务 API。当前门禁为 V10，备份包含六张业务表和 Flyway 历史，图片保存在活动行中，一并验收。
+
+```mermaid
+flowchart LR
+    S[原库：已核 UUID / V10] -->|无写入和 DDL 窗口，只读导出| P[SQL / manifest / 结构与全字段摘要]
+    P -->|专属受限账号，只接受新空库| T[独立 MySQL / 不同服务器 UUID]
+    T --> V[结构 / 迁移 / 行内容 / 图片 / 约束核验]
+    V --> A[专属后端与真实浏览器验收]
+    S --> C[原库前后摘要不变 / 原服务保持]
+    A --> R[保留摘要与报告]
+    C --> R
+```
+
+导出前后摘要与 dump 不共用快照，无写入/DDL 是使用前提；目标导入或校验失败时保留现场。SQL、凭据及数据文件留在受限忽略目录，展示仅用脱敏摘要与截图。操作入口见 [README](../README.md#本地备份与恢复演练)，保护条件见 [交付指南](delivery-guide.md#备份与恢复边界)，实际本机和 CI 证据分开见 [验证记录](verification.md#一致性备份与独立恢复演练2026-10-18)。
 
 ## 当前边界与后续演进
 

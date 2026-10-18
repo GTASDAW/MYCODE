@@ -1,32 +1,44 @@
 # 从运行项目到讲清楚项目
 
-学习目标是理解每段代码为什么存在，并能修改一个功能、定位一个问题。按下面检查点推进，每一步都运行并观察结果。
+先按下表学习，每次只完成一阶段。第一轮不需要通读 `docs/`，也不需要先掌握 Docker、Redis 或所有框架配置；已有演示和测试结果是参考，你自己的实操记录从“待自测”开始。
 
-备份恢复沿 `database-backup.mjs → mysqldump/mysql → backup-restore-drill.mjs` 阅读：区分备份文件校验、真实数据库恢复、浏览器使用三种证据；解释 mysqldump 单事务与 JS 只读快照为什么不是同一视图，为什么本轮需要无写入/DDL 窗口，以及受限 schema 账号如何保护原库。观察七表摘要、JPEG 字节、恢复后的权限/名额约束与原库前后摘要；不把一次约一分钟的小样本演练说成生产 RTO 或在线容灾能力。
+## 第一轮阅读顺序
 
-封面流程沿 `ActivityCoverEditor → api.uploadActivityCover → ActivityCoverImages → ActivityCoverService → ActivityCoverMapper → V10` 阅读。解释为什么格式、大小和像素需要分别检查，为什么图片解码不应拿活动锁，BLOB 与 hash 同事务如何避免孤儿文件，以及为什么列表只查 hash、相同内容不重复审计。对照真实 MySQL 回滚和桌面/手机上传测试；当前创建先发布文字，再独立上传封面，不把两次请求描述为一次原子创建。
+| 阶段 | 先看哪些内容 | 亲手做什么 | 能做到什么才继续 |
+| --- | --- | --- | --- |
+| 1．跑通与看懂分层 | [README 本地启动](../README.md#本地启动windows) → [架构的技术分工和六张表](architecture.md#技术分工) → 本文检查点一、二 | 打开 Network，找到一次活动搜索；用后台创建自己的未来活动、报名，再刷新查看 | 能画出浏览器 → HTTP → Security → Controller → Service → Mapper → MySQL，并指出用户 ID 来自哪里 |
+| 2．报名事务与候补 | [并发复盘](concurrency-review.md) → [面试卡一](interview-kit.md#技术卡一最后一个名额与候补递补) → 本文检查点三 | 用两个独立会话争一场新活动的 1 个名额，再取消有效报名，观察递补及通知 | 不看答案也能解释行锁、事务、唯一约束各自解决什么；指出锁顺序、FIFO 和回滚断言 |
+| 3．登录与改密安全 | [账户指南](account-guide.md) → [改密指南](password-change-guide.md) → [面试卡二](interview-kit.md#技术卡二登录身份csrf改密与共享-session) | 自建测试账号，在普通/无痕窗口登录，修改密码，再让另一个窗口发请求 | 分清 Cookie、Session、CSRF、角色与凭据版本；解释旧会话何时失效、为何同账号重登也要拦迟到响应 |
+| 4．分页与查询证据 | [我的报名指南](my-registrations-guide.md) → [面试卡三](interview-kit.md#技术卡三个人分页与同一次读取快照) | 观察筛选前后列表与全量统计；沿 SQL 找到聚合、联表和两种 ID | 能解释旧 1 / 新 2 次业务 SELECT，认证额外 1 次，以及同一快照与不同请求的区别 |
+| 5．备份恢复与交付 | [README 恢复命令](../README.md#本地备份与恢复演练) → [恢复边界](delivery-guide.md#备份与恢复边界) → [面试卡四](interview-kit.md#技术卡四备份文件如何证明能恢复) | 确认环境后运行独立恢复演练；只查看摘要和页面截图，不分发原始 SQL | 能说清空目标/受限账号/UUID、图片与七表摘要、真实浏览器和原库不变分别证明什么 |
+| 6．完整演示与表达 | [五分钟流程](demo-guide.md#五分钟流程) → [模拟面试](interview-kit.md#二十分钟模拟面试) → [简历模板](interview-kit.md#可编辑简历条目) | 录一段五分钟演示；关掉答案回答问题，再填自己的职责和验证记录 | 能独立演示、定位代码、解释取舍；不会的题标出来，回对应阶段补练 |
 
-日历下载沿 `CalendarDownloadButton → api.activity → buildActivityCalendar → downloadFile` 阅读：已有接口如何提供最新快照，为什么读取不应覆盖并发报名状态，稳定 UID 为什么只含 origin/活动 ID，以及 UTC、文本转义、UTF-8 字节折行如何组合。比较 `.ics` 无 BOM 与既有 CSV 的 BOM/Tab 策略，解释“生成标准文件”和“某日历客户端实际导入成功”的区别；对照单元及双端下载回归，不引入额外服务。
+每次学习按四步走：**先预测结果 → 亲手操作 → 定位源码条件 → 合上文档复述**。建议一次专注 45–60 分钟，按通过标准推进，不承诺几天内熟练。记录只需一行：`日期｜场景｜源码入口｜自己运行的命令/操作｜实际结果｜未理解的问题`；填入 [个人掌握自检](interview-kit.md#个人掌握自检)，不用另建学习文档。
 
-收藏流程沿 `FavoriteButton / MyFavoritesPage → api → FavoriteController → FavoriteService → FavoriteMapper → V9` 阅读。解释唯一键为何让重复收藏保留首次时间、取消后重收为何是新时间，以及收藏为何不改变报名和人数。比较两次分页查询的同一快照、认证的额外读取、URL 返回与旧响应保护；清理前的 `trackFavorite` 声明用于防止误删外部收藏，不是业务接口权限来源。实际结果见验证记录。
+先认清几个词：HTTP 是页面与服务端的请求/响应；JSON 是数据格式；TypeScript 检查前端数据类型；Controller 负责入口与参数；Service 放业务与事务；Mapper 执行 SQL；索引帮助查询；事务、唯一约束和行锁共同维护数据一致性。概念不熟时先在这条请求里找例子，再扩展学习。
 
-完成基本查询后，可沿 [活动分类指南](activity-category-guide.md) 跟踪同一个字段如何经过 V8、请求兼容规则、Service 白名单、共享 SQL、个人独立投影、前端类型与表单、URL 和审计中文展示。解释为什么编辑省略分类不能覆盖现值、分类统计不能从当前页推算、分类读取不应扩大报名热锁投影，以及后台筛选为什么也写入 URL。
+## 第一轮之后按题目查阅
 
-完成核心流程后，可以沿 [登录与注册限流](auth-rate-limit.md) 学习 Security Filter 顺序、两桶原子消费、可信来源、内存与 Redis 取舍，以及前端倒计时和迟到 CSRF 保护。严格限流与普通回归使用不同阈值，结果只引用实际验证记录。
-
-再沿 [修改密码与旧会话失效](password-change-guide.md) 阅读 `PasswordChangeCard → api → AuthProvider → Security filters → PasswordController → PasswordChangeService → UserMapper → V7`。解释为何原密码必须读数据库、BCrypt 不拿行锁、哈希与版本必须一起登录读取、CAS 为何只允许一个胜者，以及响应丢失不等于数据库回滚。对照默认两个独立登录与 Redis 两实例真实检查；认证版本 SELECT 与原业务查询计数分开，不把迟到保存等同恢复权限。
+| 内容 | 阅读入口与抓手 |
+| --- | --- |
+| 公开搜索、分类、收藏 | [活动发现](activity-discovery.md)、[分类](activity-category-guide.md)；收藏沿 FavoriteButton/MyFavoritesPage → FavoriteService → FavoriteMapper，比较 URL、本人隔离、幂等与分页快照 |
+| 通知、签到、审计 | [通知](notification-guide.md)、[签到与导出](checkin-export-guide.md)、[操作记录](audit-log-guide.md)；理解真实事件、首次信息、快照及同事务回滚 |
+| 封面与日历 | [架构中的封面](architecture.md#活动封面)与[日历](architecture.md#活动日历导出)；封面锁前解码/事务内存储、日历读取不覆盖报名状态、下载资源清理 |
+| 限流与共享会话 | [认证限流](auth-rate-limit.md)、[共享 Session](shared-session.md)；Filter 顺序、两桶原子消费、可信来源、内存与 Redis 边界 |
+| 性能与前端加载 | [SQL 优化复盘](query-optimization-review.md)、[加载指南](frontend-loading-guide.md)；固定版本、真实样本和测量口径，不从查询次数或包大小推导未测收益 |
+| 证据核对 | [验证记录](verification.md)按具体功能章节查；第一轮跳过大段历史流水，区分本机、Mock、真实集成、CI 与生产结论 |
 
 ## 检查点一：页面通过接口读取数据库
 
-先按项目 README 配置 Java 21、Node.js 和 Docker，并启动 MySQL、后端与前端。后端使用 Maven Wrapper，不需要另外安装 Maven。
+先按 README 任选 Windows 本机脚本或 Docker Compose 启动；本机脚本路线不要求安装 Docker。后端使用 Maven Wrapper，不需要另外安装 Maven。
 
 推荐阅读顺序：后端配置 → 活动 Controller → Service → MyBatis Mapper 与 SQL → 前端 API 请求 → 活动列表页面。先不急着阅读所有框架配置。
 
-跟踪当前发现页的一次 `GET /api/activities/search`：浏览器发出四个查询参数，Vite 代理到 Spring Boot，Java 查询 MySQL，返回分页卡片、总数与统计，React 渲染。原 `GET /api/activities` 数组接口继续保留，比较二者合同。使用浏览器开发者工具的 Network 面板检查路径、状态码、响应内容和耗时。
+跟踪发现页的一次 `GET /api/activities/search`：观察 page、pageSize、keyword、status、category 五项条件，默认值可能由客户端省略；开发时 Vite 代理到 Spring Boot，Java 查询 MySQL，返回分页卡片、总数与统计，React 渲染。原 `GET /api/activities` 数组接口继续保留，比较二者合同。使用 Network 面板检查实际路径、状态码、响应和耗时。
 
-**完成标准：** 页面显示数据库中的活动；改变数据库中的一条标题并刷新后，页面能显示新的内容。能画出这次请求经过的组件，并指出前端获取数据的代码和后端执行查询的代码。
+**完成标准：** 页面显示数据库中的活动；通过后台编辑自己新建且未开始的活动标题，刷新发现页后能看到新内容。能画出请求经过的组件，指出前端请求和后端 SQL 的位置。
 
-练习：给活动列表加一个仅影响展示的字段，例如地点。先确认数据库和接口已经提供这个字段，再改 TypeScript 类型与页面；解释类型检查能帮助发现什么错误。
+练习：在 Network 中对照一条活动响应，逐项找到标题、地点、分类、人数和封面在 TypeScript 类型与页面中的位置；先做源码定位，不为练习重复增加已有字段。
 
 再按 [活动发现指南](activity-discovery.md) 阅读 `activityDiscovery.ts → ActivitiesPage → api.ts → ActivityController → ActivityService.search → ActivityMapper → ActivityQuerySql`。区分输入草稿与 URL 已提交条件、当前页卡片与全部匹配统计；理解为什么聚合与分页共享只读快照和一次 UTC 微秒时间。关键词中的 `%`、`_` 和连续空格按字面搜索，不是通配符，也不是自动去空格后的内容。
 
