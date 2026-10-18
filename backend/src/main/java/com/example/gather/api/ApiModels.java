@@ -23,13 +23,14 @@ public final class ApiModels {
 
     public record ActivityView(long id, String title, String description, String location, Instant startsAt,
                                int capacity, int registeredCount, int waitingCount, String registrationStatus, boolean closed,
-                               boolean cancelled, String cancellationReason, Instant cancelledAt, String category) {
+                               boolean cancelled, String cancellationReason, Instant cancelledAt, String category, String coverUrl) {
         public static ActivityView from(ActivityRow row, Instant now) {
             Instant start = row.startsAt().toInstant(ZoneOffset.UTC);
             return new ActivityView(row.id(), row.title(), row.description(), row.location(), start,
                 row.capacity(), row.registeredCount(), row.waitingCount(), row.registrationStatus(),
                 row.cancelledAt() != null || !start.isAfter(now), row.cancelledAt() != null, row.cancellationReason(),
-                row.cancelledAt() == null ? null : row.cancelledAt().toInstant(ZoneOffset.UTC), row.category());
+                row.cancelledAt() == null ? null : row.cancelledAt().toInstant(ZoneOffset.UTC), row.category(),
+                row.coverHash() == null ? null : "/api/activities/" + row.id() + "/cover?v=" + row.coverHash());
         }
     }
 

@@ -49,7 +49,7 @@ export function CreateActivityPage() {
       <PageHeading
         title="发布活动"
         section="活动管理"
-        description="填写活动信息。发布后名额固定，活动开始时关闭报名与取消。"
+        description="填写活动信息。发布后可在编辑页上传封面；名额固定，活动开始时关闭报名与取消。"
       />
       <Card title="基本信息" className="create-form-panel">
         {mutation.error && (

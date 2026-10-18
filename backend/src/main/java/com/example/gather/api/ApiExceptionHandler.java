@@ -13,10 +13,14 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -36,7 +40,8 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(new ErrorView("VALIDATION_ERROR", message));
     }
 
-    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class, ConstraintViolationException.class})
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class, ConstraintViolationException.class,
+        MissingServletRequestPartException.class, MultipartException.class})
     ResponseEntity<ErrorView> invalidRequest(Exception exception, HttpServletRequest request) {
         mark(request, exception);
         return ResponseEntity.badRequest().body(new ErrorView("VALIDATION_ERROR", "请求格式或参数不正确"));
@@ -46,6 +51,19 @@ public class ApiExceptionHandler {
     ResponseEntity<ErrorView> denied(AccessDeniedException exception, HttpServletRequest request) {
         mark(request, exception);
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ErrorView("FORBIDDEN", "没有执行此操作的权限"));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ErrorView> uploadTooLarge(MaxUploadSizeExceededException exception, HttpServletRequest request) {
+        mark(request, exception);
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ErrorView("UPLOAD_TOO_LARGE", "封面图片不能超过 2 MB。"));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    ResponseEntity<ErrorView> unsupportedMedia(HttpMediaTypeNotSupportedException exception, HttpServletRequest request) {
+        mark(request, exception);
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+            .body(new ErrorView("UNSUPPORTED_MEDIA_TYPE", "请求内容类型不正确，请检查后重试"));
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

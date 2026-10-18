@@ -457,6 +457,12 @@ export const api = {
       }),
       signal,
     }),
+  uploadActivityCover: (id: number, file: File, signal?: AbortSignal) => {
+    const body = new FormData(); body.append("file", file);
+    return request<Activity>(`/admin/activities/${id}/cover`, { method: "POST", body, signal });
+  },
+  removeActivityCover: (id: number, signal?: AbortSignal) =>
+    request<Activity>(`/admin/activities/${id}/cover`, { method: "DELETE", signal }),
   cancelActivity: (id: number, reason: string, signal?: AbortSignal) =>
     request<Activity>(`/admin/activities/${id}/cancel`, {
       method: "POST",

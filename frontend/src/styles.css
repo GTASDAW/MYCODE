@@ -437,6 +437,24 @@ main:focus {
   gap: 16px;
   margin-bottom: 18px;
 }
+.activity-cover {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  margin-bottom: 20px;
+  background: #e6f4ff;
+}
+.activity-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.activity-cover-placeholder {
+  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; color: #1668b8; background: linear-gradient(135deg, #e6f4ff, #f0f5ff);
+}
+.activity-cover-placeholder button { border: 0; background: transparent; color: #0958d9; text-decoration: underline; cursor: pointer; }
+.cover-editor { margin-bottom: 24px; }
+.cover-editor .activity-cover { max-width: 560px; }
+.cover-file { display: block; width: 100%; max-width: 100%; margin: 12px 0; }
+.cover-actions { margin-top: 16px; }
 .date-badge {
   flex-shrink: 0;
   width: 56px;

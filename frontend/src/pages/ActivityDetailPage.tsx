@@ -36,6 +36,7 @@ import { safeActivityDetailReturn } from "../activityDetailNavigation";
 import { activityCategoryLabel } from "../activityCategory";
 import { FavoriteButton } from "./FavoriteButton";
 import { CalendarDownloadButton } from "./CalendarDownloadButton";
+import { ActivityCover } from "../ActivityCoverImage";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -190,6 +191,7 @@ function ActivityDetailPage() {
           className="detail-content"
           extra={<ActivityStatus activity={activity} />}
         >
+          <ActivityCover id={activity.id} url={activity.coverUrl} title={activity.title} />
           <Descriptions
             column={1}
             items={[

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "node --test tests/api.test.mjs tests/account.test.mjs tests/activity.test.mjs tests/discovery.test.mjs tests/notifications.test.mjs tests/checkin.test.mjs tests/myregistrations.test.mjs tests/auth-rate-limit.test.mjs tests/audit-logs.test.mjs tests/attendance.test.mjs tests/page-loading.test.mjs tests/password-change.test.mjs tests/categories.test.mjs tests/favorites.test.mjs tests/calendar.test.mjs",
+    "test": "node --test tests/api.test.mjs tests/account.test.mjs tests/activity.test.mjs tests/discovery.test.mjs tests/notifications.test.mjs tests/checkin.test.mjs tests/myregistrations.test.mjs tests/auth-rate-limit.test.mjs tests/audit-logs.test.mjs tests/attendance.test.mjs tests/page-loading.test.mjs tests/password-change.test.mjs tests/categories.test.mjs tests/favorites.test.mjs tests/calendar.test.mjs tests/covers.test.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {

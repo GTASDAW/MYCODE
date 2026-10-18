@@ -12,10 +12,13 @@ final class RequestRoute {
         "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/me/profile", "/api/me/password", "/api/health", "/api/me/registrations", "/api/me/registrations/search", "/api/admin/overview",
         "/api/admin/activities", "/api/admin/audit-logs", "/api/admin/attendance", "/api/admin/monitoring", "/api/me/notifications", "/api/me/notifications/unread-count", "/api/me/favorites");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",
+        "/api/activities/{id}/cover", "/api/admin/activities/{id}/cover",
         "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations",
         "/api/admin/activities/{id}/registrations/export", "/api/admin/activities/{id}/registrations/{registrationId}/check-in",
         "/api/admin/activities/{id}", "/api/admin/activities/{id}/cancel", "/api/admin/audit-logs/{id}", "/api/me/notifications/{id}/read", "/api/me/favorites/{activityId}");
     private static final Pattern DETAIL = Pattern.compile("/api/activities/[^/;]+/?");
+    private static final Pattern COVER = Pattern.compile("/api/activities/[^/;]+/cover/?");
+    private static final Pattern ADMIN_COVER = Pattern.compile("/api/admin/activities/[^/;]+/cover/?");
     private static final Pattern REGISTRATION = Pattern.compile("/api/activities/[^/;]+/registration/?");
     private static final Pattern ROSTER = Pattern.compile("/api/admin/activities/[^/;]+/registrations/?");
     private static final Pattern ROSTER_EXPORT = Pattern.compile("/api/admin/activities/[^/;]+/registrations/export/?");
@@ -49,6 +52,8 @@ final class RequestRoute {
         // Security and Session filters can answer before MVC has identified a handler.
         String path = path(request);
         if (STATIC_ROUTES.contains(path)) return path;
+        if (COVER.matcher(path).matches()) return "/api/activities/{id}/cover";
+        if (ADMIN_COVER.matcher(path).matches()) return "/api/admin/activities/{id}/cover";
         if (FAVORITE.matcher(path).matches()) return "/api/me/favorites/{activityId}";
         if (AUDIT_DETAIL.matcher(path).matches()) return "/api/admin/audit-logs/{id}";
         if (NOTIFICATION_READ.matcher(path).matches()) return "/api/me/notifications/{id}/read";

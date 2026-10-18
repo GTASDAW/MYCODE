@@ -11,6 +11,7 @@ import { useActivityMutation } from "./useActivityMutation";
 import { activityCategoryOptions } from "../activityCategory";
 import type { ActivityCategory } from "../types";
 import { useAdminRead } from "./useAdminRead";
+import { ActivityCoverEditor } from "./ActivityCoverEditor";
 
 export function EditActivityRoute() {
   const { id } = useParams();
@@ -53,16 +54,18 @@ function EditActivityPage() {
 
   return (
     <div className="page-container">
-      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改标题、介绍、地点和分类。开始时间与名额发布后固定。" />
+      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改封面、标题、介绍、地点和分类。开始时间与名额发布后固定。" />
+      {mutation.error && <Alert className="form-alert" type="error" showIcon title={mutation.error} />}
       {resource.loading ? <LoadingState /> : resource.error ? (
         <ErrorState error={resource.error} retry={resource.retry} />
       ) : activity && (
+        <>
+        <ActivityCoverEditor activity={activity} mutation={mutation} />
         <Card title="基本信息" className="create-form-panel">
           <ActivityCancellationNotice activity={activity} />
           {!activity.cancelled && !canManageActivity(activity) && (
             <Alert className="form-alert" type="info" showIcon title="活动已开始，不能编辑" />
           )}
-          {mutation.error && <Alert className="form-alert" type="error" showIcon title={mutation.error} />}
           <Form form={form} layout="vertical" requiredMark={false} onFinish={submit} disabled={mutation.busy || !canManageActivity(activity)}>
             <Form.Item name="title" label="活动标题" rules={[
               { required: true, whitespace: true, message: "请输入活动标题" },
@@ -99,6 +102,7 @@ function EditActivityPage() {
             </div>
           </Form>
         </Card>
+        </>
       )}
     </div>
   );

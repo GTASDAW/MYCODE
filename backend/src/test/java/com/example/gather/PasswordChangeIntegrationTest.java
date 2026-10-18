@@ -140,9 +140,9 @@ class PasswordChangeIntegrationTest {
     @BeforeEach void verifyDatabase() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(9);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(10);
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
-        jdbc.queryForList("SELECT id, category FROM activities LIMIT 0");
+        jdbc.queryForList("SELECT id, category, cover_hash, cover_image FROM activities LIMIT 0");
     }
     @AfterEach void cleanExactFixtures() {
         hooks.hook.set(null); hooks.reads.remove(); hooks.versionFailure.set(false); hooks.failAfterUpdate.set(false); reset(sessions);

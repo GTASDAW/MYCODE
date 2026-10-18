@@ -74,6 +74,11 @@ public class AuditLogService {
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
+    public void coverEdited(long activityId, long actorId, String before, String after, Instant now) {
+        append("EDIT", activityId, actorId, null, List.of(new AuditChange("coverHash", before, after)), utc(now));
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
     public void cancelled(long activityId, long actorId, String reason, LocalDateTime now) {
         append("CANCEL", activityId, actorId, null, List.of(
             new AuditChange("cancelledAt", null, now.toInstant(ZoneOffset.UTC).toString()),

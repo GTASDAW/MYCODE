@@ -6,9 +6,9 @@ import java.time.LocalDateTime;
 public record MyRegistrationRow(long registrationId, String status, LocalDateTime checkedInAt,
                                 long activityId, String title, String description, String location,
                                 LocalDateTime startsAt, int capacity, int registeredCount, int waitingCount,
-                                LocalDateTime cancelledAt, String cancellationReason, String category) {
+                                LocalDateTime cancelledAt, String cancellationReason, String category, String coverHash) {
     public ActivityRow activity() {
         return new ActivityRow(activityId, title, description, location, startsAt, capacity,
-            registeredCount, waitingCount, status, cancelledAt, cancellationReason, category);
+            registeredCount, waitingCount, status, cancelledAt, cancellationReason, category, coverHash);
     }
 }

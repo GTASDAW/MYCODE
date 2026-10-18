@@ -17,6 +17,7 @@ export interface Activity {
   description: string;
   location: string;
   category: ActivityCategory;
+  coverUrl: string | null;
   startsAt: string;
   capacity: number;
   registeredCount: number;
@@ -172,7 +173,7 @@ export interface AdminAuditLog {
   occurredAt: string;
 }
 
-export type AuditLogField = "title" | "description" | "location" | "category" | "startsAt" | "capacity" |
+export type AuditLogField = "title" | "description" | "location" | "category" | "coverHash" | "startsAt" | "capacity" |
   "cancelledAt" | "cancellationReason" | "checkedInAt";
 
 export interface AdminAuditLogDetail extends AdminAuditLog {

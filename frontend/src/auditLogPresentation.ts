@@ -9,6 +9,7 @@ export const auditActionLabels: Record<AuditLogAction, string> = {
 export const auditFieldLabels: Record<AuditLogField, string> = {
   title: "活动标题", description: "活动介绍", location: "活动地点",
   category: "活动分类",
+  coverHash: "活动封面内容编号",
   startsAt: "开始时间（北京时间）", capacity: "活动名额",
   cancelledAt: "取消时间（北京时间）", cancellationReason: "取消原因",
   checkedInAt: "签到时间（北京时间）",

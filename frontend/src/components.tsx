@@ -13,6 +13,7 @@ import { errorMessage } from "./api";
 import type { Activity } from "./types";
 import { activityDetailsPath } from "./activityDiscovery";
 import { activityCategoryLabel } from "./activityCategory";
+import { ActivityCover } from "./ActivityCoverImage";
 
 export function Logo() {
   return (
@@ -214,6 +215,7 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
   const detailsPath = detailsTo ?? activityDetailsPath(activity.id, from);
   return (
     <article className="activity-card" data-activity-id={activity.id}>
+      <ActivityCover id={activity.id} url={activity.coverUrl} title={activity.title} />
       <div className="activity-card-top">
         <DateBadge startsAt={activity.startsAt} />
         <ActivityStatus activity={activity} />

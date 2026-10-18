@@ -13,7 +13,7 @@ import java.util.List;
 public interface ActivityMapper {
     String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
-        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category";
+        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} ORDER BY a.starts_at, a.id")
     List<ActivityRow> findAll(@Param("userId") Long userId);

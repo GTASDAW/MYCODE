@@ -12,6 +12,10 @@ server:
         same-site: lax
         secure: ${SESSION_COOKIE_SECURE:false}
 spring:
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
   # Redis Session is an opt-in profile; the default servlet Session stays in memory.
   autoconfigure:
     exclude:

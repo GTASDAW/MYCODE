@@ -20,6 +20,7 @@ public final class CredentialVersionFilter extends OncePerRequestFilter {
     private static final PathPatternRequestMatcher API = PathPatternRequestMatcher.pathPattern("/api/**");
     private static final PathPatternRequestMatcher PUBLIC_ACTIVITIES = PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/api/activities");
     private static final PathPatternRequestMatcher PUBLIC_ACTIVITY = PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/api/activities/*");
+    private static final PathPatternRequestMatcher PUBLIC_COVER = PathPatternRequestMatcher.pathPattern(HttpMethod.GET, "/api/activities/*/cover");
     private final CredentialVersionMapper versions;
     private final CurrentSessionLogout sessions;
     private final ObjectMapper json;
@@ -56,7 +57,7 @@ public final class CredentialVersionFilter extends OncePerRequestFilter {
             SecurityContextHolder.clearContext();
             write(response, 503, "AUTHENTICATION_UNAVAILABLE", "身份验证暂时不可用，请稍后重试"); return;
         }
-        if (PUBLIC_ACTIVITIES.matches(request) || PUBLIC_ACTIVITY.matches(request)) chain.doFilter(request, response);
+        if (PUBLIC_ACTIVITIES.matches(request) || PUBLIC_ACTIVITY.matches(request) || PUBLIC_COVER.matches(request)) chain.doFilter(request, response);
         else write(response, 401, "SESSION_REVOKED", "登录已失效，请重新登录");
     }
 
