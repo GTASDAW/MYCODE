@@ -1,170 +1,28 @@
-# 从运行项目到讲清楚项目
-
-先按下表学习，每次只完成一阶段。第一轮不需要通读 `docs/`，也不需要先掌握 Docker、Redis 或所有框架配置；已有演示和测试结果是参考，你自己的实操记录从“待自测”开始。
-
-## 第一轮阅读顺序
-
-| 阶段 | 先看哪些内容 | 亲手做什么 | 能做到什么才继续 |
-| --- | --- | --- | --- |
-| 1．跑通与看懂分层 | [README 本地启动](../README.md#本地启动windows) → [架构的技术分工和六张表](architecture.md#技术分工) → 本文检查点一、二 | 打开 Network，找到一次活动搜索；用后台创建自己的未来活动、报名，再刷新查看 | 能画出浏览器 → HTTP → Security → Controller → Service → Mapper → MySQL，并指出用户 ID 来自哪里 |
-| 2．报名事务与候补 | [并发复盘](concurrency-review.md) → [面试卡一](interview-kit.md#技术卡一最后一个名额与候补递补) → 本文检查点三 | 用两个独立会话争一场新活动的 1 个名额，再取消有效报名，观察递补及通知 | 不看答案也能解释行锁、事务、唯一约束各自解决什么；指出锁顺序、FIFO 和回滚断言 |
-| 3．登录与改密安全 | [账户指南](account-guide.md) → [改密指南](password-change-guide.md) → [面试卡二](interview-kit.md#技术卡二登录身份csrf改密与共享-session) | 自建测试账号，在普通/无痕窗口登录，修改密码，再让另一个窗口发请求 | 分清 Cookie、Session、CSRF、角色与凭据版本；解释旧会话何时失效、为何同账号重登也要拦迟到响应 |
-| 4．分页与查询证据 | [我的报名指南](my-registrations-guide.md) → [面试卡三](interview-kit.md#技术卡三个人分页与同一次读取快照) | 观察筛选前后列表与全量统计；沿 SQL 找到聚合、联表和两种 ID | 能解释旧 1 / 新 2 次业务 SELECT，认证额外 1 次，以及同一快照与不同请求的区别 |
-| 5．备份恢复与交付 | [README 恢复命令](../README.md#本地备份与恢复演练) → [恢复边界](delivery-guide.md#备份与恢复边界) → [面试卡四](interview-kit.md#技术卡四备份文件如何证明能恢复) | 确认环境后运行独立恢复演练；只查看摘要和页面截图，不分发原始 SQL | 能说清空目标/受限账号/UUID、图片与七表摘要、真实浏览器和原库不变分别证明什么 |
-| 6．完整演示与表达 | [五分钟流程](demo-guide.md#五分钟流程) → [模拟面试](interview-kit.md#二十分钟模拟面试) → [简历模板](interview-kit.md#可编辑简历条目) | 录一段五分钟演示；关掉答案回答问题，再填自己的职责和验证记录 | 能独立演示、定位代码、解释取舍；不会的题标出来，回对应阶段补练 |
-
-每次学习按四步走：**先预测结果 → 亲手操作 → 定位源码条件 → 合上文档复述**。建议一次专注 45–60 分钟，按通过标准推进，不承诺几天内熟练。记录只需一行：`日期｜场景｜源码入口｜自己运行的命令/操作｜实际结果｜未理解的问题`；填入 [个人掌握自检](interview-kit.md#个人掌握自检)，不用另建学习文档。
-
-先认清几个词：HTTP 是页面与服务端的请求/响应；JSON 是数据格式；TypeScript 检查前端数据类型；Controller 负责入口与参数；Service 放业务与事务；Mapper 执行 SQL；索引帮助查询；事务、唯一约束和行锁共同维护数据一致性。概念不熟时先在这条请求里找例子，再扩展学习。
-
-## 第一轮之后按题目查阅
-
-| 内容 | 阅读入口与抓手 |
-| --- | --- |
-| 公开搜索、分类、收藏 | [活动发现](activity-discovery.md)、[分类](activity-category-guide.md)；收藏沿 FavoriteButton/MyFavoritesPage → FavoriteService → FavoriteMapper，比较 URL、本人隔离、幂等与分页快照 |
-| 通知、签到、审计 | [通知](notification-guide.md)、[签到与导出](checkin-export-guide.md)、[操作记录](audit-log-guide.md)；理解真实事件、首次信息、快照及同事务回滚 |
-| 封面与日历 | [架构中的封面](architecture.md#活动封面)与[日历](architecture.md#活动日历导出)；封面锁前解码/事务内存储、日历读取不覆盖报名状态、下载资源清理 |
-| 限流与共享会话 | [认证限流](auth-rate-limit.md)、[共享 Session](shared-session.md)；Filter 顺序、两桶原子消费、可信来源、内存与 Redis 边界 |
-| 性能与前端加载 | [SQL 优化复盘](query-optimization-review.md)、[加载指南](frontend-loading-guide.md)；固定版本、真实样本和测量口径，不从查询次数或包大小推导未测收益 |
-| 证据核对 | [验证记录](verification.md)按具体功能章节查；第一轮跳过大段历史流水，区分本机、Mock、真实集成、CI 与生产结论 |
-
-## 检查点一：页面通过接口读取数据库
-
-先按 README 任选 Windows 本机脚本或 Docker Compose 启动；本机脚本路线不要求安装 Docker。后端使用 Maven Wrapper，不需要另外安装 Maven。
-
-推荐阅读顺序：后端配置 → 活动 Controller → Service → MyBatis Mapper 与 SQL → 前端 API 请求 → 活动列表页面。先不急着阅读所有框架配置。
-
-跟踪发现页的一次 `GET /api/activities/search`：观察 page、pageSize、keyword、status、category 五项条件，默认值可能由客户端省略；开发时 Vite 代理到 Spring Boot，Java 查询 MySQL，返回分页卡片、总数与统计，React 渲染。原 `GET /api/activities` 数组接口继续保留，比较二者合同。使用 Network 面板检查实际路径、状态码、响应和耗时。
-
-**完成标准：** 页面显示数据库中的活动；通过后台编辑自己新建且未开始的活动标题，刷新发现页后能看到新内容。能画出请求经过的组件，指出前端请求和后端 SQL 的位置。
-
-练习：在 Network 中对照一条活动响应，逐项找到标题、地点、分类、人数和封面在 TypeScript 类型与页面中的位置；先做源码定位，不为练习重复增加已有字段。
-
-再按 [活动发现指南](activity-discovery.md) 阅读 `activityDiscovery.ts → ActivitiesPage → api.ts → ActivityController → ActivityService.search → ActivityMapper → ActivityQuerySql`。区分输入草稿与 URL 已提交条件、当前页卡片与全部匹配统计；理解为什么聚合与分页共享只读快照和一次 UTC 微秒时间。关键词中的 `%`、`_` 和连续空格按字面搜索，不是通配符，也不是自动去空格后的内容。
-
-练习：从搜索结果进详情，刷新、登录、报名，再返回列表，检查条件保留与名额刷新。用 13 场自己创建的临时活动观察 12/1 条分页和不变的全筛选统计；在其他会话占满末页活动，再观察“报名中”列表如何校正页码。对照 `ActivitySearchIntegrationTest` 的并发取消快照用例，解释同一请求的一致性与多次请求之间真实数据变化的区别。
-
-## 检查点二：登录、管理员发布与用户报名
-
-体验管理员账号 `admin / Admin123!` 和普通用户账号 `demo / Demo123!`。依次完成登录、管理员创建活动、普通用户报名、满员后进入候补、查看自己的报名。
-
-阅读认证配置、当前用户获取逻辑和 CSRF 请求处理，再看管理员创建接口与报名服务。重点区分三个问题：浏览器如何证明身份，后端如何判断角色，写请求如何通过 CSRF 校验。
-
-**完成标准：** 用户刷新页面后仍能恢复登录状态；普通用户直接调用管理员接口也会被拒绝；创建出的活动能在列表和详情显示，报名或进入候补后“我的报名”有相应记录。
-
-继续沿管理查询阅读：管理页面 → `api.ts` 中的 `/admin` 请求 → `AdminController` → `AdminService` → `AdminMapper`。查看概览、活动搜索分页和报名名单，确认页面显示的数字和表格行来自接口，而不是写在页面里的演示值。普通用户直接打开管理路径时，权限检查应阻止页面发起管理查询。
-
-练习：用同一批活动对照“未开始”“可报名”“已满员”三种筛选；满员活动应属于未开始活动，但不属于可报名活动。用两个登录会话把一个名额占满，再让第二个用户加入候补；查看活动详情、个人记录和管理名单中的 `候补中` 状态。取消有效报名后确认最早候补自动递补，候补计数和有效人数都更新；再取消候补，确认不会影响有效人数。把前端页码、筛选值与 Network 面板中的查询参数对应起来。
-
-再打开两个独立会话：管理员查询某活动，参与者报名或取消，然后管理员用相同条件再次查询，应看到新人数。观察最后一页的活动因满员离开“报名中”筛选时，管理页如何读取新总数并回到合法页码。这说明搜索条件没有变化，也可能需要新的请求；表格视觉页码和真正发送的页码必须一致。
-
-再按 [我的报名指南](my-registrations-guide.md) 沿 `myRegistrationQuery → MyRegistrationsPage → api.searchRegistrations → ActivityController.searchMine → RegistrationService.searchMine → RegistrationMapper` 阅读。区分本人全部历史的四项统计与当前状态总数、报名 ID 与活动 ID，以及管理员签到写操作和本人签到只读展示。状态、页码写入 URL，详情返回保留条件并重新读数据库；有效报名取消后，末页可能需要用 `replace` 回到合法页。
-
-比较旧数组 `mine/findMine` 和新分页 `searchMine/mineTotals`：旧服务原先一次查报名再逐条读取活动，现在一次联表；新分页用一次聚合和一次当前页联表，共用只读快照和一次时钟。对照 13 条专属测试记录上的实际 SELECT 计数与 `EXPLAIN`，说明候补关联子查询仍有数据库工作，减少往返不能直接推导延迟或吞吐收益。对照取消/签到在两次读取间提交的用例，解释为什么本次保持同一快照、下次请求才能看到新状态。
-
-练习：使用 Network 面板检查一次带 Cookie 和 CSRF 请求头的写请求，说明 Cookie 与 CSRF 令牌各自的作用。查看失败请求时，要区分未登录、权限不足、参数错误和业务拒绝。
-
-再按 [用户注册与个人中心](account-guide.md) 创建自己的账号：注册成功后登录、报名、修改昵称、退出并再次登录，确认资料和报名保留。先沿 `RegisterPage → api.ts → SecurityConfiguration → AuthController → AccountService → UserMapper` 阅读，说明为什么注册仍需要 CSRF、角色为什么固定 `USER`、`uq_users_username` 如何处理同时注册、密码为什么存哈希。然后沿 `ProfilePage → AuthProvider → AuthRequestGuard → ProfileController` 阅读，解释可信用户 ID、资料从数据库读取，以及迟到响应为什么不能覆盖新账号。
-
-练习：同一账号分别登录普通窗口和无痕窗口，在一个窗口修改昵称，再在另一个窗口重新打开个人中心，应该看到新昵称。退出其中一个会话，另一个仍有效。对照测试确认 Session 保存的登录快照没有被资料接口整体重写；“资料最新”与“权限或登录身份重新验证”是不同问题。
-
-## 检查点三：取消、重复请求与并发
-
-先通过页面尝试报名、重复报名、满员后进入候补、取消候补、取消有效报名以及重新报名，再阅读报名和取消的事务代码。确认两个操作都先锁活动记录，且人数更新只发生在 `ACTIVE` 状态真正改变时；递补也在同一事务内完成。
-
-配合 [并发设计复盘](concurrency-review.md)，用“最后一个名额”的例子解释为什么普通的先查再写会超额。接着运行后端测试，关注真实 MySQL 上的 100 个用户争 10 个名额，以及中途异常后的事务回滚。
-
-**完成标准：** 能说明唯一约束、事务和行锁解决的不同问题；测试结果中的 `ACTIVE` 报名数和活动人数一致；候补不占用名额并按队列递补；活动开始后无法报名或取消；重复操作不会导致重复增减人数。组织者取消活动后人数为 0、没有有效或候补记录，并保留首次原因、时间和历史。
-
-练习：在测试环境中设置一个只有 1 个名额的活动，让两个不同用户同时报名。观察结果，并解释第二个请求是在什么位置等待，以及等待结束后为什么不能获得有效名额、而是进入候补。
-
-再按 [活动生命周期](activity-lifecycle.md) 发布一场新活动，编辑标题、介绍、地点和分类，让两个用户形成有效报名和候补，再由管理员取消。沿 `AdminController → ActivityService → ActivityMapper/RegistrationMapper → V3` 阅读，比较用户取消与整场取消：用户取消可能递补，整场取消关闭活动且没有递补；报名 ID 保留，此前取消记录的更新时间不应被改写。分类来自 V8，与取消元数据分开理解。
-
-查看 `ActivityLifecycleIntegrationTest` 对两种行锁顺序和开始边界的控制：报名、编辑或用户取消先拿锁，与组织者先拿锁的返回结果可以不同，但最终数据必须一致。中途异常应回滚人数、报名和取消元数据。数据库 CHECK 不能跨表验证所有报名状态，所以不能把约束当成事务的替代。
-
-前端沿 `ActivityManagementActions → useActivityMutation → AuthProvider/AuthRequestGuard` 跟踪取消提交，观察为何成功、错误和迟到 401 都要检查认证代次，离开页面后为何不能继续触发旧导航。联系真实浏览器用例，说明传输失败可重试和“服务端已成功、响应迟到”的区别。
-
-继续按 [站内通知指南](notification-guide.md) 阅读 V4 和 `RegistrationService.cancel/ActivityService.cancel → NotificationService → NotificationMapper`。递补消息在真实状态变化之后写入；整场取消消息必须在报名状态批量取消前选取收件人。比较“重复请求”与“再次真正递补”，解释为何不能永久按用户、活动和类型唯一去重，以及通知插入或后续 SQL 失败时为什么业务与消息一起回滚。
-
-练习：用户 A 占唯一名额、用户 B 候补，A 取消后让 B 打开通知中心并标读；再次真正递补应生成新的未读记录。另建活动取消后，只有当时有效报名者和候补者收到取消通知，早已自行取消的人不收到。对照 `NotificationIntegrationTest` 的真实锁顺序、插入前后回滚、并发标读与快照用例，指出每条断言保护的业务事实。
-
-前端沿 `api.ts → NotificationProvider → NotificationRequestOrder → NotificationsPage/Layout` 跟踪同一消息的读取与已读操作。未读数涵盖本人全部消息，而不是当前页或当前状态；列表与顶栏协调刷新，没有轮询。账号切换、同账号重登、过期 401 与统计读取顺序都需检查；首次已读时间由服务端保存，前端不靠每次点击覆盖本地时间。
-
-## 检查点四：管理员签到与完整名单导出
-
-按 [签到与 CSV 导出指南](checkin-export-guide.md) 新建一场即将开始的活动，让参与者提前报名。自然到达开始时间后刷新后台名单，再确认签到；不要为手工演示改写已有活动的开始时间。签到后不能撤销，报名与签到历史仍保留。
-
-先沿 `AdminRegistrationsPage → AdminRegistrationTable/useRosterActions → api.ts → AdminController → CheckInService → AdminMapper → V5` 跟踪可信操作人、活动主键锁、锁后时间判断与首次签到。比较签到和报名：两者都锁活动，但签到在报名表只改两个签到字段，另在同事务追加 V6 的首次操作记录；不修改报名状态、`updated_at`、人数、候补或通知。对照真实 MySQL 并发与回滚用例，解释重复请求为什么返回首次信息。
-
-再沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 阅读整场统计与两类 AND 筛选；已签到、未签到只包含 `ACTIVE`，统计不取自当前页。导出读取全部匹配记录，超过 20,000 条明确拒绝，不用分页静默截断。检查下载的 UTF-8 BOM、CRLF、北京时间、双引号转义与文本 Tab 前缀，说明它适合 Excel 人工查看，不能当成无损原始数据导入文件。
-
-前端读取、写入和下载均复用 `AuthProvider` 的认证代次，并检查取消信号、活动、筛选、页码及刷新版本。联系实际迟到响应回归，说明旧成功不能触发下载或提示、旧 401 不能退出新会话。统一客户端保留 JSON 错误与请求编号，下载结束清理对象 URL；各环境运行结果仍以验证记录为准。
-
-**完成标准：** 能解释首次签到的幂等、统计口径、完整导出与 Excel 文本保护的取舍，能够在真实页面完成确认与下载，不把签到说成改变报名资格。
-
-切回该参与者，打开“我的报名”并刷新，查看本人北京时间签到结果；界面不显示签到管理员资料，也不提供自助签到。尝试切换已报名/候补/已取消，四项全量统计仍不变；对照 `readAccountResource` 与 `AuthRequestGuard`，解释同账号重新登录也会改变认证代次，旧成功、旧 401 和离页后的响应都不能覆盖当前记录。
-
-## 检查点五：解释一条管理员操作历史
-
-按 [管理员操作记录指南](audit-log-guide.md) 发布自己的一场新活动，真实编辑一次标题或介绍，再原样保存一次。打开活动管理的“操作记录”，应看到 `CREATE` 和一次 `EDIT`；在详情中指出完整前后值，解释为什么原样保存不增加记录。不要为演示修改预置账号昵称或已有活动时间，也不要删除其他历史。
-
-先沿 `SecurityConfiguration → AuditLogController → AuditLogService.search/detail → AuditLogMapper → V6` 说明仅 ADMIN、列表不读取长 JSON、总数和当前页共用只读快照。再沿 `ActivityService/CheckInService → AuditLogService → context/insert` 说明可信 ID、当前数据库名称快照、白名单字段、`MANDATORY` 与失败全部回滚；数据库三条独立外键不自动保证签到报名与活动相同，须指出业务归属查询。
-
-前端沿 `auditLogQuery → AdminAuditLogsPage → useAdminRead → AdminAuditLogDetail` 跟踪 URL、抽屉、微秒时间与认证代次保护。对照 `AuditLogIntegrationTest` 的无变化/重复、长文快照、微秒未来边界、四类回滚及并发快照用例，以及 `e2e/audit-logs.spec.ts` 的真实读取和迟到成功/401 保护；实际执行结果仍看验证记录。
-
-**完成标准：** 能解释成功事件与请求日志的区别，说明旧记录为什么不随改名变化、失败为什么没有半条历史、为什么没有删除 API，以及测试清理为何先核对外部 actor 与报名归属，再按操作记录→通知→报名→活动→用户删除。
-
-## 补充：读懂签到分析与聚合口径
-
-先沿 `AttendanceController → AttendanceService → AttendanceMapper` 跟踪日期校验、北京时间到 UTC 半开区间、同一次 Clock 和只读快照，再比较全量聚合与分页联表。只有 `ACTIVE` 构成签到分母，没有有效报名的活动仍计入活动场次；整体比例按总签到除以总有效报名，不平均逐场百分比。
-
-从概览的独立签到分析模块跟踪日期草稿、URL、刷新和名单返回，确认加载/失败不伪装为 0，以及旧成功和旧 401 不能污染新认证代次。对照真实 MySQL 的北京跨日边界、并发签到快照、两次业务 SELECT 与实际计划；语句少不等于成本恒定或已测性能收益。详细阅读路径见 [签到分析指南](attendance-guide.md)。
-
-**完成标准：** 能解释当前签到进度与最终出勤结算的区别，说明为什么不从可变报名状态推造历史每日新增，以及 1/1 与 1/9 两场活动的整体比例为何为 20%。
-
-## 检查点六：交付一个可以演示的作品
-
-按 README 使用 Windows 本地脚本启动完整环境，确认页面和 `/api` 接口从同一来源访问。使用演示账号完成核心流程，并检查刷新活动详情与管理名单路径时能否正常打开。有 Docker 的环境再单独验证 Compose；仓库提供配置不等于已经完成容器运行验证。
-
-阅读 [架构与请求流程](architecture.md)，对照代码确认每层的职责。保留实际使用过的启动命令、验证结果和遇到的问题；测试耗时、并发结果和部署地址都要来自真实运行。
-
-**完成标准：** 另一位开发者可以按 README 启动项目；面试官可以使用演示账号浏览、报名和查看记录；你能在几分钟内讲清楚一条请求、一项权限设计和一次并发处理。
-
-准备一个简短演示流程：
-
-1. 展示活动搜索、状态筛选、分页与详情返回，解释卡片、总数和全筛选统计来自 MySQL。
-2. 使用管理员创建活动，切换普通用户报名。
-   需要演示自主注册时，按 [账户指南](account-guide.md#验收与演示) 先创建新账号，再作为这个参与者继续演示。
-3. 展示取消与重新报名，以及满员后加入候补、取消有效报名触发递补；打开“我的报名”筛选、翻页和进详情返回，解释全量统计与当前集合，再打开本人通知中心标读，解释未读数与事务事件。
-4. 用管理概览、活动搜索分页和报名名单展示实际后台能力；另用一场新活动展示编辑、整场取消及保留原因的历史，解释取消筛选与统计口径。
-   另用一场已经自然开始的演示活动确认签到，筛选未签到者并导出完整 CSV，解释人数、首次审计与文本保护。
-   从活动管理进入操作记录，打开真实编辑前后值，解释原样保存、重复取消和重复签到为何不增加记录。
-5. 展示架构图和真实并发测试结果，解释设计取舍。
-
-桌面使用侧栏导航，手机使用抽屉导航。检查管理表格横向滚动只发生在表格内部，整页不能左右溢出；加载、空结果、查询失败和无权限路径都应能正常反馈。
-
-如果有公网部署，将真实地址加入 README；只有本地运行时，明确使用本地演示。Java 服务重启后内存 Session 丢失，需要重新登录，这是当前版本应能解释的限制。
-
-## 进阶练习：用对照验证一次 SQL 优化
-
-先读 [报名锁定查询优化复盘](query-optimization-review.md)，再从 `RegistrationService.lockOpenActivity` 追到 `ActivityMapper.lockById` 和 `ActivityLockRow`。列出业务真正使用的字段，然后沿 `ActivityService.get` 确认完整详情及候补人数仍由真实查询返回。解释为什么删去 COUNT 子查询减少的是 SQL 内部工作，而不是一次 JDBC 往返；为什么最终详情读取仍在行锁与事务中。
-
-对照历史 V2 旧、新查询的实际 MySQL 计划与同一 CI 的 A1 → B1 → B2 → A2 数据。V3 为取消检查增加 `cancelled_at` 第四列，V4 增加通知与业务事务写入，V5 增加签到字段，V6 增加同事务管理员操作记录，V7 增加凭据版本及认证读取，V8 增加分类投影与条件，不能把现状仍称为历史三列实验；复现历史对照需检出 `d781648d7d9036b653a80e3082b609358a59df35`，当前源码变更时实验脚本会拒绝混跑。常规性能任务只运行当前 V9 的单版本测量，活动准备产生的 `CREATE` 不计作报名耗时，报名阶段不得新增管理动作。先核对资源、预热、样本数、错误和人数不变量，再讨论吞吐、P95 与行获取均值；保留重复批次的波动，不从一个最快值推出收益。
-
-**完成标准：** 能区分代码冗余、可检验假设和实测结论；即使收益不稳定，也能说明保留简化查询的原因、必要的行锁，以及这次测量不能回答哪些问题。
-
-## 进阶练习：验证一次前端加载优化
-
-从 `main.tsx → ProtectedRoute → PageContentBoundary → Layout` 区分业务路由、权限、页面内容和 Provider 的归属，再用生产产物的静态/动态依赖图确认首页实际下载什么。说明模块级 lazy 为什么保持身份、筛选为何不重挂页面、慢模块为何不替换导航，以及同一被拒绝的 lazy 结果为什么需要明确的手动整页恢复。
-
-对照固定源码基线与候选的入口 JS/CSS、逐文件 gzip 估算和实际浏览器传输；在相同网络与新上下文中交错读取，保留原始样本与失败。包大小不能直接换算首屏耗时，开发服务器的模块请求也不代表生产拆包。用真实 JS/CSS 失败、404、恢复与深链检查说明功能没有被“优化掉”；阅读路径与实测边界见 [前端加载指南](frontend-loading-guide.md)。
-
-**完成标准：** 能指出首页不需要的页面依赖，解释共享代码为什么仍需下载，区分静态字节估算与浏览器测量，并正确说明无权限检查和加载失败恢复的先后顺序。
-
-## 使用 AI 时保持可解释性
-
-让 AI 逐段解释一个请求，再自己沿代码确认解释是否准确。每次扩展只选一个小目标，例如调整管理搜索提示或改善错误反馈，先写出预期行为，再修改和验证。
-
-遇到错误时提供具体的操作、HTTP 状态、后端异常和相关代码。能复现并缩小问题，比把整个项目交给 AI 重写更容易建立理解。
-
-交付前至少能回答：登录用户 ID 从哪里来，哪些接口需要管理员，为什么不能只靠前端校验或查重，密码如何保存，昵称为什么读取数据库而不整体重写会话，事务从哪里开始与结束，行锁何时释放，通知为什么只对应真实事件、如何与业务一起回滚，签到为何只保留首次信息、完整 CSV 如何限制大小与保护文本，异常后怎么确认回滚，以及两种 Session 模式的重启差异。
+# 源码阅读指南
+
+本文按请求链路列出实现与验证入口。启动方式见 [README](../README.md)，实际运行结果及环境限制见 [验证记录](verification.md)。
+
+## 请求链路
+
+页面通过 [统一 HTTP 客户端](../frontend/src/api.ts) 调用后端；Spring Security 核对 Session、CSRF 和权限，Controller 校验入口，Service 管理业务与事务，Mapper 执行 SQL。用户身份来自可信 Session。
+
+| 功能 | 源码入口 | 合同与验证入口 |
+| --- | --- | --- |
+| 活动查询 | ActivitiesPage → ActivityController → ActivityService → ActivityMapper / ActivityQuerySql | [活动发现](activity-discovery.md)、[分类](activity-category-guide.md) |
+| 报名与候补 | ActivityDetailPage → RegistrationService → ActivityMapper / RegistrationMapper | [并发事务](concurrency-review.md)、[活动生命周期](activity-lifecycle.md) |
+| 注册与资料 | RegisterPage / ProfilePage → AuthProvider → AuthController / ProfileController → AccountService | [账户](account-guide.md) |
+| 改密与会话 | ProfilePage → PasswordChangeService → UserMapper；CredentialVersionFilter 在授权前读取版本 | [改密](password-change-guide.md)、[共享 Session](shared-session.md)、[限流](auth-rate-limit.md) |
+| 本人报名 | MyRegistrationsPage → RegistrationService → RegistrationMapper | [分页、联表与快照](my-registrations-guide.md) |
+| 通知 | NotificationProvider → NotificationService → NotificationMapper | [站内通知](notification-guide.md) |
+| 签到与名单 | AdminRegistrationsPage → CheckInService / AdminService → AdminMapper | [签到与 CSV](checkin-export-guide.md)、[签到分析](attendance-guide.md) |
+| 审计 | AdminAuditLogsPage → AuditLogService → AuditLogMapper | [操作记录](audit-log-guide.md) |
+| 封面与日历 | ActivityCoverEditor → ActivityCoverService；CalendarDownloadButton → activityCalendar | [架构](architecture.md) |
+| 备份恢复 | database-backup.mjs → backup-restore-drill.mjs | [交付与恢复边界](delivery-guide.md) |
+
+## 验证入口
+
+- 后端真实 MySQL 回归位于 backend/src/test/java；专用测试库为 activity_platform_test。
+- 前端纯函数与请求保护回归位于 frontend/tests；真实桌面和手机流程位于 e2e。
+- 增量结构以 backend/src/main/resources/db/migration 为准；既有迁移不改写。
+- [SQL 复盘](query-optimization-review.md)和[前端加载](frontend-loading-guide.md)分别记录测量条件；不从查询次数或产物大小推断未测性能。
+- [本地业务演示](demo-guide.md)提供操作步骤，不替代自动化测试或生产验收。

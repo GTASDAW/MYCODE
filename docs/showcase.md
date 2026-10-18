@@ -1,6 +1,6 @@
 # 集会 Gather：真实界面展示
 
-本页用于浏览作品界面。动态演示按 [五分钟演示指南](demo-guide.md) 进行；快速讲解和简历素材见 [面试展示包](interview-kit.md)，启动方式见 [README](../README.md)。
+本页用于浏览作品界面。动态演示按 [五分钟演示指南](demo-guide.md) 进行，启动方式见 [README](../README.md)。
 
 ## 活动发现 · 桌面
 

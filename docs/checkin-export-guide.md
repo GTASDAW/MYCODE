@@ -87,7 +87,7 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 - 页面离开或条件变化时取消旧请求，迟到成功不能更新新名单、提示旧成功或下载，迟到 401 不能退出新会话。导出使用点击时的两类筛选，不携带客户端身份或分页。
 - 浏览器下载只在当前请求仍有效时创建临时链接，点击前再次检查，结束时移除链接并释放对象 URL。网络失败可以重试；服务端已提交但响应丢失时，签到重试仍保留首次审计。
 
-## 阅读、验证与面试演示
+## 阅读、验证与业务演示
 
 按一次签到请求阅读 `AdminRegistrationsPage → AdminRegistrationTable/useRosterActions → api.ts → AdminController → CheckInService → ActivityMapper/AdminMapper → V5`，再沿 `CheckInService → AuditLogService.checkedIn → AuditLogMapper → V6` 查看首次事件、当前数据库名称快照与 `MANDATORY` 同事务回滚；重复签到在追加之前返回首次结果。随后沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 比较同快照的统计、过滤、排序和完整导出。
 
@@ -99,4 +99,4 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 
 具体执行数量、浏览器下载是否通过及 CI 结果统一见 [验证记录](verification.md)。复现与精确清理见 [交付指南](delivery-guide.md)，跨实例身份及持久化见 [共享 Session 指南](shared-session.md)。测试代码存在与实际运行通过需要分别说明。
 
-面试时用新活动让参与者在开始前报名，等自然到达开始时间后刷新名单，确认签到，再切换未签到筛选与下载 CSV。解释相同活动锁、首次审计幂等、整场统计与筛选总数区别，以及 Excel 人工查看保护的取舍。手工演示不修改已有数据的开始时间，成功签到不能撤销，活动与历史保持保存；完整可选流程见 [演示指南](demo-guide.md)。
+演示时用新活动让参与者在开始前报名，等自然到达开始时间后刷新名单，确认签到，再切换未签到筛选与下载 CSV。解释相同活动锁、首次审计幂等、整场统计与筛选总数区别，以及 Excel 人工查看保护的取舍。手工演示不修改已有数据的开始时间，成功签到不能撤销，活动与历史保持保存；完整可选流程见 [演示指南](demo-guide.md)。

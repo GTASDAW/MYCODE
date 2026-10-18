@@ -176,7 +176,7 @@ CI 附件名为 `signup-query-comparison`，包含测量和精确清理证据。
 
 四段 JSON 保留全部 7200 个正式耗时、1600 个写预热样本、错误/状态、数据库与清理证据；汇总另保留阶段范围、配对变化和每版本/组的 600 原始样本合并分位数。完整产物见本次 [对照任务](https://github.com/GTASDAW/MYCODE/actions/runs/37869706975) 的 `signup-query-comparison` 附件，保留 7 天；本页保存经核对的长期结论，不把已过期附件描述为永久可下载。
 
-## 阅读与面试讲解路径
+## 源码与验证路径
 
 1. 从 `RegistrationService.lockOpenActivity` 确认字段的真实使用者，再对照 `ActivityMapper.lockById` 与 `ActivityLockRow`。
 2. 沿 `ActivityService.get` / `ActivityMapper.findById` 确认候补统计保留，并说明最终读取仍在事务和行锁内。
@@ -184,4 +184,4 @@ CI 附件名为 `signup-query-comparison`，包含测量和精确清理证据。
 4. 对照本次旧、新 SQL 的实际计划，区分一次 JDBC 往返与 SQL 内部子查询。
 5. 先给出假设与固定条件，再展示重复批次及错误/一致性结果，最后给出有限的结论。
 
-面试时可以说明：“我从一次实际压测发现热门活动排队，沿代码找到了未使用的候补统计。但代码冗余不等于主要瓶颈，所以保留一致性设计，在同一主机交错运行两个版本，用实际数据决定能否宣称收益。”完整的行锁、FIFO 与事务设计见 [并发报名复盘](concurrency-review.md)，请求计时边界见 [运行指标说明](observability.md)。
+测量结论：“我从一次实际压测发现热门活动排队，沿代码找到了未使用的候补统计。但代码冗余不等于主要瓶颈，所以保留一致性设计，在同一主机交错运行两个版本，用实际数据决定能否宣称收益。”完整的行锁、FIFO 与事务设计见 [并发报名复盘](concurrency-review.md)，请求计时边界见 [运行指标说明](observability.md)。

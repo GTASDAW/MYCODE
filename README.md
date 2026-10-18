@@ -4,9 +4,7 @@
 
 一个使用 **React + TypeScript 与 Java / Spring Boot** 的活动报名平台，覆盖管理员发布活动、用户报名与候补、站内通知、到场签到、名单导出和管理员操作追溯。界面参考 Ant Design Pro，页面数据来自真实 Java 接口与 MySQL；当前仅在本地运行和演示。
 
-快速了解：[真实界面展示](docs/showcase.md) · [项目讲解与简历素材](docs/interview-kit.md) · [五分钟业务演示](docs/demo-guide.md) · [架构与请求流程](docs/architecture.md)
-
-第一次学习按 [分阶段路线](docs/learning-guide.md#第一轮阅读顺序) 逐项实操，再录一次 [五分钟演示](docs/demo-guide.md#五分钟流程)，最后用 [二十分钟模拟面试](docs/interview-kit.md#二十分钟模拟面试) 检查理解；不需要从头通读全部文档。
+快速了解：[真实界面展示](docs/showcase.md) · [五分钟业务演示](docs/demo-guide.md) · [架构与请求流程](docs/architecture.md)
 
 ## 四个技术亮点
 
@@ -263,7 +261,7 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类、V9 收藏表及 V10 活动封面的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
-- [分阶段学习路线与源码检查点](docs/learning-guide.md)
+- [源码阅读指南](docs/learning-guide.md)
 - [架构与接口说明](docs/architecture.md)
 - [用户注册与个人中心](docs/account-guide.md)
 - [活动编辑、取消与历史记录](docs/activity-lifecycle.md)
@@ -275,9 +273,8 @@ GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测
 - [活动签到分析、加权比例与日期快照](docs/attendance-guide.md)
 - [前端按需加载、静态资源缓存与失败恢复](docs/frontend-loading-guide.md)
 - [并发报名复盘](docs/concurrency-review.md)
-- [五分钟演示与面试讲解](docs/demo-guide.md)
+- [本地业务演示](docs/demo-guide.md)
 - [真实桌面与手机界面展示](docs/showcase.md)
-- [项目讲解、简历素材与掌握自检](docs/interview-kit.md)
 - [自动检查与可复现交付](docs/delivery-guide.md)
 - [Redis 共享 Session 与双实例演示](docs/shared-session.md)
 - [登录与注册限流、可信来源与共享计数](docs/auth-rate-limit.md)

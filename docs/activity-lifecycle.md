@@ -104,4 +104,4 @@ Controller 的 `@Size` 也对原始字符串检查同一长度上限；不能发
 5. `EditActivityPage`、`ActivityManagementActions`、`useActivityMutation`、`AuthRequestGuard`：输入、失败重试、离页与账号切换保护。
 6. `ActivityLifecycleIntegrationTest`、`e2e/lifecycle.spec.ts`、`scripts/redis-session-check.mjs`：真实锁顺序、回滚、页面流程和双实例证据。
 
-面试时可以用一个具体例子说明：“用户报名与组织者取消可能同时到达，权限控制只能决定谁能操作；最终数据正确还需要两者锁同一活动行，并在同一事务中处理人数、状态和取消元数据。历史记录保留且重复取消稳定，方便用户和组织者解释发生了什么。”
+并发场景示例：“用户报名与组织者取消可能同时到达，权限控制只能决定谁能操作；最终数据正确还需要两者锁同一活动行，并在同一事务中处理人数、状态和取消元数据。历史记录保留且重复取消稳定，方便用户和组织者解释发生了什么。”
