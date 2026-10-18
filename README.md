@@ -180,6 +180,30 @@ V7 在用户行增加凭据版本。每个已登录业务 API 请求在授权前
 
 统计只属于当前 Java 进程，重启后重置。路由 P95/最大值是近 5 分钟旋转窗口，健康和监控读取不计入 HTTP Timer；活动记录获取耗时包含 SQL 与行锁等待，不是数据库纯锁等待。范围和排查方式见 [请求追踪与指标说明](docs/observability.md)。
 
+## 本地备份与恢复演练
+
+先按本地启动说明准备 Java JAR 和前端生产产物，并在仓库根执行 `npm ci`。以下为当前 Windows 本地演示配置，演练不会编译或重启原服务：
+
+```powershell
+$env:BACKUP_DB_HOST='127.0.0.1'
+$env:BACKUP_DB_PORT='3307'
+$env:BACKUP_DB_NAME='activity_platform'
+$env:BACKUP_DB_USER='activity'
+$env:BACKUP_DB_PASSWORD='activity_dev_password'
+$env:BACKUP_DB_SERVER_UUID=((Get-Content .runtime/mysql-data/auto.cnf | Where-Object { $_ -match '^server-uuid=' }) -split '=',2)[1].Trim()
+$env:BACKUP_MYSQL_BIN_DIR=(Resolve-Path .tools/mysql/mysql-8.4.11-winx64/bin).Path
+$env:BACKUP_JAVA_BIN=(Resolve-Path '.tools/java/jdk-21.0.12.1+1/bin/java.exe').Path
+$env:BACKUP_DEMO_ADMIN_PASSWORD='Admin123!'
+$env:PLAYWRIGHT_CHANNEL='chrome'
+npm run verify:restore
+```
+
+原演示库只读导出，恢复到新 MySQL 实例的专属空库；再仅在恢复库中生成图片、候补、取消、通知、签到、操作记录及收藏样本，二次备份到另一个空库，实际验证桌面/手机登录、图片、报名和取消。先确认 33418、18091、18092、18589 端口空闲；演练只启停自己创建的子进程，结束关闭临时服务并保留受限目录中的备份、数据及报告，原 5173/8080/3307 服务保持。
+
+单独备份用 `npm run backup:database`；输出包位于忽略目录 `.runtime/backups/<UUID>`，包含 SQL、SHA-256、七表结构与内容摘要。恢复命令为 `npm run restore:database -- <备份目录>`：先由操作者在独立 MySQL 8.4 中建立全新 `gatherrestore<32位小写十六进制>` 空库和仅获该库权限的 `grestore<16位小写十六进制>` 账号，再将同组 `BACKUP_DB_*` 明确指向该目标及其服务器 UUID。原演示/测试库、同源目标、非空库及越权账号均会被拒绝；失败保留现场，不自动覆盖或重试。
+
+这是本地小数据、无写入和无 DDL 窗口的逻辑备份演练。SQL 含账号哈希和图片，目录在 POSIX 使用 0700/0600，在 Windows 设置仅当前用户、SYSTEM 和管理员可访问的 ACL；文件未加密，不进入 Git 或 CI 附件。SHA-256 用于完整性核验，不等同来源认证。具体边界、失败与真实结果见 [交付说明](docs/delivery-guide.md#备份与恢复边界) 和 [验证记录](docs/verification.md)。
+
 ## 验证
 
 先启动本地服务和数据库，再运行：

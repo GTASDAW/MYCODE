@@ -2,6 +2,8 @@
 
 学习目标是理解每段代码为什么存在，并能修改一个功能、定位一个问题。按下面检查点推进，每一步都运行并观察结果。
 
+备份恢复沿 `database-backup.mjs → mysqldump/mysql → backup-restore-drill.mjs` 阅读：区分备份文件校验、真实数据库恢复、浏览器使用三种证据；解释 mysqldump 单事务与 JS 只读快照为什么不是同一视图，为什么本轮需要无写入/DDL 窗口，以及受限 schema 账号如何保护原库。观察七表摘要、JPEG 字节、恢复后的权限/名额约束与原库前后摘要；不把一次约一分钟的小样本演练说成生产 RTO 或在线容灾能力。
+
 封面流程沿 `ActivityCoverEditor → api.uploadActivityCover → ActivityCoverImages → ActivityCoverService → ActivityCoverMapper → V10` 阅读。解释为什么格式、大小和像素需要分别检查，为什么图片解码不应拿活动锁，BLOB 与 hash 同事务如何避免孤儿文件，以及为什么列表只查 hash、相同内容不重复审计。对照真实 MySQL 回滚和桌面/手机上传测试；当前创建先发布文字，再独立上传封面，不把两次请求描述为一次原子创建。
 
 日历下载沿 `CalendarDownloadButton → api.activity → buildActivityCalendar → downloadFile` 阅读：已有接口如何提供最新快照，为什么读取不应覆盖并发报名状态，稳定 UID 为什么只含 origin/活动 ID，以及 UTC、文本转义、UTF-8 字节折行如何组合。比较 `.ics` 无 BOM 与既有 CSV 的 BOM/Tab 策略，解释“生成标准文件”和“某日历客户端实际导入成功”的区别；对照单元及双端下载回归，不引入额外服务。

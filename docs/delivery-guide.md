@@ -6,6 +6,16 @@
 
 CI 的 `container-images` 矩阵按本次 SHA 分别构建 backend/web，两个镜像各一次，复用独立范围的 GHA 构建缓存。Docker tar 仅通过同次运行的一日 artifact 分发到三个隔离回归任务，加载后核对 revision 标签并 `--no-build` 启动；两个 Redis 后端用同一镜像。npm/Maven 缓存、原单元/真实数据库门禁、浏览器/加载恢复、严格限流、固定资源报名一致性和精确清理保持。浏览器仍单 worker，未为并发修改共享 fixtures；比较阶段时间时计入镜像构建、上传、下载、加载和启动，不能只报后半段变快。
 
+## 备份与恢复边界
+
+`scripts/database-backup.mjs` 提供备份、受限恢复和摘要 API，`scripts/backup-restore-drill.mjs` 负责真实独立环境演练；命令与 Windows 配置见 [README](../README.md#本地备份与恢复演练)。备份范围固定为六业务表及 Flyway，先核对回环地址、显式库名/UUID、MySQL 8.4、V1–V10、InnoDB 与演示账号角色。`mysqldump` 采用单事务、逐行与十六进制 BLOB 输出，不带数据库创建/切换、DROP 或强制跳过错误；密码只通过子进程环境传递，Windows 用 result-file 避免 PowerShell 重编码。依据见 [MySQL 官方备份说明](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html)。
+
+备份前后各用一个只读 RR 快照计算七表全字段摘要、结构摘要及迁移校验；mysqldump 属于另一连接，不能与这些快照共用。当前要求整个窗口内无写入/DDL；源摘要改变则不发布包，不把此机制宣称为并发在线备份保证。完整 SQL 与 manifest 最后原子发布，恢复前验证大小/校验和/目录及文件链接，恢复后逐表比对；校验和不能认证恶意改写来源的包，输入仅限可信本地产物。
+
+恢复目标只接受新命名空间的空库、显式服务器 UUID 和专属 schema 账号；SHOW GRANTS 仅允许 USAGE 及该库 ALL，不允许其他库、全局权限、角色或 GRANT OPTION。客户端禁用隐式本地配置、交互 shell/source 和 LOCAL INFILE；源或非空目标拒绝，导入/比对失败保留现场。原库与恢复库都不通过 DROP/清空解决失败。备份及演练目录拒绝符号链接/junction，在 Windows 显式设置 ACL，其余系统用受限权限；SQL、数据目录、bootstrap 凭据及原始日志只留忽略目录，不作为 CI 附件。
+
+完整本机演练先从只读 demo 备份到不同 UUID 的新 mysqld，再仅在新库创建覆盖六业务表的样本并恢复到第二空库，最后核对 API、外键/唯一键/人数约束、图片字节及真实桌面/手机。Java 明确绑定各自目标、禁用演示种子、使用独立 Session Cookie，通过新库 SQL 探针读回绑定后才允许 API 写入；结束仅关闭本次 spawn 的进程，原库前后快照及原端口/PID另行核验。CI 跑安全专项与原完整门禁，本轮完整真实恢复结论以本机记录为准。
+
 ## 自动检查入口
 
 配置提供自动检查入口；已执行、未执行和首次远程运行结论分别记录在验证记录，不能用配置存在代替执行通过。
