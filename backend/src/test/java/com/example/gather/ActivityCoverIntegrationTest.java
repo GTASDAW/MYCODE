@@ -184,7 +184,7 @@ class ActivityCoverIntegrationTest {
         assertThat(response.getContentAsByteArray()).isEqualTo(covers.get(id).coverImage());
         mvc.perform(get(view.coverUrl()).header("If-None-Match", response.getHeader("ETag"))).andExpect(status().isNotModified());
         assertThat(queries.locks).isNotEmpty().allSatisfy(lock -> {
-            assertThat(lock.sql()).isEqualTo("SELECT starts_at, capacity, registered_count, cancelled_at FROM activities WHERE id=? FOR UPDATE");
+            assertThat(lock.sql()).isEqualTo("SELECT starts_at, registration_deadline, capacity, registered_count, cancelled_at FROM activities WHERE id=? FOR UPDATE");
             assertThat(lock.isolation()).isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
         });
         mvc.perform(delete(path(id)).with(user(principal(adminId()))).with(csrf())).andExpect(status().isOk()).andExpect(jsonPath("$.coverUrl").isEmpty());

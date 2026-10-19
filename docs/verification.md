@@ -681,3 +681,5 @@ Redis 修复本地验证：配置专项 8/8（原 4 项加 4 项，包含每个�
 升级前真实恢复runId为cb4c39b5-e196-42e5-b399-39e83aa2ce85，completed/sourcePreserved均true，62.129秒含独立MySQL/应用与浏览器启动，仅为本机小样本。V12真实独立恢复runId为6dcb9ab7-8651-47e6-b62c-9e472579c104，completed/sourcePreserved/cleanupGraceful均true，63.43秒；两次恢复的结构/全字段/图片/12个迁移一致，非空及空报名截止详情/本人报名/收藏投影、严格微秒CHECK及桌面/手机流程通过，源库无写入/DDL且前后摘要一致。只用于本机演练，不推断生产恢复时长。
 
 本地服务已恢复默认限流，仍仅本机演示；远程完整CI结果按本轮代码推送后记录，本机专项不替代默认容器或Redis双实例验证。SQL、凭据、数据目录、原始日志、截图、报告和构建产物均留受限或忽略目录。
+
+首次代码提交eed050f的 [CI 39272768978](https://github.com/GTASDAW/MYCODE/actions/runs/39272768978) 前端和两镜像通过，后端266项中265项通过、1项失败，后续依赖门禁跳过。失败为ActivityCoverIntegrationTest的精确锁SQL断言未同步本轮报名校验必需的registration_deadline列；现仅同步该期望，保留完整热锁列白名单和READ_COMMITTED断言，不改业务实现或扩大投影。修复后本机真实MySQL封面专项10/10通过，完整CI结果按实际继续记录。
