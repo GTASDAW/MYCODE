@@ -122,6 +122,12 @@ V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 
 
 前端状态/页码/每页数量存于 `/my-registrations` URL，默认省略，改变状态或数量回第一页；刷新、历史和详情返回保留条件，越界 `replace` 修正。详情来源按精确内部 `/activities` 或 `/my-registrations` 分派与规范化，保留原公开列表安全合同；个人读取和详情操作使用认证代次、请求中止及页面条件保护，旧 401 不使新会话退出。读取不增加活动写锁，没有轮询、新迁移或新索引。合同与真实执行计划见 [我的报名指南](my-registrations-guide.md)。
 
+## 复制活动与普通发布
+
+复制是管理员发布表单的辅助入口，/admin/activities/new?copyFrom={id} 复用 GET /api/activities/{id} 读取公开来源字段，再由原 POST /api/admin/activities 新建。所有来源状态可用，但入口与页面仍在管理员门禁内；只预填五项基本资料，清空起止时间，无封面/人员/状态/历史关联，也不保存来源ID或草稿。无新增后端接口、数据库字段、依赖或迁移，保持V11。
+
+CreateActivityPage 保留页面实例，通过按路径/来源/身份隔离的来源读取和表单子区域保护草稿；成功读取才预填一次。提交显式构造 NewActivity，旧提交不能导航或影响新来源/身份；登录返回保留查询参数。具体参数与错误行为见 [活动生命周期](activity-lifecycle.md#管理员复制活动)。
+
 ## 管理查询与统计口径
 
 管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations`、操作记录 `/admin/audit-logs` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。

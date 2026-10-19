@@ -38,6 +38,7 @@ import { activityCategoryLabel } from "../activityCategory";
 import { FavoriteButton } from "./FavoriteButton";
 import { CalendarDownloadButton } from "./CalendarDownloadButton";
 import { ActivityCover } from "../ActivityCoverImage";
+import { ActivityCopyLink } from "./ActivityCopyLink";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -178,6 +179,7 @@ function ActivityDetailPage() {
               <FavoriteButton activityId={activity.id} detailPath={detailPath} />
               <CalendarDownloadButton activityId={activity.id} cancelled={activity.cancelled} detailPath={detailPath} refresh={resource.retry} />
               {auth.user?.role === "ADMIN" && <>
+              <ActivityCopyLink activityId={activity.id} />
               <ActivityManagementActions activity={activity} onChanged={resource.setData} disabled={busy} />
               <Link to={`/admin/activities/${activity.id}/registrations`}>
                 <Button>报名名单</Button>

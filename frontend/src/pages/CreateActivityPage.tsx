@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import {
   App as AntApp,
   Alert,
@@ -9,42 +10,37 @@ import {
   Select,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { api } from "../api";
-import { PageHeading } from "../components";
+import { useAuth } from "../auth";
+import { ErrorState, LoadingState, PageHeading } from "../components";
 import { activityEndInputError, beijingInputMin, beijingInputToIso, instantMicroseconds } from "../date";
 import { activityCategoryOptions } from "../activityCategory";
 import type { ActivityCategory } from "../types";
 import { useActivityMutation } from "./useActivityMutation";
-
-interface CreateActivityForm {
-  title: string;
-  description: string;
-  location: string;
-  startsAt: string;
-  endsAt?: string;
-  capacity: number;
-  category: ActivityCategory;
-}
+import { useAdminRead } from "./useAdminRead";
+import { activityCopyDraft, activityCreateRequest, ordinaryActivityCreatePath,
+  parseActivityCopySource, readActivityCopySource } from "../activityCopy";
+import type { ActivityCreateFormValues } from "../activityCopy";
 
 export function CreateActivityPage() {
-  const navigate = useNavigate();
-  const mutation = useActivityMutation();
-  const { message } = AntApp.useApp();
-
-  async function submit(values: CreateActivityForm) {
-    await mutation.run(signal => api.createActivity({
-      ...values,
-      title: values.title.trim(),
-      description: values.description.trim(),
-      location: values.location.trim(),
-      startsAt: beijingInputToIso(values.startsAt),
-      endsAt: values.endsAt ? beijingInputToIso(values.endsAt) : null,
-    }, signal), activity => {
-      message.success("活动已发布");
-      navigate(`/activities/${activity.id}`);
-    });
-  }
+  const { pathname, search } = useLocation();
+  const auth = useAuth();
+  const source = parseActivityCopySource(search);
+  const sourceScope = source.kind === "copy" ? `copy:${source.id}` : source.kind;
+  const resource = useAdminRead(signal => readActivityCopySource(source, api.activity, signal), `${pathname}:activity-create:${sourceScope}`);
+  const account = auth.captureAccountRequest();
+  const formScope = `${pathname}:${sourceScope}:${account?.userId}:${account?.generation}`;
+  const liveScope = useRef<string | null>(formScope);
+  liveScope.current = formScope;
+  useLayoutEffect(() => {
+    liveScope.current = formScope;
+    return () => { if (liveScope.current === formScope) liveScope.current = null; };
+  }, [formScope]);
+  const invalid = source.kind === "invalid";
+  const copying = source.kind === "copy";
+  const ready = source.kind === "ordinary" || copying && !resource.loading && !resource.error && !!resource.data;
+  const returnPath = pathname + search;
 
   return (
     <div className="page-container">
@@ -53,15 +49,46 @@ export function CreateActivityPage() {
         section="活动管理"
         description="填写活动信息，可选填结束时间。开始、结束时间与名额发布后固定，活动开始时关闭报名与取消。"
       />
+      {source.kind !== "ordinary" && <p><Link to={ordinaryActivityCreatePath}>普通发布</Link></p>}
+      {invalid ? <ErrorState error={new Error("复制来源参数无效，请使用唯一的正整数活动编号。")} retry={resource.retry} />
+        : copying && resource.loading ? <LoadingState />
+          : copying && resource.error ? <ErrorState error={resource.error} retry={resource.retry} />
+            : null}
+      {ready && <>
+        {copying && resource.data && <Alert className="form-alert" type="info" showIcon title="复制活动"
+          description={<span>来源活动：{resource.data.title}。发布将创建新活动；请重新填写开始时间，按需填写结束时间，封面发布后另传。</span>} />}
+        <ActivityCreateForm key={formScope} scope={formScope} returnPath={returnPath}
+          isCurrent={() => liveScope.current === formScope}
+          initialValues={copying && resource.data ? activityCopyDraft(resource.data) : { capacity: 20, category: "UNCATEGORIZED" }} />
+      </>}
+    </div>
+  );
+}
+
+function ActivityCreateForm({ initialValues, scope, returnPath, isCurrent }: {
+  initialValues: Partial<ActivityCreateFormValues>; scope: string; returnPath: string; isCurrent: () => boolean;
+}) {
+  const navigate = useNavigate();
+  const mutation = useActivityMutation({ scope, returnPath, isCurrent });
+  const { message } = AntApp.useApp();
+
+  async function submit(values: ActivityCreateFormValues) {
+    await mutation.run(signal => api.createActivity(activityCreateRequest(values), signal), activity => {
+      message.success("活动已发布");
+      navigate(`/activities/${activity.id}`);
+    });
+  }
+
+  return (
       <Card title="基本信息" className="create-form-panel">
         {mutation.error && (
           <Alert className="form-alert" type="error" showIcon title={mutation.error} />
         )}
-        <Form<CreateActivityForm>
+        <Form<ActivityCreateFormValues>
           layout="vertical"
           requiredMark={false}
           onFinish={submit}
-          initialValues={{ capacity: 20, category: "UNCATEGORIZED" }}
+          initialValues={initialValues}
           disabled={mutation.busy}
         >
           <Form.Item
@@ -183,6 +210,5 @@ export function CreateActivityPage() {
           </div>
         </Form>
       </Card>
-    </div>
   );
 }

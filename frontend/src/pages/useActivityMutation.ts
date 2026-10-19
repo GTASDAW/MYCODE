@@ -6,7 +6,7 @@ import type { Activity } from "../types";
 
 // A page owns one submission. Both successful and failed responses must still
 // belong to its mounted page and the authentication that started the request.
-export function useActivityMutation() {
+export function useActivityMutation(options: { scope?: string; returnPath?: string; isCurrent?: () => boolean } = {}) {
   const auth = useAuth();
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -15,7 +15,8 @@ export function useActivityMutation() {
   const mounted = useRef(false);
   const submission = useRef<AbortController | null>(null);
   const account = auth.captureAccountRequest();
-  const scope = `${pathname}:${account?.userId}:${account?.generation}`;
+  const pageScope = options.scope === undefined ? pathname : `${pathname}:${options.scope}`;
+  const scope = `${pageScope}:${account?.userId}:${account?.generation}`;
   const currentScope = useRef(scope);
   currentScope.current = scope;
 
@@ -34,7 +35,7 @@ export function useActivityMutation() {
     request: (signal: AbortSignal) => Promise<Activity>,
     onSuccess: (activity: Activity) => void,
   ) {
-    if (submission.current) return;
+    if (submission.current || options.isCurrent && !options.isCurrent()) return;
     const account = auth.captureAccountRequest();
     if (!account || auth.user?.role !== "ADMIN") return;
     const controller = new AbortController();
@@ -42,7 +43,8 @@ export function useActivityMutation() {
     setBusy(true);
     setError(null);
     const current = () => mounted.current && !controller.signal.aborted &&
-      currentScope.current === scope && submission.current === controller && auth.isCurrentAccountRequest(account);
+      currentScope.current === scope && submission.current === controller && auth.isCurrentAccountRequest(account) &&
+      (!options.isCurrent || options.isCurrent());
     try {
       const activity = await request(controller.signal);
       if (current()) onSuccess(activity);
@@ -51,7 +53,7 @@ export function useActivityMutation() {
       if (err instanceof ApiError && err.status === 401) {
         auth.expire();
         navigate("/login", {
-          state: { from: pathname, notice: "登录已过期，请重新登录后继续。" },
+          state: { from: options.returnPath ?? pathname, notice: "登录已过期，请重新登录后继续。" },
         });
       } else setError(errorMessage(err));
     } finally {

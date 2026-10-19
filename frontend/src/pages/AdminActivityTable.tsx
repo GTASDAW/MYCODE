@@ -9,6 +9,7 @@ import { activityAuditLogPath } from "../auditLogQuery";
 import { activityCategoryLabel } from "../activityCategory";
 import { LoadingState } from "../components";
 import { useActivityClock } from "../useActivityClock";
+import { ActivityCopyLink } from "./ActivityCopyLink";
 import "./adminActivityTable.css";
 
 const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Activity> => [
@@ -70,6 +71,7 @@ const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Acti
     render: (_, row) => (
       <Space size="middle" wrap>
         <Link to={`/activities/${row.id}`}>查看详情</Link>
+        <ActivityCopyLink activityId={row.id} />
         <Link to={`/admin/activities/${row.id}/registrations`}>报名名单</Link>
         <Link to={activityAuditLogPath(row.id)}>操作记录</Link>
         <ActivityManagementActions activity={row} compact onChanged={onChanged} />
@@ -103,6 +105,7 @@ export function AdminActivityTable({
           <p className="metadata">有效报名：{activity.registeredCount} / {activity.capacity}</p>
           <Space wrap size="middle" className="admin-activity-mobile-actions">
             <Link to={`/activities/${activity.id}`}>查看详情</Link>
+            <ActivityCopyLink activityId={activity.id} />
             <Link to={`/admin/activities/${activity.id}/registrations`}>报名名单</Link>
             <Link to={activityAuditLogPath(activity.id)}>操作记录</Link>
             <ActivityManagementActions activity={activity} compact onChanged={onChanged} />
