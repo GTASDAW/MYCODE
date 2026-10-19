@@ -146,6 +146,8 @@ export function ActivitiesPage() {
                 { value: "OPEN", label: "报名中" },
                 { value: "FULL", label: "已满员" },
                 { value: "STARTED", label: "已开始" },
+                { value: "ONGOING", label: "进行中" },
+                { value: "ENDED", label: "已结束" },
                 { value: "CANCELLED", label: "已取消" },
                 { value: "UPCOMING", label: "即将开始" },
               ]}

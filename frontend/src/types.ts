@@ -182,7 +182,7 @@ export interface AdminAuditLogDetail extends AdminAuditLog {
   changes: { field: AuditLogField; before: string | null; after: string | null }[];
 }
 
-export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "UPCOMING" | "CANCELLED";
+export type ActivityFilter = "ALL" | "OPEN" | "FULL" | "STARTED" | "ONGOING" | "ENDED" | "UPCOMING" | "CANCELLED";
 export type ActivityCategory = "UNCATEGORIZED" | "TECHNOLOGY" | "SPORTS" | "CULTURE" | "OTHER";
 export type ActivityCategoryFilter = "ALL" | ActivityCategory;
 export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";

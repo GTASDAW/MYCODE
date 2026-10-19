@@ -14,6 +14,8 @@ final class ActivityQuerySql {
             <when test="status == 'OPEN'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count &lt; a.capacity</when>
             <when test="status == 'FULL'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND a.registered_count = a.capacity</when>
             <when test="status == 'STARTED'">AND a.cancelled_at IS NULL AND a.starts_at &lt;= #{now}</when>
+            <when test="status == 'ONGOING'">AND a.cancelled_at IS NULL AND a.starts_at &lt;= #{now} AND a.ends_at IS NOT NULL AND a.ends_at &gt; #{now}</when>
+            <when test="status == 'ENDED'">AND a.cancelled_at IS NULL AND a.ends_at IS NOT NULL AND a.ends_at &lt;= #{now}</when>
             <when test="status == 'UPCOMING'">AND a.cancelled_at IS NULL AND a.starts_at &gt; #{now}</when>
             <when test="status == 'CANCELLED'">AND a.cancelled_at IS NOT NULL</when>
           </choose>

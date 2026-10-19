@@ -21,7 +21,7 @@ import java.util.Set;
 
 @Service
 public class ActivityService {
-    private static final Set<String> SEARCH_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "CANCELLED", "UPCOMING");
+    private static final Set<String> SEARCH_STATUSES = Set.of("ALL", "OPEN", "FULL", "STARTED", "ONGOING", "ENDED", "CANCELLED", "UPCOMING");
     private final ActivityMapper activities;
     private final RegistrationMapper registrations;
     private final NotificationService notifications;

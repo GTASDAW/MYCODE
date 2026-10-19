@@ -102,7 +102,7 @@ flowchart LR
 
 ## 公开活动发现
 
-`/activities` 通过 `GET /api/activities/search` 查询分页对象 `{items,total,page,pageSize,summary}`，旧 `/api/activities` 数组接口继续保留。公开分页默认 12 条，最多 100 条；关键词最多 200 个 UTF-16 代码单元，在标题或地点中作字面子串匹配，不裁剪空格。公开和管理查询共用 `ActivityQuerySql.FILTER`，六种状态沿用下表口径。查询身份来自 Session，客户端不能指定其他人的 `registrationStatus`。
+`/activities` 通过 `GET /api/activities/search` 查询分页对象 `{items,total,page,pageSize,summary}`，旧 `/api/activities` 数组接口继续保留。公开分页默认 12 条，最多 100 条；关键词最多 200 个 UTF-16 代码单元，在标题或地点中作字面子串匹配，不裁剪空格。公开和管理查询共用 `ActivityQuerySql.FILTER`，八种状态沿用下表口径。查询身份来自 Session，客户端不能指定其他人的 `registrationStatus`。
 
 V8 为活动响应增加 `category`，公开及管理列表接受默认 `ALL` 的分类过滤，与状态和关键词共同作用于聚合和当前页，维持原快照、时间和排序。创建缺失/null 分类默认未分类，编辑缺失/null 保留现值，分类编辑和真实审计共用原活动锁及事务；个人报名的独立联表同步字段，报名热锁四列保持。固定代码、兼容规则、URL 与执行计划阅读路径见 [分类指南](activity-category-guide.md)。
 
@@ -134,7 +134,9 @@ V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 
 | `UPCOMING` | 未取消且开始时间晚于当前时间，包含满员活动 |
 | `OPEN` | 未取消、尚未开始且有剩余名额 |
 | `FULL` | 未取消、尚未开始且有效报名人数等于总名额 |
-| `STARTED` | 未取消且开始时间等于或早于当前时间 |
+| `STARTED` | 未取消且开始时间等于或早于当前时间；含进行中、已结束和未知结束 |
+| `ONGOING` | 未取消且结束非空，开始时间 ≤ 当前时间 < 结束时间 |
+| `ENDED` | 未取消且结束非空，结束时间 ≤ 当前时间 |
 | `CANCELLED` | 取消时间非空，不依赖原开始时间 |
 
 概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的时间条件；`fullActivities` 只统计未取消且尚未开始的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消且尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。

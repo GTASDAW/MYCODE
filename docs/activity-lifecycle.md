@@ -8,7 +8,7 @@
 
 创建接口接受可选的 UTC Instant 字段 endsAt，缺失或 null 均不提供结束时间。开始、结束先截断到微秒，非空结束必须严格晚于开始，否则返回 400；V11 新增可空 DATETIME(6) 与同样的数据库 CHECK。旧活动不回填，开始、结束与名额创建后固定。
 
-所有活动响应（包括旧数组、分页、详情、管理名单、本人报名及收藏中的活动）增加 endsAt，其余字段保持兼容。closed 继续表示报名/用户取消已关闭，不表示活动已经结束；STARTED 筛选仍包含所有未取消且已开始的活动，既有统计口径不变。
+所有活动响应（包括旧数组、分页、详情、管理名单、本人报名及收藏中的活动）增加 endsAt，其余字段保持兼容。closed 继续表示报名/用户取消已关闭，不表示活动已经结束；STARTED 筛选仍包含所有未取消且已开始的活动；ONGOING 仅筛选已有结束时间且当前处于起止区间的活动，ENDED 仅筛选结束时间不晚于当前的活动，二者排除历史空结束时间，既有统计口径不变。
 
 | 时间条件（取消优先） | 页面状态 |
 | --- | --- |
@@ -91,7 +91,7 @@ Controller 的 `@Size` 也对原始字符串检查同一长度上限；不能发
 
 内部锁定投影现在包含开始时间、总名额、有效人数和 `cancelled_at` 四列，以支持新的业务判断。公开详情仍读取展示字段和真实候补人数；这与旧 V2 三列优化实验是不同的版本合同，见 [历史查询优化复盘](query-optimization-review.md)。
 
-管理活动筛选新增 `CANCELLED`；`ALL` 包含全部活动，`UPCOMING`、`OPEN`、`FULL`、`STARTED` 都排除已取消活动。概览新增 `cancelledActivities`，`totalActivities` 继续含取消活动，其他活动时间状态和可报名名额排除取消活动。`activeRegistrations` 和 `waitingRegistrations` 仍直接统计报名表对应状态；取消事务完成后，该活动不贡献这两个值。统计和页面的详细合同见 [架构说明](architecture.md#管理查询与统计口径)。
+管理活动筛选新增 `CANCELLED`；`ALL` 包含全部活动，`UPCOMING`、`OPEN`、`FULL`、`STARTED`、`ONGOING`、`ENDED` 都排除已取消活动。概览新增 `cancelledActivities`，`totalActivities` 继续含取消活动，其他活动时间状态和可报名名额排除取消活动。`activeRegistrations` 和 `waitingRegistrations` 仍直接统计报名表对应状态；取消事务完成后，该活动不贡献这两个值。统计和页面的详细合同见 [架构说明](architecture.md#管理查询与统计口径)。
 
 ## 页面与请求生命周期
 

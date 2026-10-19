@@ -1,7 +1,7 @@
 import { parseActivityCategoryFilter } from "./activityCategory.ts";
 import type { ActivityFilter, ActivitySearchQuery } from "./types";
 
-const statuses: ActivityFilter[] = ["ALL", "OPEN", "FULL", "STARTED", "CANCELLED", "UPCOMING"];
+const statuses: ActivityFilter[] = ["ALL", "OPEN", "FULL", "STARTED", "ONGOING", "ENDED", "CANCELLED", "UPCOMING"];
 
 function positiveInteger(value: string | null, fallback: number, maximum: number) {
   if (value === null || !/^\d+$/.test(value)) return fallback;

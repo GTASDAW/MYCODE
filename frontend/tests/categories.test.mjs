@@ -29,7 +29,7 @@ test('activity categories expose exactly the fixed five case-sensitive codes wit
 });
 
 test('public category URLs combine literal keywords, statuses and stable pagination without changing the keyword contents', () => {
-  for (const category of Object.keys(categories)) for (const status of ['ALL', 'OPEN', 'FULL', 'STARTED', 'CANCELLED', 'UPCOMING']) {
+  for (const category of Object.keys(categories)) for (const status of ['ALL', 'OPEN', 'FULL', 'STARTED', 'ONGOING', 'ENDED', 'CANCELLED', 'UPCOMING']) {
     const query = { keyword: ' 上海 %_! +&? ', status, category, page: 3, pageSize: 24 };
     assert.deepEqual(parseActivityQuery(serializeActivityQuery(query)), { query, notice: null });
   }
@@ -43,12 +43,14 @@ test('public category URLs combine literal keywords, statuses and stable paginat
 });
 
 test('public details and login returns preserve a canonical category filter without accepting an admin or external list destination', () => {
-  const source = '/activities?keyword=%25_&status=OPEN&category=CULTURE&page=2&pageSize=24';
-  assert.equal(safeActivityListPath(source), source);
-  assert.equal(safeActivityDetailReturn(source), source);
-  const details = activityDetailsPath(42, source);
-  assert.equal(new URLSearchParams(details.split('?')[1]).get('from'), source);
-  assert.equal(safeReturnPath(details), details);
+  for (const status of ['OPEN', 'STARTED', 'ONGOING', 'ENDED']) {
+    const source = `/activities?keyword=%25_&status=${status}&category=CULTURE&page=2&pageSize=24`;
+    assert.equal(safeActivityListPath(source), source);
+    assert.equal(safeActivityDetailReturn(source), source);
+    const details = activityDetailsPath(42, source);
+    assert.equal(new URLSearchParams(details.split('?')[1]).get('from'), source);
+    assert.equal(safeReturnPath(details), details);
+  }
   assert.equal(safeActivityListPath('/activities?category=SPORTS&unknown=ignored&page=0002'), '/activities?category=SPORTS&page=2');
   for (const path of ['/admin/activities?category=SPORTS', '//evil.example/activities?category=SPORTS', '/activities/42?category=SPORTS'])
     assert.equal(safeActivityListPath(path), '/activities');
@@ -61,13 +63,17 @@ test('admin management owns URL defaults and preserves committed AND conditions 
   assert.deepEqual(query, { keyword: '%_', status: 'UPCOMING', category: 'TECHNOLOGY', page: 2, pageSize: 20 });
   assert.equal(adminActivityListPath(query), '/admin/activities?keyword=%25_&status=UPCOMING&category=TECHNOLOGY&page=2&pageSize=20');
   assert.equal(activityListPath({ ...defaultActivityQuery, category: 'UNCATEGORIZED' }), '/activities?category=UNCATEGORIZED');
-  for (const category of ['ALL', ...Object.keys(categories)]) {
-    const expected = { ...defaultAdminActivityQuery, category, pageSize: 7 };
+  for (const category of ['ALL', ...Object.keys(categories)]) for (const status of ['ALL', 'STARTED', 'ONGOING', 'ENDED']) {
+    const expected = { ...defaultAdminActivityQuery, keyword: '中文 %_! +&?', category, status, page: 3, pageSize: 7 };
     assert.deepEqual(parseAdminActivityQuery(serializeAdminActivityQuery(expected)).query, expected);
+    assert.equal(safeReturnPath(adminActivityListPath(expected)), adminActivityListPath(expected));
   }
 });
 
 test('admin malformed category and paging recover safely without losing other valid criteria or custom sizes', () => {
+  for (const status of ['ongoing', 'ended', 'ONGOING ', 'ENDED ', 'ONGOING_ENDED'])
+    assert.deepEqual(parseAdminActivityQuery(`?${new URLSearchParams({ keyword: ' 中文 %_ ', category: 'SPORTS', status, page: '2', pageSize: '7' })}`).query,
+      { keyword: '中文 %_', category: 'SPORTS', status: 'ALL', page: 2, pageSize: 7 });
   assert.deepEqual(parseAdminActivityQuery('?category=ADMIN&status=FULL&page=-2&pageSize=101').query,
     { ...defaultAdminActivityQuery, status: 'FULL' });
   assert.deepEqual(parseAdminActivityQuery('?category=SPORTS&page=2147483647&pageSize=100').query,

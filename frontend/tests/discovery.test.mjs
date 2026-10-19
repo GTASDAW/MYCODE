@@ -39,9 +39,11 @@ test('long URL keywords are cleared with an explicit notice while other valid co
   assert.equal(parseActivityQuery(`?${new URLSearchParams({ keyword: '😀'.repeat(101) })}`).query.keyword, '');
 });
 
-test('all lifecycle status filters retain their exact wire values', () => {
-  for (const status of ['ALL', 'OPEN', 'FULL', 'STARTED', 'CANCELLED', 'UPCOMING'])
+test('all lifecycle status filters retain their exact wire values including the legacy started union', () => {
+  for (const status of ['ALL', 'OPEN', 'FULL', 'STARTED', 'ONGOING', 'ENDED', 'CANCELLED', 'UPCOMING'])
     assert.equal(parseActivityQuery(`?status=${status}`).query.status, status);
+  for (const status of ['ongoing', 'ended', 'ONGOING ', 'ENDED ', 'ONGOING_ENDED'])
+    assert.equal(parseActivityQuery(`?${new URLSearchParams({ status })}`).query.status, 'ALL');
 });
 
 test('detail return destinations accept only the internal activities list and normalize its known query parameters', () => {
@@ -57,10 +59,12 @@ test('detail return destinations accept only the internal activities list and no
 });
 
 test('detail hrefs preserve the list query after refresh while unrelated entry points remain compatible', () => {
-  const source = '/activities?keyword=%E4%B8%8A%E6%B5%B7&status=OPEN&page=2&pageSize=24';
-  const details = activityDetailsPath(42, source);
-  assert.equal(details.split('?')[0], '/activities/42');
-  assert.equal(new URLSearchParams(details.slice(details.indexOf('?'))).get('from'), source);
+  for (const status of ['OPEN', 'STARTED', 'ONGOING', 'ENDED']) {
+    const source = `/activities?keyword=%E4%B8%8A%E6%B5%B7&status=${status}&category=SPORTS&page=2&pageSize=24`;
+    const details = activityDetailsPath(42, source);
+    assert.equal(details.split('?')[0], '/activities/42');
+    assert.equal(new URLSearchParams(details.slice(details.indexOf('?'))).get('from'), source);
+  }
   assert.equal(activityDetailsPath(42), '/activities/42');
   assert.equal(new URLSearchParams(activityDetailsPath(42, '//example.com').split('?')[1]).get('from'), '/activities');
 });

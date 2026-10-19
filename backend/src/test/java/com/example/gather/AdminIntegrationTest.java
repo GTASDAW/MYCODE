@@ -2,6 +2,7 @@ package com.example.gather;
 
 import com.example.gather.api.AdminModels.OverviewView;
 import com.example.gather.api.ApiModels.CreateActivityRequest;
+import com.example.gather.api.ApiModels.CancelActivityRequest;
 import com.example.gather.mapper.UserMapper;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
@@ -161,6 +162,40 @@ class AdminIntegrationTest {
     }
 
     @Test
+    void ongoingAndEndedFiltersRequireAdminAndPreserveUnknownAndCancelledSemantics() throws Exception {
+        String prefix = "Period" + UUID.randomUUID().toString().replace("-", "");
+        long ongoing = createActivity(prefix + " ongoing", "Venue", 2);
+        long ended = createActivity(prefix + " ended", "Venue", 2);
+        long unknown = createActivity(prefix + " unknown", "Venue", 2);
+        long cancelled = createActivity(prefix + " cancelled", "Venue", 2);
+        long administrator = users.findByUsername("admin").id();
+        activities.cancel(cancelled, new CancelActivityRequest("Owned period filter fixture"), administrator);
+        jdbc.update("UPDATE activities SET starts_at=?, ends_at=?, category='TECHNOLOGY' WHERE id=?", utc(NOW.minusSeconds(60)), utc(NOW.plusSeconds(60)), ongoing);
+        jdbc.update("UPDATE activities SET starts_at=?, ends_at=?, category='TECHNOLOGY' WHERE id=?", utc(NOW.minusSeconds(120)), utc(NOW), ended);
+        jdbc.update("UPDATE activities SET starts_at=?, category='TECHNOLOGY' WHERE id=?", utc(NOW.minusSeconds(30)), unknown);
+        jdbc.update("UPDATE activities SET starts_at=?, ends_at=?, category='TECHNOLOGY' WHERE id=?", utc(NOW.minusSeconds(180)), utc(NOW.minusSeconds(60)), cancelled);
+
+        for (String filter : List.of("ONGOING", "ENDED")) {
+            long expected = filter.equals("ONGOING") ? ongoing : ended;
+            mvc.perform(get("/api/admin/activities").param("status", filter)).andExpect(status().isUnauthorized());
+            mvc.perform(get("/api/admin/activities").with(user(principal("demo"))).param("status", filter)).andExpect(status().isForbidden());
+            mvc.perform(get("/api/admin/activities").with(user(principal("admin")))
+                .param("status", filter).param("keyword", prefix).param("category", "TECHNOLOGY").param("pageSize", "1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(expected)).andExpect(jsonPath("$.items[0].closed").value(true));
+            mvc.perform(get("/api/admin/activities").with(user(principal("admin")))
+                .param("status", filter).param("keyword", prefix).param("category", "TECHNOLOGY").param("pageSize", "1").param("page", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1)).andExpect(jsonPath("$.items").isEmpty());
+            assertThat(admin.activities(1, 10, prefix, filter, "TECHNOLOGY", administrator).items())
+                .isEqualTo(activities.search(1, 10, prefix, filter, "TECHNOLOGY", administrator).items());
+        }
+        assertThat(admin.activities(1, 10, prefix, "STARTED", "TECHNOLOGY", administrator).items())
+            .extracting(item -> item.id()).containsExactly(ended, ongoing, unknown);
+        assertThat(admin.activities(1, 10, prefix, "CANCELLED", "TECHNOLOGY", administrator).items())
+            .extracting(item -> item.id()).containsExactly(cancelled);
+    }
+
+    @Test
     void searchTreatsPercentUnderscoreBackslashAndQuotesAsLiteralSubstrings() throws Exception {
         String prefix = "Literal" + UUID.randomUUID().toString().replace("-", "");
         long percent = createActivity(prefix + " 50%", "Venue", 2);
@@ -185,7 +220,8 @@ class AdminIntegrationTest {
         for (String path : List.of("/api/admin/activities", "/api/admin/activities/" + id + "/registrations")) {
             for (String[] parameter : List.of(new String[]{"page", "0"}, new String[]{"page", "-1"},
                 new String[]{"pageSize", "0"}, new String[]{"pageSize", "101"}, new String[]{"page", "not-a-number"},
-                new String[]{"status", "UNKNOWN"}, new String[]{"status", "active"})) {
+                new String[]{"status", "UNKNOWN"}, new String[]{"status", "active"},
+                new String[]{"status", "ongoing"}, new String[]{"status", "ended"}, new String[]{"status", "ONGOING "})) {
                 mvc.perform(get(path).with(user(principal("admin"))).param(parameter[0], parameter[1]))
                     .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
             }

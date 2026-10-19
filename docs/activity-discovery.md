@@ -9,7 +9,7 @@
 | 参数 | 默认值 | 规则 |
 | --- | --- | --- |
 | `keyword` | 空字符串 | 标题或地点的字面子串，最多 200 个 UTF-16 代码单元；不裁剪首尾空格 |
-| `status` | `ALL` | `ALL`、`OPEN`、`FULL`、`STARTED`、`CANCELLED`、`UPCOMING`，区分大小写 |
+| `status` | `ALL` | `ALL`、`OPEN`、`FULL`、`STARTED`、`ONGOING`、`ENDED`、`CANCELLED`、`UPCOMING`，区分大小写 |
 | `category` | `ALL` | 全部或五种固定分类代码，区分大小写；空串或未知值拒绝，见 [分类指南](activity-category-guide.md) |
 | `page` | `1` | 正整数，按 Java `int` 接收 |
 | `pageSize` | `12` | 1–100 的整数 |
@@ -44,13 +44,19 @@ interface ActivitySearchPage {
 | `ALL` | 全部状态 | 所有活动 |
 | `OPEN` | 报名中 | 未取消，开始时间晚于请求当前时间，有效人数少于名额 |
 | `FULL` | 已满员 | 未取消，尚未开始，有效人数等于名额；仍可加入候补 |
-| `STARTED` | 已开始 | 未取消，开始时间等于或早于请求当前时间 |
+| `STARTED` | 已开始 | 未取消，开始时间等于或早于请求当前时间；含进行中、已结束和未知结束时间 |
+| `ONGOING` | 进行中 | 未取消，结束时间非空，开始时间 ≤ 请求当前时间 < 结束时间 |
+| `ENDED` | 已结束 | 未取消，结束时间非空且 ≤ 请求当前时间 |
 | `CANCELLED` | 已取消 | 取消时间非空，不受原开始时间影响 |
 | `UPCOMING` | 即将开始 | 未取消且尚未开始，包含满员活动 |
 
-`total` 是关键词、状态与分类共同筛选出的全部活动数。`summary` 也基于整个匹配集合：`upcomingActivities` 只统计其中未取消、尚未开始的活动，`availableSeats` 只累加这些活动的 `capacity - registeredCount`。候补不占名额，已开始或已取消活动不提供剩余名额。因此筛选 `CANCELLED` 或 `STARTED` 时两项统计为 0；筛选 `FULL` 时剩余名额为 0。
+`total` 是关键词、状态与分类共同筛选出的全部活动数。`summary` 也基于整个匹配集合：`upcomingActivities` 只统计其中未取消、尚未开始的活动，`availableSeats` 只累加这些活动的 `capacity - registeredCount`。候补不占名额，已开始或已取消活动不提供剩余名额。因此筛选 `CANCELLED`、`STARTED`、`ONGOING` 或 `ENDED` 时两项统计为 0；筛选 `FULL` 时剩余名额为 0。
 
 例如 13 场符合条件的未来活动，每场有 2 个未占用名额，第一页只有 12 张卡片，但总数仍为 13，统计仍为 13 场、26 个名额。前端不能根据当前页卡片推算这些数字。加载和读取失败时显示 `—`，不会把未知统计伪装成 0。
+
+结束时间为空的历史活动不归入 `ONGOING` 或 `ENDED`，仍可通过 `STARTED` 查询。`/api/admin/activities` 接受相同新状态；旧数组接口与响应字段保持，门禁仍为 V11，不新增迁移。
+
+页面标签按本地真实时间更新；列表集合和统计保持本次服务端查询的快照，跨边界后手动提交相同条件或刷新获取新集合，不新增接口轮询。新状态随关键词、分类和分页写入 URL，详情返回与历史导航保留，切换状态回第一页。管理详情继续沿用既有链接与浏览器后退，不扩展详情来源白名单。
 
 ## 一次查询保持一致
 

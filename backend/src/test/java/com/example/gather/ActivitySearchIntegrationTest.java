@@ -2,6 +2,7 @@ package com.example.gather;
 
 import com.example.gather.api.ApiModels.*;
 import com.example.gather.mapper.ActivityMapper;
+import com.example.gather.mapper.AdminMapper;
 import com.example.gather.mapper.UserMapper;
 import com.example.gather.monitoring.MonitoringService;
 import com.example.gather.security.AppUserDetails;
@@ -29,11 +30,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -68,15 +72,29 @@ class ActivitySearchIntegrationTest {
         args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}))
     static class SearchReadInterceptor implements Interceptor {
         final AtomicReference<Runnable> afterTotals = new AtomicReference<>();
+        final AtomicReference<Runnable> afterAdminTotals = new AtomicReference<>();
+        final ThreadLocal<List<ReadQuery>> captured = new ThreadLocal<>();
         @Override public Object intercept(Invocation invocation) throws Throwable {
+            String statement = ((MappedStatement) invocation.getArgs()[0]).getId();
+            if (captured.get() != null) {
+                Object parameters = invocation.getArgs()[1];
+                captured.get().add(new ReadQuery(statement, parameters instanceof Map<?, ?> map ? (LocalDateTime) map.get("now") : null,
+                    TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
+                    TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()));
+            }
             Object value = invocation.proceed();
-            if (((MappedStatement) invocation.getArgs()[0]).getId().equals(ActivityMapper.class.getName() + ".searchTotals")) {
+            if (statement.equals(ActivityMapper.class.getName() + ".searchTotals")) {
                 Runnable action = afterTotals.getAndSet(null);
+                if (action != null) action.run();
+            }
+            if (statement.equals(AdminMapper.class.getName() + ".countActivities")) {
+                Runnable action = afterAdminTotals.getAndSet(null);
                 if (action != null) action.run();
             }
             return value;
         }
     }
+    record ReadQuery(String statement, LocalDateTime now, boolean readOnly, Integer isolation) {}
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
@@ -114,6 +132,8 @@ class ActivitySearchIntegrationTest {
     @AfterEach
     void cleanOnlyCreatedFixtures() {
         reads.afterTotals.set(null);
+        reads.afterAdminTotals.set(null);
+        reads.captured.remove();
         com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityIds, userIds);
     }
 
@@ -196,6 +216,124 @@ class ActivitySearchIntegrationTest {
     }
 
     @Test
+    void ongoingAndEndedRespectUtcMicrosecondBoundariesUnknownEndAndCancellationPriority() throws Exception {
+        String prefix = marker();
+        Instant now = NOW.truncatedTo(ChronoUnit.MICROS);
+        periodActivity(prefix + " start minute later", now.plusSeconds(60), now.plusSeconds(120), "TECHNOLOGY");
+        periodActivity(prefix + " start microsecond later", now.plus(1, ChronoUnit.MICROS), now.plusSeconds(60), "TECHNOLOGY");
+        long startsNow = periodActivity(prefix + " starts now", now, now.plusSeconds(60), "TECHNOLOGY");
+        long startedMicrosecond = periodActivity(prefix + " started microsecond ago", now.minus(1, ChronoUnit.MICROS), now.plusSeconds(60), "TECHNOLOGY");
+        long startedMinute = periodActivity(prefix + " started minute ago", now.minusSeconds(60), now.plusSeconds(60), "TECHNOLOGY");
+        long endsMicrosecondLater = periodActivity(prefix + " ends microsecond later", now.minusSeconds(120), now.plus(1, ChronoUnit.MICROS), "TECHNOLOGY");
+        long endsNow = periodActivity(prefix + " ends now", now.minusSeconds(120), now, "TECHNOLOGY");
+        long endedMicrosecond = periodActivity(prefix + " ended microsecond ago", now.minusSeconds(120), now.minus(1, ChronoUnit.MICROS), "TECHNOLOGY");
+        long endedMinute = periodActivity(prefix + " ended minute ago", now.minusSeconds(120), now.minusSeconds(60), "TECHNOLOGY");
+        long unknownEnd = periodActivity(prefix + " unknown end", now.minusSeconds(60), null, "TECHNOLOGY");
+        long cancelledOngoing = createActivity(prefix + " cancelled ongoing", "Venue", 2);
+        long cancelledEnded = createActivity(prefix + " cancelled ended", "Venue", 2);
+        for (long id : List.of(cancelledOngoing, cancelledEnded)) activities.cancel(id, new CancelActivityRequest("Owned filter cancellation"), adminId());
+        changePeriod(cancelledOngoing, now.minusSeconds(60), now.plusSeconds(60), "TECHNOLOGY");
+        changePeriod(cancelledEnded, now.minusSeconds(120), now.minusSeconds(60), "TECHNOLOGY");
+
+        List<Long> ongoing = List.of(endsMicrosecondLater, startedMinute, startedMicrosecond, startsNow);
+        List<Long> ended = List.of(endsNow, endedMicrosecond, endedMinute);
+        assertState(prefix, "ONGOING", 4, 0, 0, ongoing.toArray(Long[]::new));
+        assertState(prefix, "ENDED", 3, 0, 0, ended.toArray(Long[]::new));
+        assertThat(activities.search(1, 100, prefix, "STARTED", null).items()).extracting(ActivityView::id)
+            .containsExactly(endsMicrosecondLater, endsNow, endedMicrosecond, endedMinute, startedMinute, unknownEnd, startedMicrosecond, startsNow);
+        assertThat(activities.search(1, 100, prefix, "CANCELLED", null).items()).extracting(ActivityView::id)
+            .containsExactly(cancelledEnded, cancelledOngoing);
+        for (String state : List.of("ONGOING", "ENDED", "STARTED", "CANCELLED")) {
+            assertThat(admin.activities(1, 100, prefix, state, "TECHNOLOGY", adminId()).items())
+                .isEqualTo(activities.search(1, 100, prefix, state, "TECHNOLOGY", adminId()).items());
+        }
+        for (String name : List.of("guest", "demo", "admin")) {
+            for (String state : List.of("ONGOING", "ENDED")) {
+                var request = get("/api/activities/search").param("keyword", prefix).param("status", state).param("category", "TECHNOLOGY");
+                if (!name.equals("guest")) request.with(user(principal(name)));
+                mvc.perform(request).andExpect(status().isOk()).andExpect(jsonPath("$.total").value(state.equals("ONGOING") ? 4 : 3))
+                    .andExpect(jsonPath("$.summary.upcomingActivities").value(0)).andExpect(jsonPath("$.summary.availableSeats").value(0));
+            }
+        }
+    }
+
+    @Test
+    void newStatusFiltersComposeWithLiteralKeywordCategoryPaginationAndFullMatchSummary() throws Exception {
+        Instant now = NOW.truncatedTo(ChronoUnit.MICROS);
+        for (String state : List.of("ONGOING", "ENDED")) {
+            String prefix = marker() + " literal%_";
+            Instant end = state.equals("ONGOING") ? now.plusSeconds(60) : now;
+            List<Long> expected = new ArrayList<>();
+            for (int index = 0; index < 5; index++) expected.add(periodActivity(prefix + " " + index, now.minusSeconds(120), end, "TECHNOLOGY"));
+            periodActivity(prefix + " other category", now.minusSeconds(120), end, "CULTURE");
+            periodActivity(marker() + " other keyword", now.minusSeconds(120), end, "TECHNOLOGY");
+            periodActivity(prefix + " unknown end", now.minusSeconds(120), null, "TECHNOLOGY");
+            List<Long> seen = new ArrayList<>();
+            for (int page = 1; page <= 3; page++) {
+                var result = activities.search(page, 2, prefix, state, "TECHNOLOGY", null);
+                assertThat(result.total()).isEqualTo(5);
+                assertThat(result.summary()).isEqualTo(new ActivitySearchSummary(0, 0));
+                assertThat(result.items()).extracting(ActivityView::id)
+                    .containsExactlyElementsOf(expected.subList((page - 1) * 2, Math.min(page * 2, expected.size())));
+                assertThat(admin.activities(page, 2, prefix, state, "TECHNOLOGY", adminId()).items()).isEqualTo(result.items());
+                seen.addAll(result.items().stream().map(ActivityView::id).toList());
+            }
+            assertThat(seen).containsExactlyElementsOf(expected).doesNotHaveDuplicates();
+            var outside = activities.search(Integer.MAX_VALUE, 100, prefix, state, "TECHNOLOGY", null);
+            assertThat(outside.total()).isEqualTo(5); assertThat(outside.items()).isEmpty();
+            assertThat(outside.summary()).isEqualTo(new ActivitySearchSummary(0, 0));
+            mvc.perform(get("/api/activities/search").param("keyword", prefix).param("status", state).param("category", "TECHNOLOGY")
+                .param("page", "3").param("pageSize", "2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(5)).andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(expected.getLast()));
+            assertThat(activities.search(1, 100, prefix.replace("%_", "XX"), state, "TECHNOLOGY", null).items()).isEmpty();
+        }
+    }
+
+    @Test
+    void newFiltersKeepOneUtcInstantAndTwoReadonlySnapshotQueriesAcrossConcurrentPeriodChanges() throws Exception {
+        Instant now = NOW.truncatedTo(ChronoUnit.MICROS);
+        long administrator = adminId();
+        for (boolean administratorQuery : List.of(false, true)) {
+            for (String state : List.of("ONGOING", "ENDED")) {
+                String prefix = marker();
+                Instant originalEnd = state.equals("ONGOING") ? now.plusSeconds(60) : now;
+                Instant changedEnd = state.equals("ONGOING") ? now : now.plusSeconds(60);
+                long id = periodActivity(prefix, now.minusSeconds(120), originalEnd, "TECHNOLOGY");
+                try (var writer = Executors.newSingleThreadExecutor()) {
+                    Runnable update = () -> {
+                        try { writer.submit(() -> jdbc.update("UPDATE activities SET ends_at=? WHERE id=?", LocalDateTime.ofInstant(changedEnd, ZoneOffset.UTC), id)).get(10, TimeUnit.SECONDS); }
+                        catch (Exception failure) { throw new AssertionError("Owned period change must commit between the two SELECTs", failure); }
+                    };
+                    var hook = administratorQuery ? reads.afterAdminTotals : reads.afterTotals;
+                    hook.set(update);
+                    List<ReadQuery> queries = new ArrayList<>(); reads.captured.set(queries); clock.calls.set(0);
+                    try {
+                        if (administratorQuery) {
+                            var result = admin.activities(1, 12, prefix, state, "TECHNOLOGY", administrator);
+                            assertThat(result.total()).isEqualTo(1);
+                            assertThat(result.items()).singleElement().satisfies(item -> assertThat(item.endsAt()).isEqualTo(originalEnd));
+                        } else {
+                            var result = activities.search(1, 12, prefix, state, "TECHNOLOGY", null);
+                            assertThat(result.total()).isEqualTo(1); assertThat(result.summary()).isEqualTo(new ActivitySearchSummary(0, 0));
+                            assertThat(result.items()).singleElement().satisfies(item -> assertThat(item.endsAt()).isEqualTo(originalEnd));
+                        }
+                    } finally { reads.captured.remove(); }
+                    assertThat(hook.get()).isNull(); assertThat(clock.calls.get()).isEqualTo(1);
+                    String mapper = administratorQuery ? AdminMapper.class.getName() : ActivityMapper.class.getName();
+                    assertThat(queries).extracting(ReadQuery::statement).containsExactly(mapper + (administratorQuery ? ".countActivities" : ".searchTotals"), mapper + (administratorQuery ? ".activities" : ".search"));
+                    assertThat(queries).allSatisfy(query -> {
+                        assertThat(query.now()).isEqualTo(LocalDateTime.ofInstant(now, ZoneOffset.UTC));
+                        assertThat(query.readOnly()).isTrue(); assertThat(query.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+                    });
+                }
+                assertThat(activities.search(1, 12, prefix, state, "TECHNOLOGY", null).total()).isZero();
+                assertThat(admin.activities(1, 12, prefix, state, "TECHNOLOGY", administrator).total()).isZero();
+            }
+        }
+    }
+
+    @Test
     void summaryCoversEveryMatchAcrossPagesAndStableSortDoesNotRepeatOrSkipItems() throws Exception {
         String prefix = marker();
         List<Long> expected = new ArrayList<>();
@@ -256,7 +394,8 @@ class ActivitySearchIntegrationTest {
             new String[]{"pageSize", "0"}, new String[]{"pageSize", "101"}, new String[]{"pageSize", "-1"},
             new String[]{"page", "not-a-number"}, new String[]{"page", "2147483648"},
             new String[]{"pageSize", "1.5"}, new String[]{"keyword", "x".repeat(201)},
-            new String[]{"status", "UNKNOWN"}, new String[]{"status", "open"}, new String[]{"status", "ACTIVE"})) {
+            new String[]{"status", "UNKNOWN"}, new String[]{"status", "open"}, new String[]{"status", "ACTIVE"},
+            new String[]{"status", "ongoing"}, new String[]{"status", "ended"}, new String[]{"status", "ENDED "})) {
             mvc.perform(get("/api/activities/search").param(pair[0], pair[1]))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
         }
@@ -351,6 +490,17 @@ class ActivitySearchIntegrationTest {
         long id = users.findByUsername(username).id();
         userIds.add(id);
         return id;
+    }
+
+    private long periodActivity(String title, Instant start, Instant end, String category) {
+        long id = createActivity(title, "Venue", 2);
+        changePeriod(id, start, end, category);
+        return id;
+    }
+
+    private void changePeriod(long id, Instant start, Instant end, String category) {
+        jdbc.update("UPDATE activities SET starts_at=?, ends_at=?, category=? WHERE id=?", LocalDateTime.ofInstant(start, ZoneOffset.UTC),
+            end == null ? null : LocalDateTime.ofInstant(end, ZoneOffset.UTC), category, id);
     }
 
     private static String marker() { return "Search" + UUID.randomUUID().toString().replace("-", ""); }
