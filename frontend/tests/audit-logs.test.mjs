@@ -52,8 +52,9 @@ test('audit changes retain literal long multiline text and distinguish an absent
   assert.equal(auditChangeText('title', ''), '');
   assert.equal(auditChangeText('title', null), '未设置');
   assert.deepEqual(Object.keys(auditActionLabels), ['CREATE', 'EDIT', 'CANCEL', 'CHECK_IN']);
-  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'category', 'coverHash', 'startsAt', 'endsAt', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt']);
+  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'category', 'coverHash', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt']);
   assert.equal(auditChangeText('endsAt', '2030-01-01T08:02:03.123456Z'), formatAuditDateTime('2030-01-01T08:02:03.123456Z'));
+  assert.equal(auditChangeText('registrationDeadline', '2030-01-01T08:02:03.123456Z'), formatAuditDateTime('2030-01-01T08:02:03.123456Z'));
   assert.equal(auditChangeText('coverHash', null), '未设置');
   assert.equal(auditChangeText('coverHash', 'a'.repeat(64)), 'a'.repeat(64));
 });

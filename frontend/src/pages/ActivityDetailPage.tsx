@@ -28,9 +28,9 @@ import {
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import { useResource } from "../useResource";
-import { activityClosed, activityPhase, activityPhaseLabels } from "../activityLifecycle";
+import { activityClosed, activityPhase, activityPhaseLabels, activityRegistrationClosed } from "../activityLifecycle";
 import { useActivityClock } from "../useActivityClock";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { safeActivityDetailReturn } from "../activityDetailNavigation";
@@ -92,7 +92,7 @@ function ActivityDetailPage() {
   useActivityClock([activity ?? undefined]);
 
   async function mutate(cancel: boolean) {
-    if (!activity || submission.current || activityClosed(activity)) return;
+    if (!activity || submission.current || activityClosed(activity) || !cancel && activityRegistrationClosed(activity)) return;
     const account = auth.captureAccountRequest();
     if (!account) return;
     const controller = new AbortController();
@@ -167,6 +167,7 @@ function ActivityDetailPage() {
   const cancelled = activity.registrationStatus === "CANCELLED";
   const remaining = Math.max(0, activity.capacity - activity.registeredCount);
   const closed = activityClosed(activity);
+  const registrationClosed = activityRegistrationClosed(activity);
   const phaseLabel = activityPhaseLabels[activityPhase(activity)];
 
   return (
@@ -207,6 +208,7 @@ function ActivityDetailPage() {
                 children: `${formatDate(activity.startsAt)} · ${formatTime(activity.startsAt)}`,
               },
               { key: "end-time", label: "结束时间", children: formatActivityEnd(activity.endsAt) },
+              { key: "registration-deadline", label: "报名截止", children: formatRegistrationDeadline(activity.registrationDeadline) },
               {
                 key: "location",
                 label: "活动地点",
@@ -229,7 +231,7 @@ function ActivityDetailPage() {
             showIcon
             icon={<SafetyCertificateOutlined aria-hidden="true" />}
             title="报名须知"
-            description="报名后可在「我的报名」查看记录。活动开始前可以取消，开始后将关闭报名与取消。组织者取消活动后，报名与候补关闭，历史记录保留。"
+            description="报名后可在「我的报名」查看记录。报名截止后不能报名或加入候补，已报名和候补仍可在活动开始前取消。组织者取消活动后，报名与候补关闭，历史记录保留。"
           />
         </Card>
         <Card title="活动报名" className="registration-panel">
@@ -242,9 +244,11 @@ function ActivityDetailPage() {
                   ? "你已进入候补"
                   : closed
                     ? `活动${phaseLabel}`
-                    : remaining === 0
-                      ? "本场名额已满"
-                      : "报名参加活动"}
+                    : registrationClosed
+                      ? "报名已截止"
+                      : remaining === 0
+                        ? "本场名额已满"
+                        : "报名参加活动"}
           </h2>
           <div className="registration-number">
             <strong>{activity.registeredCount}</strong>
@@ -263,6 +267,8 @@ function ActivityDetailPage() {
           <p className="remaining-text">
             {closed ? (
               "报名与取消已关闭"
+            ) : registrationClosed ? (
+              "报名已截止，已报名和候补仍可在开始前取消"
             ) : remaining ? (
               <>
                 还有 <strong>{remaining}</strong> 个名额
@@ -288,7 +294,7 @@ function ActivityDetailPage() {
           )}
           {cancelled && !activity.cancelled && (
             <p className="cancelled-notice">
-              你之前取消了报名，有空位时可以重新加入。
+              {registrationClosed ? "你之前取消了报名；本场报名已截止，不能重新报名。" : "你之前取消了报名，有空位时可以重新加入。"}
             </p>
           )}
           {closed ? (
@@ -299,6 +305,8 @@ function ActivityDetailPage() {
             <Button block loading>
               正在确认登录状态
             </Button>
+          ) : registrationClosed && (!auth.user || !registered && !waiting) ? (
+            <Button block disabled>报名已截止</Button>
           ) : !auth.user ? (
             <Link to="/login" state={{ from: detailPath }}>
               <Button block type="primary">
@@ -311,8 +319,8 @@ function ActivityDetailPage() {
               title={waiting ? "确认取消候补？" : "确认取消这场活动的报名？"}
               description={
                 waiting
-                  ? "取消后将退出候补队列。"
-                  : "取消后名额将释放，重新报名需要还有空位。"
+                  ? registrationClosed ? "取消后将退出候补队列；报名已截止，不能重新加入。" : "取消后将退出候补队列。"
+                  : registrationClosed ? "取消后名额将释放；报名已截止，不能重新报名。" : "取消后名额将释放，重新报名需要还有空位。"
               }
               okText="确认取消"
               cancelText="保留名额"

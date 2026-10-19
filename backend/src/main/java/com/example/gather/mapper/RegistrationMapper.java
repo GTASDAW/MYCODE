@@ -9,7 +9,7 @@ import java.util.List;
 @Mapper
 public interface RegistrationMapper {
     String MY_VIEW_COLUMNS = "r.id AS registration_id, r.status, r.checked_in_at, "
-        + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.capacity, a.registered_count, "
+        + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
         + "a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
 

@@ -1,7 +1,7 @@
 import type { Activity } from "./types";
 import { instantMicroseconds } from "./date.ts";
 
-type ActivityTime = Pick<Activity, "startsAt" | "endsAt" | "cancelled">;
+type ActivityTime = Pick<Activity, "startsAt" | "endsAt" | "registrationDeadline" | "cancelled">;
 export type ActivityPhase = "CANCELLED" | "UPCOMING" | "ONGOING" | "ENDED" | "STARTED";
 export const activityPhaseLabels: Record<ActivityPhase, string> = {
   CANCELLED: "活动已取消", UPCOMING: "未开始", ONGOING: "进行中", ENDED: "已结束", STARTED: "已开始",
@@ -21,7 +21,7 @@ export function nextActivityBoundary(activities: readonly ActivityTime[], now: n
   let next: number | null = null;
   for (const activity of activities) {
     if (activity.cancelled) continue;
-    for (const value of [activity.startsAt, activity.endsAt]) {
+    for (const value of [activity.startsAt, activity.endsAt, activity.registrationDeadline]) {
       const micros = value ? instantMicroseconds(value) : null;
       if (micros === null) continue;
       const deadline = Number((micros + 999n) / 1000n);
@@ -33,6 +33,12 @@ export function nextActivityBoundary(activities: readonly ActivityTime[], now: n
 
 export function activityClosed(activity: Activity, now = Date.now()): boolean {
   return activity.cancelled || activity.closed || activityPhase(activity, now) !== "UPCOMING";
+}
+
+export function activityRegistrationClosed(activity: Activity, now = Date.now()): boolean {
+  if (activityClosed(activity, now) || activity.registrationClosed === true) return true;
+  const deadline = activity.registrationDeadline ? instantMicroseconds(activity.registrationDeadline) : null;
+  return deadline !== null && deadline <= BigInt(Math.trunc(now)) * 1000n;
 }
 
 export function canManageActivity(activity: Activity, now = Date.now()): boolean {

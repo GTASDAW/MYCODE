@@ -8,13 +8,13 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import { Link } from "react-router";
-import { dateParts, formatActivityEnd, formatDate, formatTime } from "./date";
+import { dateParts, formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "./date";
 import { errorMessage } from "./api";
 import type { Activity } from "./types";
 import { activityDetailsPath } from "./activityDiscovery";
 import { activityCategoryLabel } from "./activityCategory";
 import { ActivityCover } from "./ActivityCoverImage";
-import { activityClosed, activityPhase, activityPhaseLabels } from "./activityLifecycle";
+import { activityPhase, activityPhaseLabels, activityRegistrationClosed } from "./activityLifecycle";
 
 export function Logo() {
   return (
@@ -144,14 +144,16 @@ export function ActivityStatus({
   personal?: boolean;
 }) {
   const phase = activityPhase(activity);
+  const registrationClosed = activityRegistrationClosed(activity);
   const color = phase === "CANCELLED" ? "red" : phase === "UPCOMING" ? "blue" : phase === "ONGOING" ? "green" : undefined;
   return <span className="activity-status">
     <Tag className="status-tag" color={color}>{activityPhaseLabels[phase]}</Tag>
+    {!activity.cancelled && registrationClosed && <Tag className="status-tag" color="orange">报名已截止</Tag>}
     {personal && !activity.cancelled && (activity.registrationStatus === "ACTIVE"
       ? <Tag className="status-tag" color="green">已报名</Tag>
       : activity.registrationStatus === "WAITING"
         ? <Tag className="status-tag" color="orange">候补中</Tag>
-        : phase === "UPCOMING" && <Tag className="status-tag" color={activity.registeredCount >= activity.capacity ? "orange" : "blue"}>
+        : phase === "UPCOMING" && !registrationClosed && <Tag className="status-tag" color={activity.registeredCount >= activity.capacity ? "orange" : "blue"}>
           {activity.registeredCount >= activity.capacity ? "已满员" : "报名中"}
         </Tag>)}
   </span>;
@@ -221,6 +223,7 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
           {formatTime(activity.startsAt)}
         </span>
         <span>结束：{formatActivityEnd(activity.endsAt)}</span>
+        <span>报名截止：{formatRegistrationDeadline(activity.registrationDeadline)}</span>
         <span>
           <EnvironmentOutlined aria-hidden="true" />
           <span className="location-text">{activity.location}</span>
@@ -230,7 +233,7 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
         <span>
           <TeamOutlined aria-hidden="true" />
           {activity.registeredCount} / {activity.capacity} 人
-          {!activityClosed(activity) && remaining > 0 && (
+          {!activityRegistrationClosed(activity) && remaining > 0 && (
             <small>余 {remaining} 席</small>
           )}
           {(activity.waitingCount ?? 0) > 0 && (

@@ -165,16 +165,16 @@ export async function snapshotDatabase(connection) {
       const ddl = definition?.['Create Table'];
       if (typeof ddl !== 'string' || !ddl) refuse('SCHEMA_REFUSED', 'A table definition is unavailable.');
       const [rows, fields] = await connection.execute(`SELECT * FROM \`${name}\` ORDER BY \`${name === 'flyway_schema_history' ? 'installed_rank' : 'id'}\``);
-      if (name === 'activities' && !fields?.some(field => field.name === 'ends_at')) {
-        refuse('SCHEMA_REFUSED', 'The V11 activity end-time column is required.');
+      if (name === 'activities' && !['ends_at', 'registration_deadline'].every(column => fields?.some(field => field.name === column))) {
+        refuse('SCHEMA_REFUSED', 'The V12 activity end-time and registration-deadline columns are required.');
       }
       result.tables[name] = { rows: rows.length, contentSha256: contentDigest(rows, fields), schemaSha256: createHash('sha256').update(ddl).digest('hex') };
       if (name === 'users' && (!rows.some(row => row.username === 'admin' && row.role === 'ADMIN') || !rows.some(row => row.username === 'demo' && row.role === 'USER'))) {
         refuse('PRESET_ACCOUNTS_REFUSED', 'The expected admin and demo account roles are missing.');
       }
       if (name === 'flyway_schema_history') {
-        if (rows.length !== 11 || rows.some((row, index) => String(row.version) !== String(index + 1) || Number(row.success) !== 1 || !Number.isInteger(row.checksum))) {
-          refuse('MIGRATIONS_REFUSED', 'Exactly the successful Flyway V1 through V11 migrations and checksums are required.');
+        if (rows.length !== 12 || rows.some((row, index) => String(row.version) !== String(index + 1) || Number(row.success) !== 1 || !Number.isInteger(row.checksum))) {
+          refuse('MIGRATIONS_REFUSED', 'Exactly the successful Flyway V1 through V12 migrations and checksums are required.');
         }
         result.migrations = rows.map(row => ({ version: String(row.version), checksum: row.checksum }));
       }
@@ -276,7 +276,7 @@ function validateManifest(manifest, runId) {
       || tables.some(name => {
         const table = manifest.snapshot.tables[name];
         return !table || !Number.isSafeInteger(table.rows) || table.rows < 0 || !sha256.test(table.contentSha256) || !sha256.test(table.schemaSha256);
-      }) || !Array.isArray(manifest.snapshot.migrations) || manifest.snapshot.migrations.length !== 11
+      }) || !Array.isArray(manifest.snapshot.migrations) || manifest.snapshot.migrations.length !== 12
       || manifest.snapshot.migrations.some((migration, index) => migration.version !== String(index + 1) || !Number.isInteger(migration.checksum))) {
     refuse('PACKAGE_INVALID', 'The backup manifest is invalid or incomplete.');
   }

@@ -16,10 +16,10 @@ public interface AdminMapper {
         SELECT COUNT(*) AS total_activities,
                COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} THEN 1 ELSE 0 END), 0) AS upcoming_activities,
                COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at <= #{now} THEN 1 ELSE 0 END), 0) AS started_activities,
-               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} AND registered_count = capacity THEN 1 ELSE 0 END), 0) AS full_activities,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} AND (registration_deadline IS NULL OR registration_deadline > #{now}) AND registered_count = capacity THEN 1 ELSE 0 END), 0) AS full_activities,
                (SELECT COUNT(*) FROM registrations WHERE status = 'ACTIVE') AS active_registrations,
                (SELECT COUNT(*) FROM registrations WHERE status = 'WAITING') AS waiting_registrations,
-               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} THEN capacity - registered_count ELSE 0 END), 0) AS available_seats,
+               COALESCE(SUM(CASE WHEN cancelled_at IS NULL AND starts_at > #{now} AND (registration_deadline IS NULL OR registration_deadline > #{now}) THEN capacity - registered_count ELSE 0 END), 0) AS available_seats,
                COALESCE(SUM(CASE WHEN cancelled_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS cancelled_activities
         FROM activities
         """)

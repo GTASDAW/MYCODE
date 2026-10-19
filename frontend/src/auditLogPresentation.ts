@@ -10,7 +10,8 @@ export const auditFieldLabels: Record<AuditLogField, string> = {
   title: "活动标题", description: "活动介绍", location: "活动地点",
   category: "活动分类",
   coverHash: "活动封面内容编号",
-  startsAt: "开始时间（北京时间）", endsAt: "结束时间（北京时间）", capacity: "活动名额",
+  startsAt: "开始时间（北京时间）", endsAt: "结束时间（北京时间）",
+  registrationDeadline: "报名截止时间（北京时间）", capacity: "活动名额",
   cancelledAt: "取消时间（北京时间）", cancellationReason: "取消原因",
   checkedInAt: "签到时间（北京时间）",
 };
@@ -22,6 +23,6 @@ export function formatAuditDateTime(value: string): string {
 export function auditChangeText(field: AuditLogField, value: string | null): string {
   if (value === null) return "未设置";
   if (field === "category" && isActivityCategory(value)) return activityCategoryLabel(value);
-  return field === "startsAt" || field === "endsAt" || field === "cancelledAt" || field === "checkedInAt"
+  return field === "startsAt" || field === "endsAt" || field === "registrationDeadline" || field === "cancelledAt" || field === "checkedInAt"
     ? formatAuditDateTime(value) : value;
 }

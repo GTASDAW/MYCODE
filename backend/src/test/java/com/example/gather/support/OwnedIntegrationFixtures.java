@@ -25,11 +25,11 @@ public final class OwnedIntegrationFixtures {
         var transaction = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         transaction.executeWithoutResult(status -> {
             if (!"activity_platform_test".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))
-                || !"11".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
-                throw new IllegalStateException("Fixture cleanup requires the dedicated V11 test database");
+                || !"12".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
+                throw new IllegalStateException("Fixture cleanup requires the dedicated V12 test database");
             }
             jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
-            jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at FROM activities LIMIT 0");
+            jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
             jdbc.queryForList("SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0");
             if (!activities.isEmpty()) {
                 jdbc.queryForList("SELECT id FROM activities WHERE id IN (" + marks(activities) + ") FOR UPDATE", activities.toArray());

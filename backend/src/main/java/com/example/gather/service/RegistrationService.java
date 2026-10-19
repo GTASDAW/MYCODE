@@ -40,7 +40,7 @@ public class RegistrationService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ActivityView register(long activityId, long userId) {
-        ActivityLockRow activity = lockOpenActivity(activityId);
+        ActivityLockRow activity = lockOpenActivity(activityId, true);
         RegistrationRow existing = registrations.findByActivityAndUser(activityId, userId);
         // Existing ACTIVE/WAITING requests are idempotent, even when the activity has since filled up.
         if (existing != null && (existing.status().equals("ACTIVE") || existing.status().equals("WAITING"))) {
@@ -61,7 +61,7 @@ public class RegistrationService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ActivityView cancel(long activityId, long userId) {
-        lockOpenActivity(activityId);
+        lockOpenActivity(activityId, false);
         RegistrationRow existing = registrations.findByActivityAndUser(activityId, userId);
         if (existing != null && existing.status().equals("ACTIVE")) {
             registrations.changeStatus(existing.id(), "CANCELLED");
@@ -105,15 +105,20 @@ public class RegistrationService {
                 totals.cancelledRegistrations(), totals.checkedInRegistrations()));
     }
 
-    private ActivityLockRow lockOpenActivity(long activityId) {
+    private ActivityLockRow lockOpenActivity(long activityId, boolean registering) {
         ActivityLockRow activity = monitoring.measureRegistrationLock(() -> activities.lockById(activityId));
         if (activity == null) throw new ApiException(HttpStatus.NOT_FOUND, "ACTIVITY_NOT_FOUND", "活动不存在");
         if (activity.cancelledAt() != null) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CANCELLED", "活动已取消，报名和取消报名已关闭");
         }
         // Check after acquiring the lock: a request waiting for a seat may cross the start time.
-        if (!activity.startsAt().toInstant(ZoneOffset.UTC).isAfter(clock.instant())) {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        if (!activity.startsAt().toInstant(ZoneOffset.UTC).isAfter(now)) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CLOSED", "活动已开始，报名和取消已关闭");
+        }
+        if (registering && activity.registrationDeadline() != null
+            && !activity.registrationDeadline().toInstant(ZoneOffset.UTC).isAfter(now)) {
+            throw new ApiException(HttpStatus.CONFLICT, "REGISTRATION_CLOSED", "活动报名已截止，仍可在开始前取消报名");
         }
         return activity;
     }

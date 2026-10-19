@@ -11,7 +11,7 @@ import java.util.List;
 
 @Mapper
 public interface ActivityMapper {
-    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.capacity, a.registered_count, "
+    String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + "(SELECT COUNT(*) FROM registrations rw WHERE rw.activity_id=a.id AND rw.status='WAITING') AS waiting_count, "
         + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
 
@@ -21,8 +21,8 @@ public interface ActivityMapper {
     @Select("""
         <script>
         SELECT COUNT(*) AS total,
-               COALESCE(SUM(CASE WHEN a.cancelled_at IS NULL AND a.starts_at &gt; #{now} THEN 1 ELSE 0 END), 0) AS upcoming_activities,
-               COALESCE(SUM(CASE WHEN a.cancelled_at IS NULL AND a.starts_at &gt; #{now} THEN a.capacity - a.registered_count ELSE 0 END), 0) AS available_seats
+               COALESCE(SUM(CASE WHEN a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND (a.registration_deadline IS NULL OR a.registration_deadline &gt; #{now}) THEN 1 ELSE 0 END), 0) AS upcoming_activities,
+               COALESCE(SUM(CASE WHEN a.cancelled_at IS NULL AND a.starts_at &gt; #{now} AND (a.registration_deadline IS NULL OR a.registration_deadline &gt; #{now}) THEN a.capacity - a.registered_count ELSE 0 END), 0) AS available_seats
         FROM activities a
         """ + ActivityQuerySql.FILTER + "</script>")
     ActivitySearchTotals searchTotals(@Param("now") LocalDateTime now, @Param("keyword") String keyword,
@@ -39,13 +39,13 @@ public interface ActivityMapper {
 
     // Every registration mutation locks this row before reading registration state.
     // InnoDB serializes contenders for the same activity, keeping check + increment atomic.
-    @Select("SELECT starts_at, capacity, registered_count, cancelled_at FROM activities WHERE id=#{id} FOR UPDATE")
+    @Select("SELECT starts_at, registration_deadline, capacity, registered_count, cancelled_at FROM activities WHERE id=#{id} FOR UPDATE")
     ActivityLockRow lockById(long id);
 
     @Select("SELECT title, description, location, category FROM activities WHERE id=#{id}")
     ActivityAuditText auditText(long id);
 
-    @Insert("INSERT INTO activities(title, description, location, starts_at, ends_at, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{endsAt}, #{capacity}, #{createdBy}, #{category})")
+    @Insert("INSERT INTO activities(title, description, location, starts_at, ends_at, registration_deadline, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{endsAt}, #{registrationDeadline}, #{capacity}, #{createdBy}, #{category})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(NewActivity activity);
 

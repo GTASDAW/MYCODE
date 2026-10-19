@@ -14,7 +14,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { ErrorState, LoadingState, PageHeading } from "../components";
-import { activityEndInputError, beijingInputMin, beijingInputToIso, instantMicroseconds } from "../date";
+import { activityEndInputError, beijingInputMin, beijingInputToIso, instantMicroseconds, registrationDeadlineInputError } from "../date";
 import { activityCategoryOptions } from "../activityCategory";
 import type { ActivityCategory } from "../types";
 import { useActivityMutation } from "./useActivityMutation";
@@ -47,7 +47,7 @@ export function CreateActivityPage() {
       <PageHeading
         title="发布活动"
         section="活动管理"
-        description="填写活动信息，可选填结束时间。开始、结束时间与名额发布后固定，活动开始时关闭报名与取消。"
+        description="可选填结束和报名截止时间，时间与名额发布后固定。报名按截止时间停止，取消仍开放至活动开始。"
       />
       {source.kind !== "ordinary" && <p><Link to={ordinaryActivityCreatePath}>普通发布</Link></p>}
       {invalid ? <ErrorState error={new Error("复制来源参数无效，请使用唯一的正整数活动编号。")} retry={resource.retry} />
@@ -56,7 +56,7 @@ export function CreateActivityPage() {
             : null}
       {ready && <>
         {copying && resource.data && <Alert className="form-alert" type="info" showIcon title="复制活动"
-          description={<span>来源活动：{resource.data.title}。发布将创建新活动；请重新填写开始时间，按需填写结束时间，封面发布后另传。</span>} />}
+          description={<span>来源活动：{resource.data.title}。发布将创建新活动；请重新填写开始时间，按需填写结束和报名截止时间，封面发布后另传。</span>} />}
         <ActivityCreateForm key={formScope} scope={formScope} returnPath={returnPath}
           isCurrent={() => liveScope.current === formScope}
           initialValues={copying && resource.data ? activityCopyDraft(resource.data) : { capacity: 20, category: "UNCATEGORIZED" }} />
@@ -169,6 +169,18 @@ function ActivityCreateForm({ initialValues, scope, returnPath, isCurrent }: {
             </Form.Item>
           </div>
           <div className="form-two-columns">
+            <Form.Item
+              name="registrationDeadline"
+              label="报名截止时间（北京时间，可选）"
+              dependencies={["startsAt"]}
+              extra="须晚于当前时间且早于开始；留空则在活动开始时停止报名，发布后固定。"
+              rules={[({ getFieldValue }) => ({ validator: (_, value?: string) => {
+                const error = registrationDeadlineInputError(getFieldValue("startsAt"), value);
+                return error ? Promise.reject(new Error(error)) : Promise.resolve();
+              } })]}
+            >
+              <Input type="datetime-local" step={60} min={beijingInputMin()} aria-label="报名截止时间（北京时间，可选）" />
+            </Form.Item>
             <Form.Item
               name="capacity"
               label="报名名额"

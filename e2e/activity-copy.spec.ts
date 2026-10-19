@@ -8,7 +8,7 @@ import { databaseConfig, verifyDatabase, trackFixture, recordFixtureId, recordFi
 
 test.use({ trace: 'off', timezoneId: 'America/New_York' });
 type Activity = { id: number; title: string; description: string; location: string; category: string; capacity: number;
-  startsAt: string; endsAt: string | null; coverUrl: string | null; registeredCount: number; waitingCount: number };
+  startsAt: string; endsAt: string | null; registrationDeadline: string | null; coverUrl: string | null; registeredCount: number; waitingCount: number };
 type Source = Activity & { fixture: { key: string; title: string; description: string } };
 const createPath = '/admin/activities/new';
 const copyPath = (id: number) => `${createPath}?copyFrom=${id}`;
@@ -64,7 +64,8 @@ async function source(request: APIRequestContext, info: TestInfo, state: 'future
   const fixture = trackFixture(`复制来源 ${info.project.name} ${state} ${randomUUID().slice(0, 8)}`, '复制活动独立归属来源。');
   const created = await write(request, '/api/admin/activities', 'POST', { title: fixture.title, description: fixture.description,
     location: '复制来源会场', category: 'TECHNOLOGY', capacity,
-    startsAt: new Date(Date.now() + 48 * 3600000).toISOString(), endsAt: new Date(Date.now() + 49 * 3600000).toISOString() });
+    startsAt: new Date(Date.now() + 48 * 3600000).toISOString(), endsAt: new Date(Date.now() + 49 * 3600000).toISOString(),
+    registrationDeadline: new Date(Date.now() + 24 * 3600000).toISOString() });
   expect(created.status()).toBe(201); const activity = await created.json() as Activity; recordFixtureId(fixture.key, activity.id);
   if (state === 'cancelled') expect((await write(request, `/api/admin/activities/${activity.id}/cancel`, 'POST', { reason: '复制已取消活动验证' })).status()).toBe(200);
   if (state === 'ongoing' || state === 'ended') {
@@ -72,8 +73,9 @@ async function source(request: APIRequestContext, info: TestInfo, state: 'future
     try {
       const [owned] = await db.execute<any[]>('SELECT id FROM activities WHERE id=? AND CAST(title AS BINARY)=CAST(? AS BINARY) AND CAST(description AS BINARY)=CAST(? AS BINARY)', [activity.id, fixture.title, fixture.description]);
       expect(owned).toHaveLength(1);
-      await db.execute('UPDATE activities SET starts_at=?,ends_at=? WHERE id=?',
-        [utc(new Date(Date.now() - 3 * 3600000).toISOString()), utc(new Date(Date.now() + (state === 'ongoing' ? 1 : -1) * 3600000).toISOString()), activity.id]);
+      await db.execute('UPDATE activities SET starts_at=?,ends_at=?,registration_deadline=? WHERE id=?',
+        [utc(new Date(Date.now() - 3 * 3600000).toISOString()), utc(new Date(Date.now() + (state === 'ongoing' ? 1 : -1) * 3600000).toISOString()),
+          utc(new Date(Date.now() - 4 * 3600000).toISOString()), activity.id]);
     } finally { await db.end(); }
   }
   const response = await request.get(`/api/activities/${activity.id}`); expect(response.status()).toBe(200);
@@ -96,6 +98,7 @@ async function form(page: Page, value: Activity) {
   await expect(page.locator('.ant-select').filter({ has: page.getByRole('combobox', { name: '活动分类', exact: true }) }))
     .toContainText(value.category === 'CULTURE' ? '文化艺术' : '技术交流');
   await expect(start(page)).toHaveValue(''); await expect(end(page)).toHaveValue('');
+  await expect(page.getByLabel('报名截止时间（北京时间，可选）', { exact: true })).toHaveValue('');
   await expect(page.getByRole('img', { name: /活动封面|待上传/ })).toHaveCount(0);
   await expect(publish(page)).toBeEnabled();
 }
@@ -141,7 +144,8 @@ async function richEndedSource(request: APIRequestContext, info: TestInfo) {
     for (const account of accounts) {
       const [owners] = await db.execute<any[]>("SELECT id FROM users WHERE id=? AND username=? AND display_name=? AND role='USER' FOR UPDATE", [account.id, account.username, account.displayName]); expect(owners).toHaveLength(1);
     }
-    await db.execute('UPDATE activities SET starts_at=?,ends_at=?,registered_count=1 WHERE id=?', [utc(new Date(Date.now() - 3 * 3600000).toISOString()), utc(new Date(Date.now() - 3600000).toISOString()), value.id]);
+    await db.execute('UPDATE activities SET starts_at=?,ends_at=?,registration_deadline=?,registered_count=1 WHERE id=?',
+      [utc(new Date(Date.now() - 3 * 3600000).toISOString()), utc(new Date(Date.now() - 3600000).toISOString()), utc(new Date(Date.now() - 4 * 3600000).toISOString()), value.id]);
     for (const [index, status] of ['ACTIVE', 'WAITING', 'CANCELLED'].entries()) await db.execute('INSERT INTO registrations(activity_id,user_id,status) VALUES(?,?,?)', [value.id, accounts[index].id, status]);
     await db.execute("INSERT INTO notifications(user_id,activity_id,type,activity_title,created_at) VALUES(?,?,'PROMOTED',?,UTC_TIMESTAMP(6))", [accounts[0].id, value.id, value.title]);
     await db.execute('INSERT INTO activity_favorites(user_id,activity_id,created_at) VALUES(?,?,UTC_TIMESTAMP(6))', [accounts[0].id, value.id]);
@@ -185,7 +189,7 @@ async function assertCreated(request: APIRequestContext, id: number, value: Awai
   expect(id).not.toBe(original.id);
   const response = await request.get(`/api/activities/${id}`); expect(response.status()).toBe(200);
   expect(await response.json()).toMatchObject({ id, title: value.fixture.title, description: value.fixture.description, location: '复制后修改场地', category: 'SPORTS', capacity: 7,
-    startsAt: value.startsAt, endsAt: value.endsAt, registeredCount: 0, waitingCount: 0, registrationStatus: null, coverUrl: null, cancelled: false });
+    startsAt: value.startsAt, endsAt: value.endsAt, registrationDeadline: null, registeredCount: 0, waitingCount: 0, registrationStatus: null, coverUrl: null, cancelled: false });
   const db = await database();
   try {
     const [[row]] = await db.execute<any[]>('SELECT cover_image,cover_hash,cancelled_at,cancelled_by,cancellation_reason,registered_count FROM activities WHERE id=?', [id]);
@@ -196,7 +200,7 @@ async function assertCreated(request: APIRequestContext, id: number, value: Awai
     const [audit] = await db.execute<any[]>('SELECT action,changes_json FROM activity_audit_logs WHERE activity_id=? ORDER BY id', [id]);
     expect(audit).toHaveLength(1); expect(audit[0].action).toBe('CREATE');
     const changes = typeof audit[0].changes_json === 'string' ? JSON.parse(audit[0].changes_json) : audit[0].changes_json;
-    expect(changes.map((change: { field: string }) => change.field)).toEqual(['title', 'description', 'location', 'startsAt', 'endsAt', 'capacity', 'category']);
+    expect(changes.map((change: { field: string }) => change.field)).toEqual(['title', 'description', 'location', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'category']);
     expect(changes.every((change: { before: unknown }) => change.before === null)).toBe(true);
   } finally { await db.end(); }
 }

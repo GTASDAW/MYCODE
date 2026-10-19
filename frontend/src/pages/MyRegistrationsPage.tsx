@@ -14,7 +14,7 @@ import {
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import { useActivityClock } from "../useActivityClock";
 import { useResource } from "../useResource";
 import { checkInLabel } from "../registrationCheckIn";
@@ -127,6 +127,7 @@ export function MyRegistrationsPage() {
                     <h2><Link to={detailPath}>{activity.title}</Link></h2>
                     <p><CalendarOutlined aria-hidden="true" />{formatDate(activity.startsAt)} · {formatTime(activity.startsAt)}</p>
                     <p>结束时间（北京时间）：{formatActivityEnd(activity.endsAt)}</p>
+                    <p>报名截止（北京时间）：{formatRegistrationDeadline(activity.registrationDeadline)}</p>
                     <p><EnvironmentOutlined aria-hidden="true" />{activity.location}</p>
                     <ActivityCancellationNotice activity={activity} />
                     <p className="myregistration-checkin" data-testid={`myregistration-checkin-${id}`}>

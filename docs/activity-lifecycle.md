@@ -2,13 +2,13 @@
 
 管理员可以在活动开始前修改标题、介绍、地点和分类，或填写原因取消整场活动。取消会关闭报名，把有效报名和候补转为历史记录，并保留活动、报名 ID、首次取消原因和时间。用户在公开详情和“我的报名”中可以查看原因；后台列表、报名名单和概览同步使用数据库状态。
 
-活动创建即发布，没有草稿或再次发布阶段；总名额及开始、结束时间创建后固定。已取消活动不能恢复，当前不提供活动删除。首次取消会向当时的有效报名及候补者写入站内通知，重复取消不重复通知。网站继续只在本机和临时 CI 环境运行。
+活动创建即发布，没有草稿或再次发布阶段；总名额及开始、结束、报名截止时间创建后固定。已取消活动不能恢复，当前不提供活动删除。首次取消会向当时的有效报名及候补者写入站内通知，重复取消不重复通知。网站继续只在本机和临时 CI 环境运行。
 
 ## 结束时间与展示状态
 
 创建接口接受可选的 UTC Instant 字段 endsAt，缺失或 null 均不提供结束时间。开始、结束先截断到微秒，非空结束必须严格晚于开始，否则返回 400；V11 新增可空 DATETIME(6) 与同样的数据库 CHECK。旧活动不回填，开始、结束与名额创建后固定。
 
-所有活动响应（包括旧数组、分页、详情、管理名单、本人报名及收藏中的活动）增加 endsAt，其余字段保持兼容。closed 继续表示报名/用户取消已关闭，不表示活动已经结束；STARTED 筛选仍包含所有未取消且已开始的活动；ONGOING 仅筛选已有结束时间且当前处于起止区间的活动，ENDED 仅筛选结束时间不晚于当前的活动，二者排除历史空结束时间，既有统计口径不变。
+所有活动响应（包括旧数组、分页、详情、管理名单、本人报名及收藏中的活动）增加 endsAt，其余字段保持兼容。closed 表示活动取消或已开始，不表示活动已经结束；提前报名截止另用 registrationClosed，不改变用户取消与管理员编辑权限。STARTED 筛选仍包含所有未取消且已开始的活动；ONGOING 仅筛选已有结束时间且当前处于起止区间的活动，ENDED 仅筛选结束时间不晚于当前的活动，二者排除历史空结束时间。
 
 | 时间条件（取消优先） | 页面状态 |
 | --- | --- |
@@ -24,11 +24,23 @@
 
 日历有结束时输出 UTC DTEND，没有结束时不输出 DTEND 或 DURATION。日历为秒精度：合法的微秒起止若截断后落在同一秒，下载明确报错，不生成结束等于开始的无效事件。详见 [架构](architecture.md#活动日历导出)。
 
+## 报名截止时间
+
+创建接口 POST /api/admin/activities 接受可选 UTC Instant 字段 registrationDeadline。缺失或 null 时沿用活动开始即停止报名；历史值保留 null，页面显示“活动开始时”。非空值与当前时刻、开始时间统一截断为 UTC 微秒，必须满足 当前 < 报名截止 < 开始，否则400 VALIDATION_ERROR。V12 新增可空 DATETIME(6) registration_deadline 和严格早于开始的 CHECK，不回填、不改旧迁移。
+
+所有活动响应包含 registrationDeadline 和 registrationClosed；后者表示取消、已开始或非空截止时间不晚于本次查询时刻。closed 保持取消或开始的原语义。报名事务先锁活动主键，再用单次 UTC 微秒时刻依次检查取消、开始、截止，等待锁期间跨过截止也返回409 REGISTRATION_CLOSED；新报名、重新报名、加入候补和截止后的重复报名请求均不写入。已取消/已开始仍优先返回原ACTIVITY_CANCELLED/ACTIVITY_CLOSED。
+
+截止后，ACTIVE/WAITING 仍可在开始前取消；有效报名取消仍按 updated_at,id FIFO 递补已有候补并同事务通知，取消候补不递补。管理员编辑、封面、整场取消、开始后签到补录及日历下载不受提前截止影响，固定截止字段不接受编辑额外参数覆盖。CREATE审计记录报名截止值，历史审计不补写。
+
+公开与管理OPEN/FULL过滤排除报名已截止的活动，UPCOMING仍包含所有未取消且未开始活动。公开summary的可报名活动数及剩余名额、管理fullActivities/availableSeats排除截止；管理upcomingActivities仍表示全部未开始活动。集合/统计沿用一次UTC微秒时刻与只读快照，不新增筛选或统计字段。页面独立显示“报名已截止”，本地边界计时器更新标签和按钮，不轮询接口；集合与统计跨边界后手动刷新。
+
+字段路径：CreateActivityPage / registrationDeadlineInputError / activityCreateRequest → CreateActivityRequest → ActivityService / NewActivity / ActivityMapper → V12 → ActivityRow / 本人报名与收藏联表 / ActivityView。写入约束由RegistrationService锁后核时，显示和控制由activityRegistrationClosed处理；活动相位仍由activityPhase处理。
+
 ## 管理员复制活动
 
 管理列表（桌面及手机）与活动详情提供仅管理员可见的“复制活动”，未开始、进行中、已结束和已取消活动均可作为来源。入口为 /admin/activities/new?copyFrom={id}，读取完成前不显示可提交表单；来源读取重新请求现有公开活动详情，不信任列表旧快照。
 
-只预填 title、description、location、category、capacity，原标题保持不加后缀，两项时间清空。开始必填、结束可选且晚于开始，均按北京时间解释。提交复用原 POST /api/admin/activities，显式列出创建字段，不传 copyFrom/id/封面/人数/取消/人员或其他历史；发布创建新 ID、零报名人数和正常 CREATE 审计。封面在新活动发布后另传，原活动及关联历史保持。
+只预填 title、description、location、category、capacity，原标题保持不加后缀，开始、结束和报名截止均清空。开始必填、结束和报名截止可选，沿用各自严格时间校验，均按北京时间解释。提交复用原 POST /api/admin/activities，显式列出创建字段，不传 copyFrom/id/封面/人数/取消/人员或其他历史；发布创建新 ID、零报名人数和正常 CREATE 审计。封面在新活动发布后另传，原活动及关联历史保持。
 
 copyFrom 缺失为普通发布且不读取来源；空值、重复、非正安全整数为明确错误，不自动降级为空白发布。来源不存在或网络失败可重新加载或进入普通发布。来源标题按纯文本显示，不渲染HTML；成功预填后不后台重填用户草稿，不写入本地存储。
 
@@ -47,7 +59,7 @@ copyFrom 缺失为普通发布且不读取来源；空值、重复、非正安�
 
 Controller 的 `@Size` 也对原始字符串检查同一长度上限；不能发送超过上限的空白后指望服务层去除再接受。前端提交会先去除首尾空白，后端仍独立校验。
 
-客户端只能提交上述业务字段。额外的 `capacity`、`startsAt`、`endsAt`、`cancelledBy` 或用户身份字段不会写入；实际操作人来自 Spring Security 的可信身份，角色由 `/api/admin/**` 权限规则检查。未登录返回 401，普通用户在真实有效 CSRF 下仍返回 403 `FORBIDDEN`，无效 CSRF 返回 403 `CSRF_INVALID`。不存在的活动返回 404 `ACTIVITY_NOT_FOUND`。
+客户端只能提交上述业务字段。编辑中额外的 `capacity`、`startsAt`、`endsAt`、`registrationDeadline`、`cancelledBy` 或用户身份字段不会写入；实际操作人来自 Spring Security 的可信身份，角色由 `/api/admin/**` 权限规则检查。未登录返回 401，普通用户在真实有效 CSRF 下仍返回 403 `FORBIDDEN`，无效 CSRF 返回 403 `CSRF_INVALID`。不存在的活动返回 404 `ACTIVITY_NOT_FOUND`。
 
 新增响应字段为：
 
@@ -64,7 +76,8 @@ Controller 的 `@Size` 也对原始字符串检查同一长度上限；不能发
 
 | 当前活动 | 编辑 | 组织者取消 | 用户报名或取消报名/候补 |
 | --- | --- | --- | --- |
-| 未开始且未取消 | 只改标题、介绍、地点和分类 | 关闭活动和报名，保存首次取消信息 | 沿用名额、幂等及候补 FIFO 规则 |
+| 未开始且未取消、未截止 | 只改标题、介绍、地点和分类 | 关闭活动和报名，保存首次取消信息 | 沿用名额、幂等及候补 FIFO 规则 |
+| 未开始且未取消、已截止 | 同上，截止时间固定 | 同上 | 报名409 REGISTRATION_CLOSED；仍可取消与递补已有候补 |
 | 已开始且未取消 | 409 `ACTIVITY_CLOSED` | 409 `ACTIVITY_CLOSED` | 409 `ACTIVITY_CLOSED` |
 | 已取消 | 409 `ACTIVITY_CANCELLED` | 有效请求重复返回首次结果 | 409 `ACTIVITY_CANCELLED` |
 

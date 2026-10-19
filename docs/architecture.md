@@ -124,9 +124,15 @@ V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 
 
 ## 复制活动与普通发布
 
-复制是管理员发布表单的辅助入口，/admin/activities/new?copyFrom={id} 复用 GET /api/activities/{id} 读取公开来源字段，再由原 POST /api/admin/activities 新建。所有来源状态可用，但入口与页面仍在管理员门禁内；只预填五项基本资料，清空起止时间，无封面/人员/状态/历史关联，也不保存来源ID或草稿。无新增后端接口、数据库字段、依赖或迁移，保持V11。
+复制是管理员发布表单的辅助入口，/admin/activities/new?copyFrom={id} 复用 GET /api/activities/{id} 读取公开来源字段，再由原 POST /api/admin/activities 新建。所有来源状态可用，但入口与页面仍在管理员门禁内；只预填五项基本资料，清空开始、结束和报名截止时间，无封面/人员/状态/历史关联，也不保存来源ID或草稿。复制本身不增加接口、数据库字段或依赖。
 
 CreateActivityPage 保留页面实例，通过按路径/来源/身份隔离的来源读取和表单子区域保护草稿；成功读取才预填一次。提交显式构造 NewActivity，旧提交不能导航或影响新来源/身份；登录返回保留查询参数。具体参数与错误行为见 [活动生命周期](activity-lifecycle.md#管理员复制活动)。
+
+## 报名截止
+
+V12 在活动行增加可空 registration_deadline，CHECK严格早于starts_at；旧值为null，等同开始时截止。创建接口可选registrationDeadline，UTC微秒规范化后要求当前<截止<开始，创建后固定，CREATE审计保存实际值。公开、管理、本人报名及收藏的活动投影统一返回registrationDeadline/registrationClosed；closed仍只表示取消或已开始，取消、编辑、封面和签到权限使用原规则。
+
+RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒当前时刻，按取消、开始、截止顺序拒绝；取消路径不提前截止，既有候补仍能在开始前按FIFO递补与通知。页面由独立activityRegistrationClosed控制报名入口，原activityClosed控制开始前取消/管理；已有边界计时器加入截止时间，无轮询。API、错误码和字段链路见 [报名截止时间](activity-lifecycle.md#报名截止时间)。
 
 ## 管理查询与统计口径
 
@@ -138,14 +144,14 @@ CreateActivityPage 保留页面实例，通过按路径/来源/身份隔离的�
 | --- | --- |
 | `ALL` | 所有活动 |
 | `UPCOMING` | 未取消且开始时间晚于当前时间，包含满员活动 |
-| `OPEN` | 未取消、尚未开始且有剩余名额 |
-| `FULL` | 未取消、尚未开始且有效报名人数等于总名额 |
+| `OPEN` | 未取消、尚未开始、未到报名截止且有剩余名额 |
+| `FULL` | 未取消、尚未开始、未到报名截止且有效报名人数等于总名额 |
 | `STARTED` | 未取消且开始时间等于或早于当前时间；含进行中、已结束和未知结束 |
 | `ONGOING` | 未取消且结束非空，开始时间 ≤ 当前时间 < 结束时间 |
 | `ENDED` | 未取消且结束非空，结束时间 ≤ 当前时间 |
 | `CANCELLED` | 取消时间非空，不依赖原开始时间 |
 
-概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的时间条件；`fullActivities` 只统计未取消且尚未开始的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消且尚未开始活动的剩余名额。每个请求固定一个 UTC 当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
+概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的开始时间条件，提前截止仍计入未开始；`fullActivities` 只统计未取消、尚未开始且未到报名截止的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消、尚未开始且未到报名截止活动的剩余名额。每个请求固定一个 UTC 微秒当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
 
 `GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，`status=ALL|ACTIVE|WAITING|CANCELLED` 与 `checkInStatus=ALL|CHECKED_IN|NOT_CHECKED_IN` 默认均为 `ALL`、按 AND 组合，返回 `{activity,items,total,page,pageSize,summary}`。签到筛选只匹配 `ACTIVE`，因此候补或已取消与已签到/未签到组合时为空。名单行保留原字段，增加可空 UTC `checkedInAt`、`checkedInBy` 与管理员当前数据库昵称 `checkedInByDisplayName`；按 `updated_at DESC, id DESC` 排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
 
@@ -229,11 +235,11 @@ Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保�
 
 ## 备份恢复验证路径
 
-这是本地运维脚本流程，独立于上面的业务 API。当前门禁为 V11，备份包含六张业务表和 Flyway 历史，图片保存在活动行中，一并验收。
+这是本地运维脚本流程，独立于上面的业务 API。当前门禁为 V12，备份包含六张业务表和 Flyway 历史，图片保存在活动行中，报名截止与结束时间的空值/微秒一并验收。
 
 ```mermaid
 flowchart LR
-    S[原库：已核 UUID / V11] -->|无写入和 DDL 窗口，只读导出| P[SQL / manifest / 结构与全字段摘要]
+    S[原库：已核 UUID / V12] -->|无写入和 DDL 窗口，只读导出| P[SQL / manifest / 结构与全字段摘要]
     P -->|专属受限账号，只接受新空库| T[独立 MySQL / 不同服务器 UUID]
     T --> V[结构 / 迁移 / 行内容 / 图片 / 约束核验]
     V --> A[专属后端与真实浏览器验收]

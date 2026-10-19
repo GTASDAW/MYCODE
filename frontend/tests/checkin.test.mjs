@@ -34,6 +34,8 @@ test('a stale pre-start snapshot opens check-in on time and an ended activity st
   assert.equal(canCheckInRegistration(activity, registration, start), true);
   assert.equal(canCheckInRegistration(activity, registration, start + 86400_000), true);
   assert.equal(canCheckInRegistration({ ...activity, cancelled: true }, registration, start + 86400_000), false);
+  assert.equal(canCheckInRegistration({ ...activity, registrationDeadline: '2029-12-31T23:00:00Z', registrationClosed: true }, registration, start - 1), false);
+  assert.equal(canCheckInRegistration({ ...activity, registrationDeadline: '2029-12-31T23:00:00Z', registrationClosed: true }, registration, start), true);
 });
 
 function browserDownload() {

@@ -30,12 +30,15 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -53,9 +56,10 @@ class ActivityEndTimeIntegrationTest {
 
     static class MutableClock extends Clock {
         final AtomicReference<Instant> time = new AtomicReference<>(NOW);
+        final AtomicInteger calls = new AtomicInteger();
         @Override public ZoneId getZone() { return ZoneOffset.UTC; }
         @Override public Clock withZone(ZoneId zone) { return Clock.fixed(instant(), zone); }
-        @Override public Instant instant() { return time.get(); }
+        @Override public Instant instant() { calls.incrementAndGet(); return time.get(); }
     }
     @TestConfiguration(proxyBeanMethods = false) static class Configuration {
         @Bean @Primary MutableClock endTimeClock() { return new MutableClock(); }
@@ -65,16 +69,34 @@ class ActivityEndTimeIntegrationTest {
         @Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class})})
     static class EndTimeQueries implements Interceptor {
         final AtomicBoolean failAudit = new AtomicBoolean();
-        final List<String> lockSql = new ArrayList<>();
+        final AtomicBoolean failPromotion = new AtomicBoolean();
+        final AtomicReference<CountDownLatch> beforeLock = new AtomicReference<>();
+        final AtomicReference<Runnable> afterTotals = new AtomicReference<>();
+        final ThreadLocal<List<SnapshotRead>> captured = new ThreadLocal<>();
+        final List<String> lockSql = new CopyOnWriteArrayList<>();
         @Override public Object intercept(Invocation invocation) throws Throwable {
             var statement = (MappedStatement) invocation.getArgs()[0];
             if (statement.getId().endsWith("AuditLogMapper.insert") && failAudit.getAndSet(false))
                 throw new DataAccessResourceFailureException("Injected end time audit failure");
-            if (statement.getId().endsWith("ActivityMapper.lockById"))
+            if (statement.getId().endsWith("NotificationMapper.insertPromotion") && failPromotion.getAndSet(false))
+                throw new DataAccessResourceFailureException("Injected deadline promotion failure");
+            if (statement.getId().endsWith("ActivityMapper.lockById")) {
                 lockSql.add(statement.getBoundSql(invocation.getArgs()[1]).getSql());
-            return invocation.proceed();
+                var latch = beforeLock.getAndSet(null); if (latch != null) latch.countDown();
+            }
+            if (captured.get() != null && invocation.getMethod().getName().equals("query")) {
+                Object input = invocation.getArgs()[1];
+                captured.get().add(new SnapshotRead(statement.getId(), input instanceof Map<?, ?> map ? (LocalDateTime) map.get("now") : null,
+                    TransactionSynchronizationManager.isCurrentTransactionReadOnly(), TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()));
+            }
+            Object result = invocation.proceed();
+            if (statement.getId().endsWith("ActivityMapper.searchTotals")) {
+                var action = afterTotals.getAndSet(null); if (action != null) action.run();
+            }
+            return result;
         }
     }
+    record SnapshotRead(String statement, LocalDateTime now, boolean readOnly, Integer isolation) {}
     @DynamicPropertySource static void database(DynamicPropertyRegistry properties) {
         String url = System.getenv("TEST_DB_URL");
         if (url == null || !url.startsWith("jdbc:mysql:") || !"/activity_platform_test".equals(URI.create(url.substring(5)).getPath()))
@@ -97,6 +119,7 @@ class ActivityEndTimeIntegrationTest {
     @Autowired FavoriteService favorites;
     @Autowired CheckInService checkIns;
     @Autowired AuditLogService audit;
+    @Autowired AdminService admin;
     @Autowired MutableClock clock;
     @Autowired EndTimeQueries queries;
     final Map<Long, String> fixtureActivities = new LinkedHashMap<>();
@@ -107,12 +130,13 @@ class ActivityEndTimeIntegrationTest {
     @BeforeEach void gate() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(11);
-        jdbc.queryForList("SELECT id,category,cover_hash,cover_image,ends_at FROM activities LIMIT 0");
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(12);
+        jdbc.queryForList("SELECT id,category,cover_hash,cover_image,ends_at,registration_deadline FROM activities LIMIT 0");
         clock.time.set(NOW);
     }
     @AfterEach void cleanup() {
-        clock.time.set(NOW); queries.failAudit.set(false); queries.lockSql.clear();
+        clock.time.set(NOW); queries.failAudit.set(false); queries.failPromotion.set(false); queries.beforeLock.set(null);
+        queries.afterTotals.set(null); queries.captured.remove(); queries.lockSql.clear();
         fixtureActivities.forEach((id, title) -> assertThat(jdbc.queryForObject("SELECT title FROM activities WHERE id=?", String.class, id)).isEqualTo(title));
         fixtureUsers.forEach((id, username) -> assertThat(users.findById(id).username()).isEqualTo(username));
         OwnedIntegrationFixtures.remove(jdbc, fixtureActivities.keySet(), fixtureUsers.keySet(), favoriteKeys);
@@ -185,7 +209,7 @@ class ActivityEndTimeIntegrationTest {
 
     @Test void createStillRequiresAdminAndCsrfAndNeverTrustsClientIdentity() throws Exception {
         String title = prefix + " permission";
-        var body = body(title, START.toString()); body.put("endsAt", END.toString());
+        var body = body(title, START.toString()); body.put("endsAt", END.toString()); body.put("registrationDeadline", NOW.plusSeconds(60).toString());
         String text = json.writeValueAsString(body); long member = account();
         mvc.perform(post("/api/admin/activities").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(text)).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/admin/activities").with(user(principal(member))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(text)).andExpect(status().isForbidden());
@@ -253,6 +277,169 @@ class ActivityEndTimeIntegrationTest {
             .isInstanceOf(DataAccessException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activities WHERE title=?", Integer.class, title)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activity_audit_logs WHERE activity_title=?", Integer.class, title)).isZero();
+    }
+
+    @Test void deadlineCreationUsesUtcMicrosecondsRejectsExactAndNanosecondEdgesAndPreservesOldRequests() throws Exception {
+        for (Instant invalid : List.of(NOW.minusSeconds(60), NOW.minusNanos(1000), NOW, NOW.plusNanos(999), START, START.plusNanos(1000), START.plusSeconds(60))) {
+            String title = prefix + " invalid deadline " + invalid;
+            var body = body(title, START.toString()); body.put("registrationDeadline", invalid.toString());
+            mvc.perform(post("/api/admin/activities").with(user(principal(adminId()))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(body)))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activities WHERE title=?", Integer.class, title)).isZero();
+        }
+        for (Instant valid : List.of(NOW.plusNanos(1000), START.minusNanos(1000), NOW.plusSeconds(60))) {
+            var body = body(prefix + " valid deadline " + valid, START.toString());
+            body.put("registrationDeadline", valid.plusNanos(999).atOffset(ZoneOffset.ofHours(8)).toString());
+            long id = postActivity(body);
+            assertThat(activities.get(id, null).registrationDeadline()).isEqualTo(valid);
+            assertThat(jdbc.queryForObject("SELECT registration_deadline FROM activities WHERE id=?", LocalDateTime.class, id)).isEqualTo(utc(valid));
+            assertThat(audit.detail(audit.search(1, 10, "CREATE", id).items().getFirst().id()).changes())
+                .contains(new AuditChange("registrationDeadline", null, valid.toString()));
+        }
+        for (boolean explicitNull : List.of(false, true)) {
+            var body = body(prefix + " legacy deadline " + explicitNull, START.toString()); if (explicitNull) body.put("registrationDeadline", null);
+            long id = postActivity(body); assertThat(activities.get(id, null).registrationDeadline()).isNull();
+            assertThat(activities.get(id, null).registrationClosed()).isFalse();
+        }
+    }
+
+    @Test void databaseDeadlineConstraintIsNullableAndStrictlyBeforeStartWithoutBackfill() {
+        long id = activity(END);
+        assertThat(activities.get(id, null).registrationDeadline()).isNull();
+        for (Instant invalid : List.of(START, START.plusNanos(1000)))
+            assertThatThrownBy(() -> jdbc.update("UPDATE activities SET registration_deadline=? WHERE id=?", utc(invalid), id)).isInstanceOf(DataAccessException.class);
+        jdbc.update("UPDATE activities SET registration_deadline=? WHERE id=?", utc(START.minusNanos(1000)), id);
+        assertThat(activities.get(id, null).registrationDeadline()).isEqualTo(START.minusNanos(1000));
+        jdbc.update("UPDATE activities SET registration_deadline=NULL WHERE id=?", id);
+        var column = jdbc.queryForMap("SELECT IS_NULLABLE,DATETIME_PRECISION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='activities' AND COLUMN_NAME='registration_deadline'");
+        assertThat(column.get("IS_NULLABLE")).isEqualTo("YES"); assertThat(((Number) column.get("DATETIME_PRECISION")).intValue()).isEqualTo(6);
+    }
+
+    @Test void exactDeadlineRejectsFreshWaitingRejoinAndDuplicateWithoutChangingRowsButCancellationStillPromotesFifo() {
+        Instant deadline = NOW.plusSeconds(60); long id = deadlineActivity(deadline, 1);
+        long active = account(), first = account(), second = account(), cancelled = account(), fresh = account();
+        registrations.register(id, active); registrations.register(id, first); registrations.register(id, second); registrations.register(id, cancelled); registrations.cancel(id, cancelled);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", utc(NOW.minusSeconds(2)), id, first);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", utc(NOW.minusSeconds(1)), id, second);
+        clock.time.set(deadline.minusNanos(1000)); assertThat(registrations.register(id, first).registrationStatus()).isEqualTo("WAITING");
+        var before = deadlineState(id);
+        for (Instant time : List.of(deadline, deadline.plusNanos(1000), deadline.plusSeconds(60))) {
+            clock.time.set(time);
+            for (long member : List.of(active, first, second, cancelled, fresh))
+                assertThatThrownBy(() -> registrations.register(id, member)).isInstanceOfSatisfying(com.example.gather.api.ApiException.class,
+                    error -> assertThat(error.code()).isEqualTo("REGISTRATION_CLOSED"));
+            assertThat(deadlineState(id)).isEqualTo(before);
+            assertThat(activities.get(id, null).closed()).isFalse(); assertThat(activities.get(id, null).registrationClosed()).isTrue();
+        }
+        registrations.cancel(id, active);
+        assertThat(activities.get(id, first).registrationStatus()).isEqualTo("ACTIVE"); assertThat(activities.get(id, second).registrationStatus()).isEqualTo("WAITING");
+        assertThat(activities.get(id, null).registeredCount()).isEqualTo(1);
+        assertThat(jdbc.queryForList("SELECT user_id FROM notifications WHERE activity_id=? AND type='PROMOTED'", Long.class, id)).containsExactly(first);
+        registrations.cancel(id, active); assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM notifications WHERE activity_id=?", Integer.class, id)).isEqualTo(1);
+        registrations.cancel(id, second); assertThat(activities.get(id, null).waitingCount()).isZero();
+        clock.time.set(START);
+        assertThatThrownBy(() -> registrations.register(id, fresh)).isInstanceOfSatisfying(com.example.gather.api.ApiException.class, error -> assertThat(error.code()).isEqualTo("ACTIVITY_CLOSED"));
+        assertThatThrownBy(() -> registrations.cancel(id, first)).isInstanceOfSatisfying(com.example.gather.api.ApiException.class, error -> assertThat(error.code()).isEqualTo("ACTIVITY_CLOSED"));
+    }
+
+    @Test void realLockWaitCrossesDeadlineBeforeGuardAndConcurrentContendersAtDeadlineNeverEnter() throws Exception {
+        Instant deadline = NOW.plusSeconds(60); long id = deadlineActivity(deadline, 1), member = account();
+        try (var connection = Objects.requireNonNull(jdbc.getDataSource()).getConnection(); var executor = Executors.newFixedThreadPool(4)) {
+            connection.setAutoCommit(false);
+            try (var lock = connection.prepareStatement("SELECT id FROM activities WHERE id=? FOR UPDATE")) { lock.setLong(1, id); lock.executeQuery().close(); }
+            var reached = new CountDownLatch(1); queries.beforeLock.set(reached); clock.time.set(deadline.minusNanos(1000));
+            var pending = executor.submit(() -> registrations.register(id, member));
+            assertThat(reached.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> pending.get(150, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class);
+            clock.time.set(deadline); connection.commit();
+            assertThatThrownBy(() -> pending.get(5, TimeUnit.SECONDS)).isInstanceOf(ExecutionException.class).hasCauseInstanceOf(com.example.gather.api.ApiException.class)
+                .satisfies(error -> assertThat(((com.example.gather.api.ApiException) error.getCause()).code()).isEqualTo("REGISTRATION_CLOSED"));
+            var outcomes = new ArrayList<Future<String>>();
+            for (int index = 0; index < 6; index++) { long contender = account(); outcomes.add(executor.submit(() -> {
+                try { registrations.register(id, contender); return "unexpected success"; }
+                catch (com.example.gather.api.ApiException failure) { return failure.code(); }
+            })); }
+            for (var outcome : outcomes) assertThat(outcome.get(5, TimeUnit.SECONDS)).isEqualTo("REGISTRATION_CLOSED");
+        }
+        assertThat(activities.get(id, null).registeredCount()).isZero(); assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM registrations WHERE activity_id=?", Integer.class, id)).isZero();
+        assertThat(queries.lockSql).allSatisfy(sql -> assertThat(sql.toLowerCase(Locale.ROOT)).contains("registration_deadline", "for update").doesNotContain("ends_at", "cover_image", "description"));
+    }
+
+    @Test void deadlineDoesNotBlockEditCancelOrCheckInAndPromotionFailureRollsBackAllRows() {
+        Instant deadline = NOW.plusSeconds(60); long id = deadlineActivity(deadline, 1), first = account(), waiting = account();
+        registrations.register(id, first); registrations.register(id, waiting); clock.time.set(deadline);
+        var before = deadlineState(id); queries.failPromotion.set(true);
+        assertThatThrownBy(() -> registrations.cancel(id, first)).isInstanceOf(DataAccessException.class);
+        assertThat(deadlineState(id)).isEqualTo(before);
+        activities.edit(id, new EditActivityRequest(fixtureActivities.get(id), "New text after deadline", "New venue"), adminId());
+        assertThat(activities.get(id, null).registrationDeadline()).isEqualTo(deadline);
+        registrations.cancel(id, first); clock.time.set(START);
+        long registration = jdbc.queryForObject("SELECT id FROM registrations WHERE activity_id=? AND user_id=?", Long.class, id, waiting);
+        assertThat(checkIns.checkIn(id, registration, adminId()).checkedInAt()).isEqualTo(START);
+        clock.time.set(NOW); long cancelled = deadlineActivity(deadline, 1); clock.time.set(deadline);
+        assertThat(activities.cancel(cancelled, new CancelActivityRequest("Cancel after deadline"), adminId()).cancelled()).isTrue();
+    }
+
+    @Test void deadlineAppearsInEveryProjectionAndCannotBeEditedThroughExtraJson() throws Exception {
+        Instant deadline = NOW.plusSeconds(60); long id = deadlineActivity(deadline, 2), member = account();
+        assertProjectionEnds(id, member, END);
+        registrations.register(id, member); favorites.add(member, id); clock.time.set(deadline);
+        var views = new ArrayList<ActivityView>(); views.add(activities.get(id, null)); views.addAll(activities.list(null));
+        views.addAll(activities.search(1, 100, fixtureActivities.get(id), "ALL", null).items());
+        views.addAll(admin.activities(1, 100, fixtureActivities.get(id), "ALL", adminId()).items());
+        views.add(admin.roster(id, 1, 10, "ALL", adminId()).activity());
+        views.addAll(registrations.mine(member).stream().map(RegistrationView::activity).toList());
+        views.addAll(registrations.searchMine(member, 1, 10, "ALL").items().stream().map(item -> item.activity()).toList());
+        views.addAll(favorites.page(member, 1, 10).items().stream().map(item -> item.activity()).toList());
+        assertThat(views.stream().filter(item -> item.id() == id).toList()).hasSize(8).allSatisfy(item -> {
+            assertThat(item.registrationDeadline()).isEqualTo(deadline); assertThat(item.registrationClosed()).isTrue(); assertThat(item.closed()).isFalse();
+        });
+        mvc.perform(patch("/api/admin/activities/" + id).with(user(principal(adminId()))).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+            .content(json.writeValueAsString(Map.of("title", fixtureActivities.get(id), "description", "Owned end fixture", "location", "会场", "registrationDeadline", START.minusSeconds(1).toString()))))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.registrationDeadline").value(deadline.toString())).andExpect(jsonPath("$.closed").value(false)).andExpect(jsonPath("$.registrationClosed").value(true));
+    }
+
+    @Test void deadlineFiltersAndSummaryExcludeClosedSignupButKeepUpcomingAndUseOneReadonlySnapshot() throws Exception {
+        Instant deadline = NOW.plusSeconds(60); long expired = deadlineActivity(deadline, 3), fullExpired = deadlineActivity(deadline, 1);
+        registrations.register(fullExpired, account()); long open = deadlineActivity(deadline.plusSeconds(1), 4), full = deadlineActivity(deadline.plusSeconds(1), 1);
+        registrations.register(full, account()); long legacy = activity(END); clock.time.set(deadline);
+        assertThat(activities.search(1, 100, prefix, "OPEN", null).items()).extracting(ActivityView::id).containsExactly(open, legacy);
+        assertThat(activities.search(1, 100, prefix, "FULL", null).items()).extracting(ActivityView::id).containsExactly(full);
+        var all = activities.search(2, 2, prefix, "ALL", null); assertThat(all.total()).isEqualTo(5);
+        assertThat(all.summary()).isEqualTo(new ActivitySearchSummary(3, 6));
+        assertThat(activities.search(1, 100, prefix, "UPCOMING", null).items()).extracting(ActivityView::id).containsExactly(expired, fullExpired, open, full, legacy);
+        for (String filter : List.of("ALL", "OPEN", "FULL", "UPCOMING"))
+            assertThat(admin.activities(1, 100, prefix, filter, adminId()).items()).isEqualTo(activities.search(1, 100, prefix, filter, adminId()).items());
+        try (var writer = Executors.newSingleThreadExecutor()) {
+            queries.afterTotals.set(() -> { try { writer.submit(() -> jdbc.update("UPDATE activities SET registration_deadline=? WHERE id=?", utc(deadline), open)).get(5, TimeUnit.SECONDS); }
+                catch (Exception failure) { throw new AssertionError("Owned deadline change must commit between SELECTs", failure); } });
+            List<SnapshotRead> reads = new ArrayList<>(); queries.captured.set(reads); clock.calls.set(0);
+            var snapshot = activities.search(1, 100, prefix, "OPEN", null); queries.captured.remove();
+            assertThat(snapshot.items()).extracting(ActivityView::id).containsExactly(open, legacy); assertThat(snapshot.summary()).isEqualTo(new ActivitySearchSummary(2, 6));
+            assertThat(clock.calls.get()).isEqualTo(1); assertThat(reads).hasSize(2).allSatisfy(read -> {
+                assertThat(read.now()).isEqualTo(utc(deadline)); assertThat(read.readOnly()).isTrue(); assertThat(read.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+            });
+        }
+        assertThat(activities.search(1, 100, prefix, "OPEN", null).items()).extracting(ActivityView::id).containsExactly(legacy);
+    }
+
+    @Test void failedCreateAuditRollsBackDeadlineAlongWithActivity() {
+        String title = prefix + " deadline rollback"; queries.failAudit.set(true);
+        assertThatThrownBy(() -> activities.create(new CreateActivityRequest(title, "Owned end fixture", "会场", START, 2, "TECHNOLOGY", END, NOW.plusSeconds(60)), adminId()))
+            .isInstanceOf(DataAccessException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM activities WHERE title=?", Integer.class, title)).isZero();
+    }
+
+    private long deadlineActivity(Instant deadline, int capacity) {
+        String title = prefix + " deadline " + fixtureActivities.size();
+        long id = activities.create(new CreateActivityRequest(title, "Owned end fixture", "会场", START, capacity, "TECHNOLOGY", END, deadline), adminId()).id();
+        fixtureActivities.put(id, title); return id;
+    }
+    private Map<String, Object> deadlineState(long id) {
+        return Map.of("activity", jdbc.queryForMap("SELECT * FROM activities WHERE id=?", id),
+            "registrations", jdbc.queryForList("SELECT * FROM registrations WHERE activity_id=? ORDER BY id", id),
+            "notifications", jdbc.queryForList("SELECT * FROM notifications WHERE activity_id=? ORDER BY id", id),
+            "audit", jdbc.queryForList("SELECT * FROM activity_audit_logs WHERE activity_id=? ORDER BY id", id));
     }
 
     private void assertProjectionEnds(long id, long member, Instant end) throws Exception {

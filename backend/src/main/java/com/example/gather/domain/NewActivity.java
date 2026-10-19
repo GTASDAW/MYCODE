@@ -10,6 +10,7 @@ public class NewActivity {
     public final String location;
     public final LocalDateTime startsAt;
     public final LocalDateTime endsAt;
+    public final LocalDateTime registrationDeadline;
     public final int capacity;
     public final long createdBy;
     public final String category;
@@ -26,11 +27,17 @@ public class NewActivity {
 
     public NewActivity(String title, String description, String location, LocalDateTime startsAt,
                        int capacity, long createdBy, String category, LocalDateTime endsAt) {
+        this(title, description, location, startsAt, capacity, createdBy, category, endsAt, null);
+    }
+
+    public NewActivity(String title, String description, String location, LocalDateTime startsAt,
+                       int capacity, long createdBy, String category, LocalDateTime endsAt, LocalDateTime registrationDeadline) {
         this.title = title;
         this.description = description;
         this.location = location;
         this.startsAt = startsAt;
         this.endsAt = endsAt;
+        this.registrationDeadline = registrationDeadline;
         this.capacity = capacity;
         this.createdBy = createdBy;
         this.category = category;

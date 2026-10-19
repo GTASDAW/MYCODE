@@ -81,7 +81,7 @@ public class ActivityService {
     @Transactional
     public ActivityView create(CreateActivityRequest request, long creatorId) {
         String category = ActivityCategories.value(request.category() == null ? "UNCATEGORIZED" : request.category());
-        Instant now = clock.instant();
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         Instant startsAt = request.startsAt().truncatedTo(ChronoUnit.MICROS);
         if (!startsAt.isAfter(now)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "开始时间必须在未来");
@@ -90,9 +90,14 @@ public class ActivityService {
         if (endsAt != null && !endsAt.isAfter(startsAt)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "结束时间必须晚于开始时间");
         }
+        Instant deadline = request.registrationDeadline() == null ? null : request.registrationDeadline().truncatedTo(ChronoUnit.MICROS);
+        if (deadline != null && (!deadline.isAfter(now) || !deadline.isBefore(startsAt))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "报名截止时间必须晚于当前时间且早于开始时间");
+        }
         NewActivity row = new NewActivity(request.title().strip(), request.description().strip(), request.location().strip(),
             LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId, category,
-            endsAt == null ? null : LocalDateTime.ofInstant(endsAt, ZoneOffset.UTC));
+            endsAt == null ? null : LocalDateTime.ofInstant(endsAt, ZoneOffset.UTC),
+            deadline == null ? null : LocalDateTime.ofInstant(deadline, ZoneOffset.UTC));
         activities.insert(row);
         audit.created(row, creatorId, now);
         return get(row.id, creatorId);

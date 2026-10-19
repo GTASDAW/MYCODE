@@ -5,7 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { canManageActivity } from "../activityLifecycle";
 import { ActivityCancellationNotice, ErrorState, LoadingState, PageHeading } from "../components";
-import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import { useActivityClock } from "../useActivityClock";
 import type { ActivityDetails } from "../types";
 import { useActivityMutation } from "./useActivityMutation";
@@ -56,7 +56,7 @@ function EditActivityPage() {
 
   return (
     <div className="page-container">
-      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改封面、标题、介绍、地点和分类。开始、结束时间与名额发布后固定。" />
+      <PageHeading title="编辑活动" section="活动管理" description="活动开始前可修改封面、标题、介绍、地点和分类。开始、结束、报名截止时间与名额发布后固定。" />
       {mutation.error && <Alert className="form-alert" type="error" showIcon title={mutation.error} />}
       {resource.loading ? <LoadingState /> : resource.error ? (
         <ErrorState error={resource.error} retry={resource.retry} />
@@ -99,6 +99,9 @@ function EditActivityPage() {
               </Form.Item>
             </div>
             <div className="form-two-columns">
+              <Form.Item label="报名截止时间（北京时间）" extra="报名截止时间发布后固定。">
+                <Input readOnly value={formatRegistrationDeadline(activity.registrationDeadline)} aria-label="报名截止时间（北京时间）" />
+              </Form.Item>
               <Form.Item label="报名名额" extra="活动发布后，名额数量固定。">
                 <Input readOnly value={`${activity.capacity} 人`} aria-label="报名名额" />
               </Form.Item>

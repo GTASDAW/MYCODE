@@ -1110,6 +1110,32 @@ test('category writes retain old omitted/null calls, whitelist editable fields, 
   }
 });
 
+test('registration deadlines preserve old creation calls and explicit null or UTC values while edits cannot change the deadline', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController(), writes = [];
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/auth/csrf') return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' });
+    const body = JSON.parse(options.body);
+    writes.push({ url, options, body });
+    return response(200, { id: 42, registrationDeadline: body.registrationDeadline ?? null, registrationClosed: false });
+  };
+  const create = { title: '截止活动', description: '说明', location: '上海', startsAt: '2035-01-01T01:00:00Z', capacity: 10 };
+  for (const registrationDeadline of [undefined, null, '2035-01-01T00:00:00.123456Z']) {
+    const result = await api.createActivity({ ...create, registrationDeadline }, controller.signal);
+    assert.equal(result.registrationDeadline, registrationDeadline ?? null);
+    assert.equal(result.registrationClosed, false);
+  }
+  assert.equal(Object.hasOwn(writes[0].body, 'registrationDeadline'), false);
+  assert.equal(writes[1].body.registrationDeadline, null);
+  assert.equal(writes[2].body.registrationDeadline, '2035-01-01T00:00:00.123456Z');
+  await api.updateActivity(42, { title: '更新', description: '说明', location: '上海', registrationDeadline: null }, controller.signal);
+  assert.deepEqual(writes[3].body, { title: '更新', description: '说明', location: '上海' });
+  for (const write of writes) {
+    assert.equal(write.options.signal, controller.signal);
+    assert.equal(write.options.headers.get('X-CSRF-TOKEN'), 'valid');
+  }
+});
+
 test('invalid category errors remain explicit without automatic write replay and an abandoned publication never starts', async () => {
   const { api } = await freshApi();
   let writes = 0;

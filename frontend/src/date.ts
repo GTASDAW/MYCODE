@@ -76,6 +76,23 @@ export function activityEndInputError(startsAt: string | undefined, endsAt: stri
   }
 }
 
+export function registrationDeadlineInputError(startsAt: string | undefined, deadline: string | undefined, now = Date.now()): string | null {
+  if (!deadline) return null;
+  try {
+    const end = instantMicroseconds(beijingInputToIso(deadline))!;
+    if (end <= BigInt(Math.trunc(now)) * 1000n) return "报名截止时间必须晚于当前时间";
+    if (!startsAt) return "请先选择开始时间";
+    const start = instantMicroseconds(beijingInputToIso(startsAt))!;
+    return end < start ? null : "报名截止时间必须早于开始时间";
+  } catch {
+    return "请输入有效的活动时间";
+  }
+}
+
+export function formatRegistrationDeadline(value: string | null | undefined): string {
+  return value ? `${formatDate(value)} ${formatTime(value)}` : "活动开始时";
+}
+
 export function formatActivityEnd(value: string | null | undefined): string {
   return value ? `${formatDate(value)} ${formatTime(value)}` : "未提供";
 }

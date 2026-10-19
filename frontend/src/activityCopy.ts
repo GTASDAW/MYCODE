@@ -37,6 +37,7 @@ export interface ActivityCreateFormValues {
   location: string;
   startsAt: string;
   endsAt?: string;
+  registrationDeadline?: string;
   capacity: number;
   category: ActivityCategory;
 }
@@ -50,6 +51,7 @@ export function activityCopyDraft(activity: Activity): Partial<ActivityCreateFor
     capacity: activity.capacity,
     startsAt: undefined,
     endsAt: undefined,
+    registrationDeadline: undefined,
   };
 }
 
@@ -62,5 +64,6 @@ export function activityCreateRequest(values: ActivityCreateFormValues): NewActi
     capacity: values.capacity,
     startsAt: beijingInputToIso(values.startsAt),
     endsAt: values.endsAt ? beijingInputToIso(values.endsAt) : null,
+    registrationDeadline: values.registrationDeadline ? beijingInputToIso(values.registrationDeadline) : null,
   };
 }

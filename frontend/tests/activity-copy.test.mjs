@@ -16,13 +16,13 @@ test('copy sources accept exactly one positive safe integer while ordinary publi
     assert.deepEqual(parseActivityCopySource(search), { kind: 'invalid' });
 });
 
-test('copy draft preserves the exact original text and only the five editable fields, with both times cleared', () => {
+test('copy draft preserves the exact original text and only the five editable fields, with all three times cleared', () => {
   const source = { id: 42, title: ' 原标题 <img src=x> ', description: '原介绍\n第二行', location: ' 原地点 ', category: 'SPORTS', capacity: 13,
-    startsAt: '2000-01-01T00:00:00Z', endsAt: '2000-01-01T01:00:00Z', coverUrl: '/private-cover', coverHash: 'private-hash',
+    startsAt: '2000-01-01T00:00:00Z', endsAt: '2000-01-01T01:00:00Z', registrationDeadline: '1999-12-31T23:00:00Z', registrationClosed: true, coverUrl: '/private-cover', coverHash: 'private-hash',
     registeredCount: 7, waitingCount: 2, registrationStatus: 'ACTIVE', checkedInAt: 'private-time', createdBy: 4,
     cancelled: true, cancellationReason: '旧取消原因', cancelledAt: 'private-time' };
   assert.deepEqual(activityCopyDraft(source), { title: source.title, description: source.description, location: source.location,
-    category: 'SPORTS', capacity: 13, startsAt: undefined, endsAt: undefined });
+    category: 'SPORTS', capacity: 13, startsAt: undefined, endsAt: undefined, registrationDeadline: undefined });
   assert.equal(activityCopyDraft({ ...source, category: undefined }).category, 'UNCATEGORIZED');
   assert.equal(activityCopyDraft({ ...source, cancelled: false }).title, source.title);
   assert.equal(source.startsAt, '2000-01-01T00:00:00Z');
@@ -33,8 +33,10 @@ test('publishing whitelists a new activity body and converts freshly supplied Be
     startsAt: '2035-01-02T00:30', endsAt: '2035-01-02T02:00', id: 42, copyFrom: 42, coverUrl: '/old',
     registeredCount: 99, waitingCount: 44, cancelled: true, checkedInBy: 1, createdBy: 1 };
   assert.deepEqual(activityCreateRequest(values), { title: '新标题', description: '新介绍', location: '新地点', category: 'CULTURE',
-    capacity: 11, startsAt: '2035-01-01T16:30:00.000Z', endsAt: '2035-01-01T18:00:00.000Z' });
+    capacity: 11, startsAt: '2035-01-01T16:30:00.000Z', endsAt: '2035-01-01T18:00:00.000Z', registrationDeadline: null });
   assert.equal(activityCreateRequest({ ...values, endsAt: '' }).endsAt, null);
+  assert.equal(activityCreateRequest({ ...values, registrationDeadline: '2035-01-01T23:30' }).registrationDeadline, '2035-01-01T15:30:00.000Z');
+  assert.equal(activityCreateRequest({ ...values, registrationDeadline: '' }).registrationDeadline, null);
 });
 
 test('ordinary and invalid sources never request an activity; a valid source is freshly read with cancellation', async () => {

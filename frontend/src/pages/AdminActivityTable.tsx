@@ -2,7 +2,7 @@ import { Card, Empty, Grid, Pagination, Space, Table } from "antd";
 import type { TableColumnsType, TablePaginationConfig } from "antd";
 import { Link } from "react-router";
 import { ActivityStatus } from "../components";
-import { formatActivityEnd, formatDate, formatTime } from "../date";
+import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import type { Activity } from "../types";
 import { ActivityManagementActions } from "./ActivityManagementActions";
 import { activityAuditLogPath } from "../auditLogQuery";
@@ -45,6 +45,13 @@ const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Acti
     render: (value: string | null | undefined) => formatActivityEnd(value),
   },
   {
+    title: "报名截止（北京时间）",
+    dataIndex: "registrationDeadline",
+    key: "registrationDeadline",
+    width: 240,
+    render: (value: string | null | undefined) => formatRegistrationDeadline(value),
+  },
+  {
     title: "活动地点",
     dataIndex: "location",
     key: "location",
@@ -60,7 +67,7 @@ const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Acti
   {
     title: "状态",
     key: "status",
-    width: 100,
+    width: 150,
     render: (_, row) => <ActivityStatus activity={row} personal={false} />,
   },
   {
@@ -100,6 +107,7 @@ export function AdminActivityTable({
           title={<Link to={`/activities/${activity.id}`}>{activity.title}</Link>} extra={<ActivityStatus activity={activity} personal={false} />}>
           <p className="metadata">开始时间（北京时间）：{formatDate(activity.startsAt)} {formatTime(activity.startsAt)}</p>
           <p className="metadata">结束时间（北京时间）：{formatActivityEnd(activity.endsAt)}</p>
+          <p className="metadata">报名截止（北京时间）：{formatRegistrationDeadline(activity.registrationDeadline)}</p>
           <p className="metadata">活动分类：{activityCategoryLabel(activity.category)}</p>
           <p className="metadata">活动地点：{activity.location}</p>
           <p className="metadata">有效报名：{activity.registeredCount} / {activity.capacity}</p>
@@ -122,7 +130,7 @@ export function AdminActivityTable({
       dataSource={activities}
       loading={loading}
       pagination={pagination}
-      scroll={{ x: 1730 }}
+      scroll={{ x: 2020 }}
       locale={{ emptyText: "暂无符合条件的活动" }}
     />
   );

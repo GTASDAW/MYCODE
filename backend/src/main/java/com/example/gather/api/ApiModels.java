@@ -21,17 +21,21 @@ public final class ApiModels {
         }
     }
 
-    public record ActivityView(long id, String title, String description, String location, Instant startsAt, Instant endsAt,
+    public record ActivityView(long id, String title, String description, String location, Instant startsAt, Instant endsAt, Instant registrationDeadline,
                                int capacity, int registeredCount, int waitingCount, String registrationStatus, boolean closed,
-                               boolean cancelled, String cancellationReason, Instant cancelledAt, String category, String coverUrl) {
+                               boolean cancelled, String cancellationReason, Instant cancelledAt, String category, String coverUrl, boolean registrationClosed) {
         public static ActivityView from(ActivityRow row, Instant now) {
             Instant start = row.startsAt().toInstant(ZoneOffset.UTC);
+            Instant deadline = row.registrationDeadline() == null ? null : row.registrationDeadline().toInstant(ZoneOffset.UTC);
+            boolean closed = row.cancelledAt() != null || !start.isAfter(now);
             return new ActivityView(row.id(), row.title(), row.description(), row.location(), start,
                 row.endsAt() == null ? null : row.endsAt().toInstant(ZoneOffset.UTC),
+                deadline,
                 row.capacity(), row.registeredCount(), row.waitingCount(), row.registrationStatus(),
-                row.cancelledAt() != null || !start.isAfter(now), row.cancelledAt() != null, row.cancellationReason(),
+                closed, row.cancelledAt() != null, row.cancellationReason(),
                 row.cancelledAt() == null ? null : row.cancelledAt().toInstant(ZoneOffset.UTC), row.category(),
-                row.coverHash() == null ? null : "/api/activities/" + row.id() + "/cover?v=" + row.coverHash());
+                row.coverHash() == null ? null : "/api/activities/" + row.id() + "/cover?v=" + row.coverHash(),
+                closed || deadline != null && !deadline.isAfter(now));
         }
     }
 
@@ -49,14 +53,19 @@ public final class ApiModels {
         @NotNull(message = "请填写开始时间") @Future(message = "开始时间必须在未来") Instant startsAt,
         @Min(value = 1, message = "名额至少为 1") @Max(value = 10000, message = "名额最多为 10000") int capacity,
         String category,
-        Instant endsAt
+        Instant endsAt,
+        Instant registrationDeadline
     ) {
         public CreateActivityRequest(String title, String description, String location, Instant startsAt, int capacity) {
-            this(title, description, location, startsAt, capacity, null, null);
+            this(title, description, location, startsAt, capacity, null, null, null);
         }
 
         public CreateActivityRequest(String title, String description, String location, Instant startsAt, int capacity, String category) {
-            this(title, description, location, startsAt, capacity, category, null);
+            this(title, description, location, startsAt, capacity, category, null, null);
+        }
+
+        public CreateActivityRequest(String title, String description, String location, Instant startsAt, int capacity, String category, Instant endsAt) {
+            this(title, description, location, startsAt, capacity, category, endsAt, null);
         }
     }
 

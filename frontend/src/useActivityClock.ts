@@ -7,7 +7,8 @@ import type { Activity } from "./types";
 export function useActivityClock(activities: readonly (Activity | undefined)[]): number {
   const [now, setNow] = useState(Date.now);
   const times = JSON.stringify(activities.filter(activity => activity && !activity.cancelled)
-    .map(activity => ({ startsAt: activity!.startsAt, endsAt: activity!.endsAt, cancelled: false })));
+    .map(activity => ({ startsAt: activity!.startsAt, endsAt: activity!.endsAt,
+      registrationDeadline: activity!.registrationDeadline, cancelled: false })));
   useEffect(() => {
     const boundaries = JSON.parse(times) as Activity[];
     let timer: ReturnType<typeof setTimeout> | undefined;

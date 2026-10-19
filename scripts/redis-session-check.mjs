@@ -182,7 +182,7 @@ async function verifyAllApiDatabasesBeforeWrites(settings) {
       let activity = null;
       if (response.ok) activity = await response.json();
       else await response.arrayBuffer();
-      assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description,
+      assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description && activity.registrationDeadline === null,
         'One isolated Redis API endpoint differs from the UUID SQL database proof; API writes refused.');
     }
   } catch (error) { primaryError = error; }

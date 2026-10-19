@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activityClosed, activityPhase, canManageActivity, cancellationReasonError, nextActivityBoundary } from '../src/activityLifecycle.ts';
-import { activityEndInputError, beijingInputToIso, formatActivityEnd } from '../src/date.ts';
+import { activityClosed, activityPhase, activityRegistrationClosed, canManageActivity, cancellationReasonError, nextActivityBoundary } from '../src/activityLifecycle.ts';
+import { activityEndInputError, beijingInputToIso, formatActivityEnd, formatRegistrationDeadline, registrationDeadlineInputError } from '../src/date.ts';
 
 const now = Date.parse('2030-10-09T02:00:00Z');
 const future = { cancelled: false, closed: false, startsAt: '2030-10-10T02:00:00Z' };
@@ -49,6 +49,59 @@ test('microseconds do not close an activity early and the page timer rounds boun
   assert.equal(nextActivityBoundary([activity], now + 2), null);
   assert.equal(nextActivityBoundary([{ ...activity, cancelled: true }], now), null);
   assert.equal(nextActivityBoundary([future, activity], now), now + 1);
+});
+
+test('an early registration deadline closes joining without closing cancellation or management or changing phase', () => {
+  const activity = { ...future, registrationDeadline: '2030-10-09T02:00:00Z' };
+  assert.equal(activityRegistrationClosed(activity, now - 1), false);
+  assert.equal(activityRegistrationClosed(activity, now), true);
+  assert.equal(activityRegistrationClosed(activity, now + 1), true);
+  for (const registrationStatus of [null, 'ACTIVE', 'WAITING', 'CANCELLED']) {
+    const personal = { ...activity, registrationStatus };
+    assert.equal(activityPhase(personal, now), 'UPCOMING');
+    assert.equal(activityClosed(personal, now), false);
+    assert.equal(canManageActivity(personal, now), true);
+  }
+  assert.equal(activityRegistrationClosed({ ...activity, registrationClosed: true }, now - 1), true);
+  assert.equal(activityRegistrationClosed({ ...activity, registrationClosed: false }, now), true);
+  assert.equal(activityRegistrationClosed({ ...activity, cancelled: true }, now - 1), true);
+  assert.equal(canManageActivity({ ...activity, cancelled: true }, now), false);
+});
+
+test('missing and null deadlines retain the original start cutoff and precise deadlines schedule one shared boundary', () => {
+  const start = Date.parse(future.startsAt);
+  for (const registrationDeadline of [null, undefined]) {
+    const activity = { ...future, registrationDeadline };
+    assert.equal(activityRegistrationClosed(activity, start - 1), false);
+    assert.equal(activityRegistrationClosed(activity, start), true);
+    assert.equal(formatRegistrationDeadline(registrationDeadline), '活动开始时');
+  }
+  const precise = { ...future, registrationDeadline: '2030-10-09T02:00:00.000001Z' };
+  assert.equal(activityRegistrationClosed(precise, now), false);
+  assert.equal(activityRegistrationClosed(precise, now + 1), true);
+  assert.equal(nextActivityBoundary([future, precise], now), now + 1);
+  assert.equal(nextActivityBoundary([precise], now + 1), start);
+  assert.equal(nextActivityBoundary([{ ...precise, cancelled: true }], now), null);
+  assert.match(formatRegistrationDeadline('2030-10-09T16:30:00Z'), /10月10日.*00:30/);
+});
+
+test('deadline inputs use Beijing UTC conversion and strict future/start boundaries after microsecond truncation', () => {
+  const current = Date.parse('2030-01-01T15:00:00Z');
+  const start = '2030-01-02T00:00';
+  assert.equal(registrationDeadlineInputError(start, '2030-01-01T23:30', current), null);
+  assert.equal(beijingInputToIso('2030-01-01T23:30'), '2030-01-01T15:30:00.000Z');
+  assert.equal(registrationDeadlineInputError(start, '', current), null);
+  assert.equal(registrationDeadlineInputError(start, undefined, current), null);
+  assert.equal(registrationDeadlineInputError(start, '2030-01-01T23:00', current), '报名截止时间必须晚于当前时间');
+  assert.equal(registrationDeadlineInputError(start, '2030-01-01T22:59', current), '报名截止时间必须晚于当前时间');
+  for (const deadline of [start, '2030-01-02T00:01'])
+    assert.equal(registrationDeadlineInputError(start, deadline, current), '报名截止时间必须早于开始时间');
+  assert.equal(registrationDeadlineInputError(undefined, '2030-01-01T23:30', current), '请先选择开始时间');
+  assert.equal(registrationDeadlineInputError(start, '2030-02-30T00:00', current), '请输入有效的活动时间');
+  assert.equal(registrationDeadlineInputError(start, '2030-01-01T23:00:00.000001', current), null);
+  assert.equal(registrationDeadlineInputError(start, '2030-01-01T23:00:00.0000009', current), '报名截止时间必须晚于当前时间');
+  assert.equal(registrationDeadlineInputError('2030-01-02T00:00:00.1234569', '2030-01-02T00:00:00.1234561', current), '报名截止时间必须早于开始时间');
+  assert.equal(registrationDeadlineInputError('2030-01-02T00:00:00.123457', '2030-01-02T00:00:00.123456', current), null);
 });
 
 test('Beijing creation input converts across UTC day boundaries and validates the stored microsecond precision', () => {

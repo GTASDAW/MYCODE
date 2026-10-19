@@ -11,8 +11,8 @@ import {
   LoadingState,
   PageHeading,
 } from "../components";
-import { formatActivityEnd, formatDate, formatTime } from "../date";
-import { activityClosed } from "../activityLifecycle";
+import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
+import { activityClosed, activityRegistrationClosed } from "../activityLifecycle";
 import { useActivityClock } from "../useActivityClock";
 import { downloadCsv } from "../fileDownload";
 import { canCheckInRegistration } from "../registrationCheckIn";
@@ -142,6 +142,7 @@ function AdminRegistrationsPage() {
                 children: dateTime(activity.startsAt),
               },
               { key: "end-time", label: "结束时间", children: formatActivityEnd(activity.endsAt) },
+              { key: "registration-deadline", label: "报名截止", children: formatRegistrationDeadline(activity.registrationDeadline) },
               {
                 key: "location",
                 label: "活动地点",
@@ -160,7 +161,7 @@ function AdminRegistrationsPage() {
               {
                 key: "remaining",
                 label: "可报名剩余",
-                children: `${activityClosed(activity) ? 0 : Math.max(0, activity.capacity - activity.registeredCount)} 个`,
+                children: `${activityRegistrationClosed(activity) ? 0 : Math.max(0, activity.capacity - activity.registeredCount)} 个`,
               },
               {
                 key: "status",

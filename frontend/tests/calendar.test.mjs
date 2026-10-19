@@ -28,6 +28,10 @@ test('Beijing midnight and explicit UTC offsets represent the same calendar inst
   assert(unfold(build({...activity,startsAt:'2001-01-01T00:00:00Z',closed:true})).includes('DTSTART:20010101T000000Z'));
 });
 
+test('a registration cutoff never changes calendar fields or prevents export of an uncancelled activity',()=>{
+  assert.equal(build({...activity,registrationDeadline:'2034-01-01T00:00:00Z',registrationClosed:true}),build());
+});
+
 test('a supplied end is exported in UTC, including Beijing next-day conversion, while old and null responses omit it',()=>{
   const result=unfold(build({...activity,endsAt:'2035-01-02T02:30:59.123456+08:00'}));
   assert(result.includes('DTEND:20350101T183059Z\r\n'));

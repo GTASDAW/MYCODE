@@ -255,10 +255,10 @@ export async function runRateLimitChecks() {
     for (const endpoint of settings.endpoints) {
       const response = await fetch(new URL(`/api/activities/${probe.id}`, endpoint), { signal: AbortSignal.timeout(10000) });
       const activity = response.ok ? await response.json() : null;
-      assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description,
+      assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description && activity.registrationDeadline === null,
         'A rate-limit API endpoint differs from the UUID SQL proof; authentication writes refused.');
     }
-    passed('owned Docker containers, exact ports, profile, MySQL V11 and UUID API/database identity verified before authentication writes');
+    passed('owned Docker containers, exact ports, profile, MySQL V12 and UUID API/database identity verified before authentication writes');
     // These new users belong to the existing exact cleanup manifest. Prepare
     // them before strict registration limits; demo/admin credentials stay fixed.
     const passwordAccounts = Array.from({ length: 3 }, () => trackAccount());
