@@ -685,3 +685,7 @@ Redis 修复本地验证：配置专项 8/8（原 4 项加 4 项，包含每个�
 首次代码提交eed050f的 [CI 39272768978](https://github.com/GTASDAW/MYCODE/actions/runs/39272768978) 前端和两镜像通过，后端266项中265项通过、1项失败，后续依赖门禁跳过。失败为ActivityCoverIntegrationTest的精确锁SQL断言未同步本轮报名校验必需的registration_deadline列；现仅同步该期望，保留完整热锁列白名单和READ_COMMITTED断言，不改业务实现或扩大投影。修复后本机真实MySQL封面专项10/10通过，完整CI结果按实际继续记录。
 
 提交8c9aa2c的 [CI 39273816923](https://github.com/GTASDAW/MYCODE/actions/runs/39273816923) 前端、后端、两镜像及固定负载通过。默认/Redis完整浏览器分别307/310、308/310：两套均在概览测试用旧closed条件计算可报名满员数，与本轮提前截止口径不同；现把fullActivities/availableSeats对照改为registrationClosed，保留UPCOMING统计所有未开始的断言，并补充真实截止满员样本的概览集合核对。桌面/手机概览、发布报名和截止后取消递补定向6/6通过。默认另一次发布后退出UI超时，经trace与容器日志核对没有发出退出POST：指针点击期间滚动/弹层重新定位，菜单仍打开。仅将该helper改为键盘Enter激活并明确等待真实退出200后核UI，桌面/手机完整发布报名切换流程2/2通过；没有改认证/Session、强制点击或自动重试。两套CI及本机临时数据均已精确清理。
+
+最终受测提交fb46efa6acecfc327c06950cb46751c6cf0e6f0a的 [CI 39280590160](https://github.com/GTASDAW/MYCODE/actions/runs/39280590160) 实际执行日志确认：真实MySQL后端266/266（零失败/错误/跳过）；默认容器与Redis双实例的完整桌面/手机浏览器各310/310（含8项报名截止）、生产加载/缓存恢复各20/20、严格限流与浏览器恢复各14/14，精确清理、隔离环境退出、上传报告及Complete job步骤全部success。前端、两镜像和固定负载任务也成功，后续仅补记本文，不改变受测代码。
+
+截至北京时间2026-10-20 00:35，GitHub API仍把默认/Redis两任务及工作流总状态标为in_progress，五个其他任务已completed/success；这与两任务全部步骤完成、日志可下载的事实分别记录，暂不写成最终7/7总状态。GitHub官方同时报告 [Actions、Pages与Webhooks服务故障](https://www.githubstatus.com/incidents/8tzbpcnl75jp)，明确提示工作流处理延迟。本轮没有为该状态延迟重复提交、重跑或改动门禁；本地普通服务正常、工作区代码已推送。
