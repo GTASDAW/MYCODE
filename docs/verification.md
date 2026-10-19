@@ -683,3 +683,5 @@ Redis 修复本地验证：配置专项 8/8（原 4 项加 4 项，包含每个�
 本地服务已恢复默认限流，仍仅本机演示；远程完整CI结果按本轮代码推送后记录，本机专项不替代默认容器或Redis双实例验证。SQL、凭据、数据目录、原始日志、截图、报告和构建产物均留受限或忽略目录。
 
 首次代码提交eed050f的 [CI 39272768978](https://github.com/GTASDAW/MYCODE/actions/runs/39272768978) 前端和两镜像通过，后端266项中265项通过、1项失败，后续依赖门禁跳过。失败为ActivityCoverIntegrationTest的精确锁SQL断言未同步本轮报名校验必需的registration_deadline列；现仅同步该期望，保留完整热锁列白名单和READ_COMMITTED断言，不改业务实现或扩大投影。修复后本机真实MySQL封面专项10/10通过，完整CI结果按实际继续记录。
+
+提交8c9aa2c的 [CI 39273816923](https://github.com/GTASDAW/MYCODE/actions/runs/39273816923) 前端、后端、两镜像及固定负载通过。默认/Redis完整浏览器分别307/310、308/310：两套均在概览测试用旧closed条件计算可报名满员数，与本轮提前截止口径不同；现把fullActivities/availableSeats对照改为registrationClosed，保留UPCOMING统计所有未开始的断言，并补充真实截止满员样本的概览集合核对。桌面/手机概览、发布报名和截止后取消递补定向6/6通过。默认另一次发布后退出UI超时，经trace与容器日志核对没有发出退出POST：指针点击期间滚动/弹层重新定位，菜单仍打开。仅将该helper改为键盘Enter激活并明确等待真实退出200后核UI，桌面/手机完整发布报名切换流程2/2通过；没有改认证/Session、强制点击或自动重试。两套CI及本机临时数据均已精确清理。

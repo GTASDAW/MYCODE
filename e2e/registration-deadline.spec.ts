@@ -166,6 +166,13 @@ test('截止后拒绝报名重报和候补，但允许取消并FIFO递补且没�
     const [notifications] = await db.execute<any[]>('SELECT user_id,type FROM notifications WHERE activity_id=? ORDER BY id', [activity.id]);
     expect(notifications).toEqual([{ user_id: accounts[1].id, type: 'PROMOTED' }]);
   } finally { await db.end(); }
+  await loginApi(request);
+  const all = await (await request.get('/api/activities')).json();
+  const overview = await (await request.get('/api/admin/overview')).json();
+  expect(all.find((item: any) => item.id === activity.id)).toMatchObject({ closed: false, registrationClosed: true, registeredCount: 1, capacity: 1 });
+  expect(overview.upcomingActivities).toBe(all.filter((item: any) => !item.closed).length);
+  expect(overview.fullActivities).toBe(all.filter((item: any) => !item.registrationClosed && item.registeredCount === item.capacity).length);
+  expect(overview.availableSeats).toBe(all.filter((item: any) => !item.registrationClosed).reduce((sum: number, item: any) => sum + item.capacity - item.registeredCount, 0));
   await picture(page, info, 'deadline-cancel-still-allowed');
 });
 

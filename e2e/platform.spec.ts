@@ -12,6 +12,7 @@ interface ActivityResponse {
   waitingCount: number;
   registrationStatus: 'ACTIVE' | 'WAITING' | 'CANCELLED' | null;
   closed: boolean;
+  registrationClosed: boolean;
   cancelled: boolean;
 }
 
@@ -129,7 +130,13 @@ async function login(page: Page, username: string, password: string) {
 
 async function logout(page: Page) {
   await page.getByRole('button', { name: /账号菜单/ }).click();
-  await page.getByRole('menuitem', { name: /退出登录/ }).click();
+  const item = page.getByRole('menuitem', { name: /退出登录/ });
+  await expect(item).toBeVisible();
+  const loggedOut = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/auth/logout' && response.status() === 200);
+  // Activate the menu by keyboard so scrolling cannot move the pointer onto the fixed account button.
+  await item.press('Enter');
+  await loggedOut;
   await expect(page.getByRole('button', { name: '登录 / 体验' })).toBeVisible();
 }
 
@@ -392,9 +399,9 @@ test('管理概览显示真实统计，桌面侧栏和手机抽屉导航可用�
   expect(overview.upcomingActivities).toBe(all.filter(activity => !activity.closed).length);
   expect(overview.startedActivities).toBe(all.filter(activity => activity.closed && !activity.cancelled).length);
   expect(overview.cancelledActivities).toBe(all.filter(activity => activity.cancelled).length);
-  expect(overview.fullActivities).toBe(all.filter(activity => !activity.closed && activity.registeredCount === activity.capacity).length);
+  expect(overview.fullActivities).toBe(all.filter(activity => !activity.registrationClosed && activity.registeredCount === activity.capacity).length);
   expect(overview.activeRegistrations).toBe(all.reduce((count, activity) => count + activity.registeredCount, 0));
-  expect(overview.availableSeats).toBe(all.filter(activity => !activity.closed).reduce((count, activity) => count + activity.capacity - activity.registeredCount, 0));
+  expect(overview.availableSeats).toBe(all.filter(activity => !activity.registrationClosed).reduce((count, activity) => count + activity.capacity - activity.registeredCount, 0));
   for (const key of ['totalActivities', 'upcomingActivities', 'activeRegistrations', 'availableSeats', 'cancelledActivities']) {
     const value = page.getByTestId(`overview-${key}`).locator('.ant-statistic-content-value');
     await expect.poll(async () => (await value.innerText()).replace(/[\s,]/g, '')).toBe(String(overview[key]));
