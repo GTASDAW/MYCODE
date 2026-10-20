@@ -37,12 +37,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -65,20 +67,28 @@ class CheckInIntegrationTest {
 
     static class MutableClock extends Clock {
         final AtomicReference<Instant> time = new AtomicReference<>(NOW);
+        final AtomicInteger calls = new AtomicInteger();
         @Override public ZoneId getZone() { return ZoneOffset.UTC; }
         @Override public Clock withZone(ZoneId zone) { return Clock.fixed(instant(), zone); }
-        @Override public Instant instant() { return time.get(); }
+        @Override public Instant instant() { calls.incrementAndGet(); return time.get(); }
     }
 
     record Hook(String statement, boolean before, Runnable action) {}
+    record Read(String statement, String sql, boolean readOnly, Integer isolation) {}
     @Intercepts({
         @Signature(type = Executor.class, method = "query", args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}),
         @Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class})
     })
     static class CheckInInterceptor implements Interceptor {
         final AtomicReference<Hook> hook = new AtomicReference<>();
+        final ThreadLocal<List<Read>> captured = new ThreadLocal<>();
         @Override public Object intercept(Invocation invocation) throws Throwable {
             String id = ((MappedStatement) invocation.getArgs()[0]).getId();
+            if (captured.get() != null && invocation.getMethod().getName().equals("query")) {
+                var statement = (MappedStatement) invocation.getArgs()[0];
+                captured.get().add(new Read(id, statement.getBoundSql(invocation.getArgs()[1]).getSql(),
+                    TransactionSynchronizationManager.isCurrentTransactionReadOnly(), TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()));
+            }
             Hook next = hook.get();
             if (next != null && id.equals(next.statement()) && hook.compareAndSet(next, null)) {
                 if (next.before()) next.action().run();
@@ -126,6 +136,7 @@ class CheckInIntegrationTest {
     @AfterEach
     void cleanOnlyOwnedFixturesAndProtectExternalCheckInReferences() {
         hooks.hook.set(null);
+        hooks.captured.remove();
         clock.time.set(NOW);
         new TransactionTemplate(transactions).executeWithoutResult(tx -> {
             for (int start = 0; start < userIds.size(); start += 500) {
@@ -419,6 +430,125 @@ class CheckInIntegrationTest {
     }
 
     @Test
+    void rosterKeywordSearchesCurrentUsernameAndNicknameWithLiteralUnicodePunctuationAndRawSpaces() throws Exception {
+        long activity = createActivity(3);
+        long member = createUser("USER", "中文 名单%_引号'反斜线\\😀 两  空格");
+        long registration = register(activity, member);
+        register(activity, createUser("USER", "中文名单500与roomXA"));
+        String username = users.findById(member).username();
+        for (String keyword : List.of(username, username.substring(8), "中文 名单", "%_", "引号'", "反斜线\\", "😀", "两  空格", "  ")) {
+            var result = admin.roster(activity, 1, 10, "ALL", "ALL", keyword, adminId());
+            assertThat(result.total()).as("Literal roster search").isEqualTo(1);
+            assertThat(result.items()).extracting(RosterView::id).containsExactly(registration);
+            String csv = new String(admin.exportRoster(activity, "ALL", "ALL", keyword, adminId()), StandardCharsets.UTF_8);
+            assertThat(csv.lines().count()).isEqualTo(2);
+            assertThat(csv).contains("\"\t" + registration + "\"");
+        }
+        for (String absent : List.of("x' OR 1=1 --", "%X", "两 空格", " 中文", "空格 ", "not\\present"))
+            assertThat(admin.roster(activity, 1, 10, "ALL", "ALL", absent, adminId()).items()).isEmpty();
+        assertThat(admin.roster(activity, 1, 10, "ALL", "ALL", "", adminId())).isEqualTo(admin.roster(activity, 1, 10, "ALL", "ALL", adminId()));
+        jdbc.update("UPDATE users SET display_name=? WHERE id=?", "最新昵称特别值", member);
+        assertThat(admin.roster(activity, 1, 10, "ALL", "ALL", "最新昵称", adminId()).items()).extracting(RosterView::id).containsExactly(registration);
+        assertThat(admin.roster(activity, 1, 10, "ALL", "ALL", "名单%_", adminId()).items()).isEmpty();
+        String old = mvc.perform(get(rosterPath(activity)).with(user(principal(adminId())))).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String empty = mvc.perform(get(rosterPath(activity)).with(user(principal(adminId()))).param("keyword", "")).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        assertThat(empty).isEqualTo(old);
+        mvc.perform(get(rosterPath(activity)).with(user(principal(adminId()))).param("keyword", "最新昵称"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1)).andExpect(jsonPath("$.items[0].id").value(registration));
+    }
+
+    @Test
+    void keywordAndBothRosterFiltersShareStablePaginationWhileSummaryRemainsWholeActivity() throws Exception {
+        long activity = createActivity(3);
+        long first = register(activity, createUser("USER", "共同名单一"));
+        long second = register(activity, createUser("USER", "共同名单二"));
+        long unrelated = register(activity, createUser("USER", "不匹配的有效报名"));
+        long waiting = register(activity, createUser("USER", "共同名单三"));
+        long cancelledMember = createUser("USER", "共同名单四"), cancelled = register(activity, cancelledMember);
+        registrations.cancel(activity, cancelledMember);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=?", utc(NOW.minusSeconds(60)), activity);
+        start(activity, NOW); checkIns.checkIn(activity, first, adminId());
+        var summary = new RosterSummaryView(3, 1, 2);
+        for (String registration : List.of("ALL", "ACTIVE", "WAITING", "CANCELLED")) {
+            for (String checkIn : List.of("ALL", "CHECKED_IN", "NOT_CHECKED_IN")) {
+                List<Long> expected = new ArrayList<>();
+                for (long id : List.of(cancelled, waiting, second, first)) {
+                    String state = id == cancelled ? "CANCELLED" : id == waiting ? "WAITING" : "ACTIVE";
+                    boolean accepted = registration.equals("ALL") || registration.equals(state);
+                    if (checkIn.equals("CHECKED_IN")) accepted &= id == first;
+                    if (checkIn.equals("NOT_CHECKED_IN")) accepted &= state.equals("ACTIVE") && id != first;
+                    if (accepted) expected.add(id);
+                }
+                var page = admin.roster(activity, 1, 1, registration, checkIn, "共同名单", adminId());
+                assertThat(page.summary()).isEqualTo(summary); assertThat(page.total()).isEqualTo(expected.size());
+                assertThat(page.items()).extracting(RosterView::id).containsExactlyElementsOf(expected.stream().limit(1).toList());
+                var beyond = admin.roster(activity, Integer.MAX_VALUE, 100, registration, checkIn, "共同名单", adminId());
+                assertThat(beyond.items()).isEmpty(); assertThat(beyond.total()).isEqualTo(expected.size()); assertThat(beyond.summary()).isEqualTo(summary);
+                String csv = new String(admin.exportRoster(activity, registration, checkIn, "共同名单", adminId()), StandardCharsets.UTF_8);
+                assertThat(csv.lines().count()).isEqualTo(expected.size() + 1);
+                assertThat(csv).doesNotContain("\"\t" + unrelated + "\"");
+                for (long id : expected) assertThat(csv).contains("\"\t" + id + "\"");
+            }
+        }
+        var secondPage = admin.roster(activity, 2, 2, "ALL", "ALL", "共同名单", adminId());
+        assertThat(secondPage.items()).extracting(RosterView::id).containsExactly(second, first);
+        mvc.perform(get(exportPath(activity)).with(user(principal(adminId()))).param("keyword", "共同名单").param("page", "99").param("pageSize", "1"))
+            .andExpect(status().isOk()).andExpect(content().contentType("text/csv;charset=UTF-8"))
+            .andExpect(content().bytes(admin.exportRoster(activity, "ALL", "ALL", "共同名单", adminId())));
+    }
+
+    @Test
+    void keywordNicknameChangeBetweenCountAndRowsKeepsReadonlySnapshotsAndBoundSql() {
+        long activity = createActivity(1), member = createUser("USER", "快照搜索原昵称");
+        long registration = register(activity, member), actor = adminId();
+        for (boolean exporting : List.of(false, true)) {
+            jdbc.update("UPDATE users SET display_name=? WHERE id=?", "快照搜索原昵称", member);
+            hooks.hook.set(new Hook(AdminMapper.class.getName() + ".countRoster", false,
+                () -> inOtherThread(() -> jdbc.update("UPDATE users SET display_name=? WHERE id=?", "变更后的昵称", member))));
+            List<Read> reads = new ArrayList<>(); hooks.captured.set(reads); clock.calls.set(0);
+            try {
+                if (exporting) {
+                    String csv = new String(admin.exportRoster(activity, "ALL", "ALL", "快照搜索", actor), StandardCharsets.UTF_8);
+                    assertThat(csv.lines().count()).isEqualTo(2); assertThat(csv).contains("快照搜索原昵称").doesNotContain("变更后的昵称");
+                } else {
+                    var page = admin.roster(activity, 1, 10, "ALL", "ALL", "快照搜索", actor);
+                    assertThat(page.total()).isEqualTo(1); assertThat(page.summary()).isEqualTo(new RosterSummaryView(1, 0, 1));
+                    assertThat(page.items()).singleElement().satisfies(row -> { assertThat(row.id()).isEqualTo(registration); assertThat(row.displayName()).isEqualTo("快照搜索原昵称"); });
+                }
+            } finally { hooks.captured.remove(); }
+            var statements = new ArrayList<String>(); statements.add(ActivityMapper.class.getName() + ".findById");
+            if (!exporting) statements.add(AdminMapper.class.getName() + ".rosterSummary");
+            statements.add(AdminMapper.class.getName() + ".countRoster"); statements.add(AdminMapper.class.getName() + ".roster");
+            assertThat(reads).extracting(Read::statement).containsExactlyElementsOf(statements);
+            assertThat(reads).allSatisfy(read -> { assertThat(read.readOnly()).isTrue(); assertThat(read.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ); });
+            assertThat(clock.calls.get()).isEqualTo(exporting ? 0 : 1);
+            assertThat(reads).filteredOn(read -> read.statement().endsWith(".countRoster") || read.statement().endsWith(".roster"))
+                .allSatisfy(read -> assertThat(read.sql()).contains("LOCATE(?, u.username)", "LOCATE(?, u.display_name)").doesNotContain("快照搜索", "LIKE"));
+            assertThat(admin.roster(activity, 1, 10, "ALL", "ALL", "快照搜索", actor).items()).isEmpty();
+        }
+    }
+
+    @Test
+    void keywordValidationPermissionsAndLogsRetainTheirContracts(CapturedOutput output) throws Exception {
+        long activity = createActivity(1); register(activity, createUser("USER", "名单验证"));
+        expectCode(() -> admin.roster(activity, 1, 10, "ALL", "ALL", null, adminId()), "VALIDATION_ERROR");
+        expectCode(() -> admin.exportRoster(activity, "ALL", "ALL", null, adminId()), "VALIDATION_ERROR");
+        for (String path : List.of(rosterPath(activity), exportPath(activity))) {
+            mvc.perform(get(path).param("keyword", "名单验证")).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).with(user(principal(demoId()))).param("keyword", "名单验证")).andExpect(status().isForbidden());
+            for (String invalid : List.of("x".repeat(201), "😀".repeat(101))) mvc.perform(get(path).with(user(principal(adminId()))).param("keyword", invalid))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+            for (String valid : List.of("x".repeat(200), "😀".repeat(100))) mvc.perform(get(path).with(user(principal(adminId()))).param("keyword", valid))
+                .andExpect(status().isOk());
+            String secret = "PRIVATE_ROSTER_SEARCH_" + UUID.randomUUID();
+            var response = mvc.perform(get(path).with(user(principal(adminId()))).param("keyword", secret)).andExpect(status().isOk()).andReturn().getResponse();
+            String requestId = response.getHeader("X-Request-Id");
+            assertThat(output.getAll()).doesNotContain(secret);
+            assertThat(output.getAll().lines().filter(line -> line.startsWith("{") && line.contains(requestId)).findFirst().orElseThrow()).doesNotContain("keyword");
+        }
+    }
+
+    @Test
     void exactTwentyThousandRowLimitExportsCompletelyAndTwentyThousandOneIsExplicit413() throws Exception {
         long activity = createActivity(1);
         String prefix = "bulkci_" + UUID.randomUUID().toString().replace("-", "");
@@ -432,13 +562,17 @@ class CheckInIntegrationTest {
         userIds.addAll(bulkIds);
         assertThat(bulkIds).hasSize(20_000);
         jdbc.update("INSERT INTO registrations(activity_id,user_id,status) SELECT ?,id,'WAITING' FROM users WHERE LEFT(username,CHAR_LENGTH(?))=?", activity, prefix, prefix);
-        String csv = new String(admin.exportRoster(activity, "WAITING", "ALL", adminId()), StandardCharsets.UTF_8);
+        String csv = new String(admin.exportRoster(activity, "WAITING", "ALL", "导出上限参与者", adminId()), StandardCharsets.UTF_8);
         assertThat(csv.lines().count()).isEqualTo(20_001);
         assertThat(csv).contains("\"\t" + jdbc.queryForObject("SELECT MIN(id) FROM registrations WHERE activity_id=?", Long.class, activity) + "\"");
         register(activity, createUser("USER", "超过上限"));
         mvc.perform(get(exportPath(activity)).with(user(principal(adminId()))))
             .andExpect(status().is(413)).andExpect(jsonPath("$.code").value("EXPORT_TOO_LARGE"))
             .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON));
+        mvc.perform(get(exportPath(activity)).with(user(principal(adminId()))).param("keyword", "上限"))
+            .andExpect(status().is(413)).andExpect(jsonPath("$.code").value("EXPORT_TOO_LARGE"));
+        assertThat(new String(admin.exportRoster(activity, "ALL", "ALL", "导出上限参与者", adminId()), StandardCharsets.UTF_8).lines().count()).isEqualTo(20_001);
+        assertThat(new String(admin.exportRoster(activity, "ALL", "ALL", "超过上限", adminId()), StandardCharsets.UTF_8).lines().count()).isEqualTo(2);
         assertThat(admin.exportRoster(activity, "ACTIVE", "ALL", adminId())).isNotEmpty();
     }
 

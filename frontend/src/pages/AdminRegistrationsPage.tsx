@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { Alert, App as AntApp, Button, Card, Descriptions, Modal, Select, Statistic } from "antd";
-import { DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Link, useParams } from "react-router";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Alert, App as AntApp, Button, Card, Descriptions, Input, Modal, Select, Statistic } from "antd";
+import { DownloadOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import {
@@ -25,6 +25,7 @@ import type {
 import { useResource } from "../useResource";
 import { AdminRegistrationTable } from "./AdminRegistrationTable";
 import { useRosterActions } from "./useRosterActions";
+import { defaultRosterQuery, parseRosterQuery, rosterActivityDetailsPath, rosterListPath, serializeRosterQuery } from "../rosterQuery";
 
 const dateTime = (value: string) => `${formatDate(value)} ${formatTime(value)}`;
 export function AdminRegistrationsRoute() {
@@ -36,21 +37,27 @@ export function AdminRegistrationsRoute() {
 
 function AdminRegistrationsPage() {
   const { id = "" } = useParams();
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
   const auth = useAuth();
   const { message } = AntApp.useApp();
   const account = auth.captureAccountRequest();
   const accountKey = `${account?.userId}:${account?.generation}`;
-  const [query, setQuery] = useState<AdminRegistrationQuery>({
-    page: 1,
-    pageSize: 10,
-    status: "ALL",
-    checkInStatus: "ALL",
-  });
+  const { query, notice } = parseRosterQuery(search);
+  const canonicalSearch = serializeRosterQuery(query);
+  const [keywordDraft, setKeywordDraft] = useState(query.keyword);
+  const [normalizationNotice, setNormalizationNotice] = useState(notice);
   const [revision, setRevision] = useState(0);
-  const [selected, setSelected] = useState<AdminRegistration | null>(null);
-  const pageKey = `${id}:${accountKey}:${query.page}:${query.pageSize}:${query.status}:${query.checkInStatus}:${revision}`;
-  const currentPage = useRef(pageKey);
+  const [selection, setSelection] = useState<{ pageKey: string; registration: AdminRegistration } | null>(null);
+  const pageKey = `${pathname}:${id}:${accountKey}:${canonicalSearch}:${revision}`;
+  const selected = selection?.pageKey === pageKey ? selection.registration : null;
+  const currentPage = useRef<string | null>(pageKey);
   currentPage.current = pageKey;
+  useLayoutEffect(() => {
+    currentPage.current = pageKey;
+    return () => { if (currentPage.current === pageKey) currentPage.current = null; };
+  }, [pageKey]);
+  const current = () => !!account && auth.user?.role === "ADMIN" && currentPage.current === pageKey && auth.isCurrentAccountRequest(account);
   const actions = useRosterActions(pageKey);
   const refresh = () => setRevision((value) => value + 1);
   const resource = useResource(
@@ -70,32 +77,37 @@ function AdminRegistrationsPage() {
         throw err;
       }
     },
-    [id, accountKey, query.page, query.pageSize, query.status, query.checkInStatus, revision],
+    [pageKey],
   );
-  useEffect(() => setSelected(null), [pageKey]);
+  useEffect(() => setSelection(null), [pageKey]);
   useEffect(() => {
-    if (resource.loading || resource.error || !resource.data) return;
-    const lastPage = Math.max(
-      1,
-      Math.ceil(resource.data.total / query.pageSize),
-    );
-    if (query.page <= lastPage) return;
-    // Ignore a queued correction if the user has already changed this query.
-    setQuery((previous) =>
-      previous === query ? { ...previous, page: lastPage } : previous,
-    );
-  }, [resource.data, resource.loading, resource.error, query]);
+    if (!current()) return;
+    setKeywordDraft(query.keyword);
+    if (notice) setNormalizationNotice(notice);
+    if (search !== canonicalSearch) navigate(rosterListPath(id, query), { replace: true });
+  }, [pathname, search, canonicalSearch, query.keyword, notice, accountKey, navigate]);
+  const lastPage = Math.max(1, Math.ceil((resource.data?.total ?? 0) / query.pageSize));
+  const correctingPage = !resource.loading && !resource.error && !!resource.data && query.page > lastPage;
+  useEffect(() => {
+    if (correctingPage && current()) navigate(rosterListPath(id, { ...query, page: lastPage }), { replace: true });
+  }, [correctingPage, lastPage, pageKey, navigate]);
   const activity = resource.data?.activity;
   useActivityClock([activity]);
   const summary = resource.data?.summary;
-  const correctingPage = !!resource.data && query.page > Math.max(1, Math.ceil(resource.data.total / query.pageSize));
   const canConfirm = !!selected && !!activity && canCheckInRegistration(activity, selected);
+
+  function changeQuery(next: AdminRegistrationQuery) {
+    if (!current()) return;
+    setNormalizationNotice(null);
+    if (serializeRosterQuery(next) === canonicalSearch) refresh();
+    else navigate(rosterListPath(id, next));
+  }
 
   function confirmCheckIn() {
     if (!selected || !canConfirm) return;
     const registration = selected;
     void actions.run("checkIn", (signal) => api.checkInRegistration(id, registration.id, signal), () => {
-      setSelected(null);
+      setSelection(null);
       message.success("签到成功，名单已刷新");
       refresh();
     });
@@ -103,7 +115,7 @@ function AdminRegistrationsPage() {
 
   function exportCsv() {
     if (!activity) return;
-    const filters = { status: query.status, checkInStatus: query.checkInStatus };
+    const filters = { status: query.status, checkInStatus: query.checkInStatus, keyword: query.keyword };
     const filename = `activity-${activity.id}-registrations.csv`;
     void actions.run("export", (signal) => api.exportAdminRegistrations(id, filters, signal), (blob, isCurrent) => {
       downloadCsv(blob, filename, isCurrent);
@@ -121,6 +133,8 @@ function AdminRegistrationsPage() {
           </Link>
         }
       />
+      {normalizationNotice && <Alert className="discovery-notice" type="warning" showIcon title={normalizationNotice}
+        closable onClose={() => setNormalizationNotice(null)} />}
       {activity ? (
         <Card title="活动概况" className="activity-summary">
           <ActivityCancellationNotice activity={activity} />
@@ -131,7 +145,7 @@ function AdminRegistrationsPage() {
                 key: "title",
                 label: "活动名称",
                 children: (
-                  <Link to={`/activities/${activity.id}`}>
+                  <Link to={rosterActivityDetailsPath(activity.id, query)}>
                     {activity.title}
                   </Link>
                 ),
@@ -188,16 +202,22 @@ function AdminRegistrationsPage() {
         </Card>)}
       </section>
       <Card title="参与者记录" className="table-card">
-        <div className="filter-form">
+        <form className="filter-form" onSubmit={event => {
+          event.preventDefault();
+          changeQuery({ ...query, keyword: keywordDraft.trim(), page: 1 });
+        }}>
+          <div className="filter-field">
+            <label htmlFor="roster-keyword">搜索报名人员</label>
+            <Input id="roster-keyword" aria-label="搜索报名人员" placeholder="搜索账号或昵称" value={keywordDraft}
+              maxLength={200} allowClear onChange={event => setKeywordDraft(event.target.value)} />
+          </div>
           <div className="filter-field filter-select">
             <label htmlFor="registration-status">报名状态</label>
             <Select<RegistrationFilter>
               id="registration-status"
               aria-label="报名状态"
               value={query.status}
-              onChange={(status) =>
-                setQuery((previous) => ({ ...previous, page: 1, status }))
-              }
+              onChange={(status) => changeQuery({ ...query, page: 1, status })}
               options={[
                 { value: "ALL", label: "全部记录" },
                 { value: "ACTIVE", label: "已报名" },
@@ -209,7 +229,7 @@ function AdminRegistrationsPage() {
           <div className="filter-field filter-select">
             <label htmlFor="registration-check-in-status">签到状态</label>
             <Select<CheckInFilter> id="registration-check-in-status" aria-label="签到状态" value={query.checkInStatus}
-              onChange={(checkInStatus) => setQuery((previous) => ({ ...previous, page: 1, checkInStatus }))}
+              onChange={(checkInStatus) => changeQuery({ ...query, page: 1, checkInStatus })}
               options={[
                 { value: "ALL", label: "全部签到状态" },
                 { value: "CHECKED_IN", label: "已签到" },
@@ -217,6 +237,8 @@ function AdminRegistrationsPage() {
               ]} />
           </div>
           <div className="filter-actions roster-actions">
+            <Button type="primary" htmlType="submit" icon={<SearchOutlined aria-hidden="true" />}>查询</Button>
+            <Button aria-label="重置" onClick={() => { setKeywordDraft(""); changeQuery({ ...defaultRosterQuery, pageSize: query.pageSize }); }}>重置</Button>
             <Button aria-label="刷新名单" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading}
               disabled={actions.busy} onClick={() => { actions.clearError(); refresh(); }}>刷新名单</Button>
             <Button aria-label="导出 CSV" icon={<DownloadOutlined aria-hidden="true" />} loading={actions.operation === "export"}
@@ -226,7 +248,7 @@ function AdminRegistrationsPage() {
           <span className="filter-note">
             未签到只包括有效报名者；导出全部符合筛选条件的记录。
           </span>
-        </div>
+        </form>
         {activity && !activity.cancelled && <p className="roster-guidance metadata">
           {activityClosed(activity) ? "活动已开始，可确认有效报名者到场。签到后不可撤销，活动结束后仍支持补录。" : "活动开始后开放签到。"}
         </p>}
@@ -236,28 +258,28 @@ function AdminRegistrationsPage() {
         ) : (
           <AdminRegistrationTable activity={activity} items={resource.data?.items ?? []}
             loading={resource.loading || correctingPage} busy={actions.busy}
-            onCheckIn={(registration) => { actions.clearError(); setSelected(registration); }}
+            onCheckIn={(registration) => { actions.clearError(); setSelection({ pageKey, registration }); }}
             pagination={correctingPage ? false : {
               current: query.page,
               pageSize: query.pageSize,
               total: resource.data?.total ?? 0,
               showSizeChanger: { "aria-label": "每页名单数量" },
-              pageSizeOptions: [10, 20, 50],
+              pageSizeOptions: [...new Set([10, 20, 50, query.pageSize])].sort((a, b) => a - b),
               showTotal: (total) => `共 ${total} 条记录`,
               onChange: (page, pageSize) =>
-                setQuery((previous) => ({
-                  ...previous,
-                  page: pageSize === previous.pageSize ? page : 1,
+                changeQuery({
+                  ...query,
+                  page: pageSize === query.pageSize ? page : 1,
                   pageSize,
-                })),
+                }),
             }}
           />
         )}
       </Card>
-      <Modal title="确认签到" open={!!selected} destroyOnHidden onCancel={() => { if (!actions.busy) setSelected(null); }}
+      <Modal title="确认签到" open={!!selected} destroyOnHidden onCancel={() => { if (!actions.busy) setSelection(null); }}
         closable={!actions.busy} maskClosable={!actions.busy}
         footer={[
-          <Button key="cancel" aria-label="取消签到确认" disabled={actions.busy} onClick={() => setSelected(null)}>取消</Button>,
+          <Button key="cancel" aria-label="取消签到确认" disabled={actions.busy} onClick={() => setSelection(null)}>取消</Button>,
           <Button key="confirm" type="primary" aria-label="确认签到" loading={actions.operation === "checkIn"}
             disabled={actions.busy || !canConfirm} onClick={confirmCheckIn}>确认签到</Button>,
         ]}>

@@ -409,7 +409,7 @@ export const api = {
     ),
   adminRegistrations: (
     id: string,
-    query: AdminRegistrationQuery,
+    query: Omit<AdminRegistrationQuery, "keyword"> & { keyword?: string },
     signal?: AbortSignal,
   ) =>
     request<AdminRegistrationPage>(
@@ -419,6 +419,7 @@ export const api = {
           pageSize: String(query.pageSize),
           status: query.status,
           checkInStatus: query.checkInStatus,
+          keyword: query.keyword ?? "",
         },
       )}`,
       { signal },
@@ -429,12 +430,13 @@ export const api = {
     }),
   exportAdminRegistrations: (
     id: string,
-    query: Pick<AdminRegistrationQuery, "status" | "checkInStatus">,
+    query: Pick<AdminRegistrationQuery, "status" | "checkInStatus"> & { keyword?: string },
     signal?: AbortSignal,
   ) => request<Blob>(
     `/admin/activities/${encodeURIComponent(id)}/registrations/export?${new URLSearchParams({
       status: query.status,
       checkInStatus: query.checkInStatus,
+      keyword: query.keyword ?? "",
     })}`,
     { signal }, true, "csv",
   ),

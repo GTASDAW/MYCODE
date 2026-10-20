@@ -37,6 +37,7 @@ public interface AdminMapper {
 
     String ROSTER_FILTER = """
         WHERE r.activity_id = #{activityId}
+        <if test="keyword != ''">AND (LOCATE(#{keyword}, u.username) &gt; 0 OR LOCATE(#{keyword}, u.display_name) &gt; 0)</if>
         <if test="status != 'ALL'">AND r.status = #{status}</if>
         <if test="checkInStatus == 'CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NOT NULL</if>
         <if test="checkInStatus == 'NOT_CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NULL</if>
@@ -51,12 +52,12 @@ public interface AdminMapper {
 
     @Select("<script>" + ROSTER_SELECT + ROSTER_FILTER + " ORDER BY r.updated_at DESC, r.id DESC LIMIT #{limit} OFFSET #{offset}</script>")
     List<RosterRow> roster(@Param("activityId") long activityId, @Param("status") String status,
-                          @Param("checkInStatus") String checkInStatus,
+                          @Param("checkInStatus") String checkInStatus, @Param("keyword") String keyword,
                           @Param("limit") int limit, @Param("offset") long offset);
 
-    @Select("<script>SELECT COUNT(*) FROM registrations r " + ROSTER_FILTER + "</script>")
+    @Select("<script>SELECT COUNT(*) FROM registrations r JOIN users u ON u.id=r.user_id " + ROSTER_FILTER + "</script>")
     long countRoster(@Param("activityId") long activityId, @Param("status") String status,
-                     @Param("checkInStatus") String checkInStatus);
+                     @Param("checkInStatus") String checkInStatus, @Param("keyword") String keyword);
 
     @Select("""
         SELECT COUNT(*) AS active_registrations,

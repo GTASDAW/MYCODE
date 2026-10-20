@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { ApiError, errorMessage } from "../api";
 import { useAuth } from "../auth";
 
@@ -8,13 +8,14 @@ export function useRosterActions(pageKey: string) {
   currentPage.current = pageKey;
   const mounted = useRef(false);
   const submission = useRef<AbortController | null>(null);
-  const [operation, setOperation] = useState<"checkIn" | "export" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  type Operation = "checkIn" | "export" | null;
+  const [state, setState] = useState<{ pageKey: string; operation: Operation; error: string | null }>({ pageKey, operation: null, error: null });
+  const operation = state.pageKey === pageKey ? state.operation : null;
+  const error = state.pageKey === pageKey ? state.error : null;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
-    setOperation(null);
-    setError(null);
+    setState({ pageKey, operation: null, error: null });
     return () => {
       mounted.current = false;
       submission.current?.abort();
@@ -27,30 +28,32 @@ export function useRosterActions(pageKey: string) {
     request: (signal: AbortSignal) => Promise<T>,
     onSuccess: (result: T, isCurrent: () => boolean) => void,
   ) {
-    if (submission.current) return;
+    if (submission.current || !mounted.current || currentPage.current !== pageKey) return;
     const account = auth.captureAccountRequest();
-    if (!account) return;
+    if (!account || auth.user?.role !== "ADMIN") return;
     const startedPage = pageKey;
     const controller = new AbortController();
     submission.current = controller;
-    setOperation(kind);
-    setError(null);
+    setState({ pageKey, operation: kind, error: null });
     const current = () => mounted.current && !controller.signal.aborted &&
-      currentPage.current === startedPage && auth.isCurrentAccountRequest(account);
+      currentPage.current === startedPage && submission.current === controller && auth.isCurrentAccountRequest(account);
     try {
       const result = await request(controller.signal);
       if (current()) onSuccess(result, current);
     } catch (err) {
       if (!current()) return;
       if (err instanceof ApiError && err.status === 401) auth.expire();
-      else setError(errorMessage(err));
+      else setState({ pageKey, operation: kind, error: errorMessage(err) });
     } finally {
       if (submission.current === controller) {
+        const stillCurrent = current();
         submission.current = null;
-        if (current()) setOperation(null);
+        if (stillCurrent) setState(previous => previous.pageKey === pageKey ? { ...previous, operation: null } : previous);
       }
     }
   }
 
-  return { operation, busy: operation !== null, error, clearError: () => setError(null), run };
+  return { operation, busy: operation !== null, error, clearError: () => {
+    if (currentPage.current === pageKey) setState(previous => previous.pageKey === pageKey ? { ...previous, error: null } : previous);
+  }, run };
 }

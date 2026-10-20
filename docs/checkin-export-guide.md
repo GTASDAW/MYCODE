@@ -22,9 +22,11 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 | --- | --- | --- |
 | `GET /api/admin/activities/{id}/registrations` | 筛选、分页、活动详情与整场签到统计 | ADMIN |
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 保存首次签到，返回当前名单行，无请求体 | ADMIN，需 CSRF |
-| `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合两类筛选的 CSV | ADMIN |
+| `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词及两类状态筛选的 CSV | ADMIN |
 
 名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，新增 `checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。
+
+名单与导出均接受可选 `keyword`，默认空，最多200个Java字符；省略或空值保持原接口行为，超长返回400 `VALIDATION_ERROR`。关键词按账号或当前昵称字面包含匹配，与两类状态按AND组合；使用绑定参数的LOCATE，百分号、下划线、引号和反斜线不作为通配符或SQL。直接API保留原始关键词，页面提交时去除首尾空白；匹配沿用数据库既有字符排序规则，不搜索签到管理员昵称。
 
 分页响应保留 `{activity,items,total,page,pageSize}` 并增加：
 
@@ -38,9 +40,11 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 }
 ```
 
-这三个数表示整场活动全部 `ACTIVE`，不受页码或两类筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留原报名及用户字段，并增加 `checkedInAt`（UTC 或 null）、`checkedInBy`（用户 ID 或 null）、`checkedInByDisplayName`（当前管理员昵称或 null）。候补和已取消的签到状态在页面与 CSV 显示“不适用”。
+这三个数表示整场活动全部 `ACTIVE`，不受页码、关键词或两类状态筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留原报名及用户字段，并增加 `checkedInAt`（UTC 或 null）、`checkedInBy`（用户 ID 或 null）、`checkedInByDisplayName`（当前管理员昵称或 null）。候补和已取消的签到状态在页面与 CSV 显示“不适用”。
 
 活动、整场统计、筛选总数与当前页在 `AdminService` 的只读 `REPEATABLE_READ` 事务内共享一致性快照，按 `updated_at DESC, id DESC` 排序。签到不更新 `updated_at`，因此不会让签到者跳到名单顶部或干扰候补 FIFO。并发签到提交后，本次读取仍使用原快照，下一次刷新才反映新结果；只读查询不增加活动写锁。
+
+关键词计数与列表/CSV共用 `AdminMapper.ROSTER_FILTER`，计数联表users读取相同的当前昵称；昵称在两次读取之间提交变化时，本次查询仍按原快照返回，下次刷新才改变匹配集合。分页保持活动、整场统计、匹配计数、当前页四次业务SELECT；导出为活动、匹配计数、全集三次，认证凭据版本查询另计。搜索不增加字段、索引、依赖或迁移，当前门禁保持V12。
 
 常见错误沿用 JSON `{code,message}` 与服务端 `X-Request-Id`：
 
@@ -51,14 +55,14 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 | 404 / `ACTIVITY_NOT_FOUND`、`REGISTRATION_NOT_FOUND` | 活动不存在，或报名不在该活动内 |
 | 409 / `CHECK_IN_NOT_OPEN` | 未到活动开始时间 |
 | 409 / `REGISTRATION_NOT_ACTIVE`、`ACTIVITY_CANCELLED` | 非有效报名或活动已取消 |
-| 400 / `VALIDATION_ERROR` | 非法分页或筛选状态 |
+| 400 / `VALIDATION_ERROR` | 非法分页、筛选状态或超长关键词 |
 | 413 / `EXPORT_TOO_LARGE` | 匹配导出记录超过 20,000 条 |
 
 两个新接口纳入固定日志和指标路由，不把报名 ID、昵称、筛选参数或 CSV 内容写进请求日志。实例内指标仍只表示当前 JVM，不能将跨实例或不同路由的 P95 平均为系统 P95。
 
 ## 文件合同与 Excel 查看
 
-导出只读取 `status` 与 `checkInStatus`，默认均为 `ALL`。分页参数不能把导出缩成当前页；服务端在同一只读快照内计数并读取完整匹配集合，最多 20,000 条，超限返回明确 JSON 错误，不截断冒充完整文件。空集合可以成功下载，内容只有表头。
+导出读取 `status`、`checkInStatus` 和 `keyword`，默认分别为 `ALL`、`ALL`、空。分页参数不能把导出缩成当前页；服务端在同一只读快照内计数并读取完整匹配集合，最多 20,000 条，超限返回明确 JSON 错误，不截断冒充完整文件。空集合可以成功下载，内容只有表头。
 
 响应为 `text/csv;charset=UTF-8`、`Content-Disposition: attachment; filename="activity-{id}-registrations.csv"`，并设置 `Cache-Control: no-store`。文件以 UTF-8 BOM 开头，记录使用 CRLF，各字段包在双引号内，内部双引号加倍；昵称中的逗号、引号或换行仍属于同一字段。字段顺序如下：
 
@@ -75,7 +79,9 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 
 ## 页面与请求生命周期
 
-名单上方显示整场有效报名、已签到、未签到三项真实统计，加载与失败为 `—`。报名和签到筛选可共同使用，改变筛选或每页数量回到第一页；签到成功后重新读取当前条件，未签到末页记录减少导致越界时回到最后合法页，最少第一页。
+名单上方显示整场有效报名、已签到、未签到三项真实统计，加载与失败为 `—`。账号/昵称关键词与报名和签到筛选可共同使用，提交搜索、改变状态筛选或每页数量回到第一页；签到成功后重新读取当前已提交条件，未签到末页记录减少导致越界时replace到最后合法页，最少第一页。
+
+已提交的keyword、status、checkInStatus、page、pageSize存于 `/admin/activities/{id}/registrations` URL，输入草稿独立，未提交的文字不改变名单或CSV。查询与Enter提交，同条件仍重新读取；重置清空关键词与状态、回第一页并保留每页数量，手动刷新使用已提交条件。非法URL状态和数字归默认，超长关键词清空并提示、其他合法条件保留；无关参数规范化移除。刷新、浏览器历史和登录返回保留条件，不因筛选/hash重挂页面和Providers。名单进入同活动详情携带规范来源，只有当前管理员且活动编号一致可“返回报名名单”，外部路径、其他活动或非管理员不能扩展原公开来源白名单。
 
 未开始时提示到开始时间后操作，页面在开始边界更新按钮，没有轮询。对有效未签到者点击“确认签到”后，弹窗展示账号、昵称与不可撤销说明，确认过程中禁止重复提交。非有效报名者显示“不适用”，已签到者显示结果。表格内部横向滚动，操作列固定在右侧，桌面与手机共用现有蓝白后台布局。
 
@@ -84,7 +90,7 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 - CSV 非成功响应按 JSON 错误解析，保留业务 code 与合法请求编号，不把错误正文保存成文件。成功文件只接受 `text/csv`；GET 不自动获取 CSRF 或重试。
 - 签到写入继续只对明确 403 `CSRF_INVALID` 刷新 Token 并重试一次，普通拒绝、未知错误和第二次 CSRF 失败可见。
 - 读取、签到与下载同时核对可信账号请求票据的认证代次、取消信号与页面状态。页面进一步核对活动、筛选、页码和刷新版本；同一账号重新登录也使旧票据失效。
-- 页面离开或条件变化时取消旧请求，迟到成功不能更新新名单、提示旧成功或下载，迟到 401 不能退出新会话。导出使用点击时的两类筛选，不携带客户端身份或分页。
+- 页面离开或已提交条件变化时取消旧请求，作用域包含关键词、URL条件及认证代次；迟到成功不能更新新名单、提示旧成功或下载，迟到401不能退出新会话，旧finally不能清除新操作状态。导出使用点击时已提交的关键词及两类状态，不携带草稿、客户端身份或分页。
 - 浏览器下载只在当前请求仍有效时创建临时链接，点击前再次检查，结束时移除链接并释放对象 URL。网络失败可以重试；服务端已提交但响应丢失时，签到重试仍保留首次审计。
 
 ## 阅读、验证与业务演示
@@ -95,7 +101,7 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 
 前端 `api.test.mjs` 验证文件响应、错误编号、身份与分页剔除、CSRF 重试边界和取消信号；`checkin.test.mjs` 验证资格、对象 URL 清理和同账号重登后的旧下载阻断。`e2e/checkin.spec.ts` 用本轮准确归属记录覆盖桌面/手机真实签到、筛选统计、末页修正、下载内容、网络失败、迟到成功/错误与账号切换。默认 Compose 与 Redis 双实例验证针对真实服务及数据库，不以模拟序列化代替跨实例行为。
 
-清理先核对活动归属和账号外部引用，包含 `checked_in_by` 与操作记录 `actor_user_id`；若本轮账号为外部活动执行过签到或留有操作记录，拒绝整次清理。另检查操作记录的报名与所属活动一致，异常跨活动绑定在任何 DELETE 前拒绝；原管理员作为本轮活动 actor 是合法引用，原账号与其他历史保留。V9 收藏还需通过准确用户/活动对的归属证明，外部引用拒绝；先删已证明收藏，再在同一事务按操作记录、通知、报名、活动、用户顺序删除本轮记录。当前环境核验 V1–V9、六张业务表、活动分类、签到列及用户凭据版本；历史 V2 性能实验只查询原三表，不读取新增签到、通知、操作记录或凭据版本，独立合同保持，不把当前业务写成历史 SQL 优化收益。归属保护与阅读路径见 [管理员操作记录指南](audit-log-guide.md)。
+清理先核对活动归属和账号外部引用，包含 `checked_in_by` 与操作记录 `actor_user_id`；若本轮账号为外部活动执行过签到或留有操作记录，拒绝整次清理。另检查操作记录的报名与所属活动一致，异常跨活动绑定在任何 DELETE 前拒绝；原管理员作为本轮活动 actor 是合法引用，原账号与其他历史保留。V9 收藏还需通过准确用户/活动对的归属证明，外部引用拒绝；先删已证明收藏，再在同一事务按操作记录、通知、报名、活动、用户顺序删除本轮记录。当前环境核验V12、六张业务表、报名截止/结束时间、封面、分类、签到列及用户凭据版本；历史 V2 性能实验只查询原三表，不读取新增签到、通知、操作记录或凭据版本，独立合同保持，不把当前业务写成历史 SQL 优化收益。归属保护与阅读路径见 [管理员操作记录指南](audit-log-guide.md)。
 
 具体执行数量、浏览器下载是否通过及 CI 结果统一见 [验证记录](verification.md)。复现与精确清理见 [交付指南](delivery-guide.md)，跨实例身份及持久化见 [共享 Session 指南](shared-session.md)。测试代码存在与实际运行通过需要分别说明。
 

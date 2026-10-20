@@ -344,11 +344,11 @@ test('notification ownership and authentication failures remain visible without 
   }
 });
 
-test('roster reads combine both filters while CSV exports omit pagination and any client identity', async () => {
+test('roster reads combine a literal keyword and both filters while CSV exports omit pagination and any client identity', async () => {
   const { api } = await freshApi();
   const controller = new AbortController();
   const calls = [];
-  const query = { page: 2, pageSize: 10, status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', userId: 999 };
+  const query = { page: 2, pageSize: 10, status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', keyword: '中文 %_!+&?', userId: 999 };
   const csv = '\ufeff"报名记录 ID","姓名"\r\n"\t123","\t中文用户"\r\n';
   const page = { items: [{ id: 123 }], total: 21, page: 2, pageSize: 10,
     summary: { activeRegistrations: 31, checkedInRegistrations: 10, notCheckedInRegistrations: 21 } };
@@ -363,9 +363,9 @@ test('roster reads combine both filters while CSV exports omit pagination and an
   assert.equal(await file.text(), csv.slice(1)); // Blob.text decodes and removes UTF-8 BOM.
   const paths = calls.map(call => new URL(call.url, 'http://localhost'));
   assert.equal(paths[0].pathname, '/api/admin/activities/25/registrations');
-  assert.deepEqual(Object.fromEntries(paths[0].searchParams), { page: '2', pageSize: '10', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN' });
+  assert.deepEqual(Object.fromEntries(paths[0].searchParams), { page: '2', pageSize: '10', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', keyword: query.keyword });
   assert.equal(paths[1].pathname, '/api/admin/activities/25/registrations/export');
-  assert.deepEqual(Object.fromEntries(paths[1].searchParams), { status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN' });
+  assert.deepEqual(Object.fromEntries(paths[1].searchParams), { status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', keyword: query.keyword });
   for (const { options } of calls) {
     assert.equal(options.signal, controller.signal);
     assert.equal(options.credentials, 'same-origin');
@@ -373,6 +373,23 @@ test('roster reads combine both filters while CSV exports omit pagination and an
     assert.equal(options.headers.get('X-CSRF-TOKEN'), null);
   }
   assert.equal(calls[1].options.headers.get('Accept'), 'text/csv, application/json');
+});
+
+test('old roster and CSV callers omit keyword safely and retain their cancellation signals', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController(), calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return url.includes('/export?') ? new Response('header\r\n', { headers: { 'Content-Type': 'text/csv' } }) : response(200, { items: [] });
+  };
+  await api.adminRegistrations('25', { page: 1, pageSize: 10, status: 'ALL', checkInStatus: 'ALL' }, controller.signal);
+  await api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL', actorId: 77, page: 3, pageSize: 99 }, controller.signal);
+  assert.deepEqual(Object.fromEntries(new URL(calls[0].url, 'http://localhost').searchParams),
+    { page: '1', pageSize: '10', status: 'ALL', checkInStatus: 'ALL', keyword: '' });
+  assert.deepEqual(Object.fromEntries(new URL(calls[1].url, 'http://localhost').searchParams),
+    { status: 'ALL', checkInStatus: 'ALL', keyword: '' });
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[1].options.signal, controller.signal);
 });
 
 test('CSV JSON errors retain their code and request ID and GET never refreshes CSRF or replays', async () => {

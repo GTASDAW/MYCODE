@@ -51,8 +51,9 @@ function ActivityDetailPage() {
   const auth = useAuth();
   const location = useLocation();
   const sourceList = new URLSearchParams(location.search).get("from");
-  const returnPath = safeActivityDetailReturn(sourceList);
-  const returnLabel = returnPath.split("?")[0] === "/my-registrations"
+  const returnPath = safeActivityDetailReturn(sourceList, auth.user?.role === "ADMIN" ? Number(id) : undefined);
+  const returnLabel = returnPath.split("?")[0] === `/admin/activities/${Number(id)}/registrations`
+    ? "返回报名名单" : returnPath.split("?")[0] === "/my-registrations"
     ? "返回我的报名" : returnPath.split("?")[0] === "/my-favorites" ? "返回我的收藏"
       : sourceList === null ? "返回全部活动" : "返回活动列表";
   const detailPath = `${location.pathname}${location.search}`;

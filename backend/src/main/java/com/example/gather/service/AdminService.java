@@ -61,26 +61,36 @@ public class AdminService {
     }
 
     public RosterPageView roster(long activityId, int page, int pageSize, String status, String checkInStatus, long userId) {
+        return roster(activityId, page, pageSize, status, checkInStatus, "", userId);
+    }
+
+    public RosterPageView roster(long activityId, int page, int pageSize, String status, String checkInStatus, String keyword, long userId) {
         validatePage(page, pageSize);
         validateRosterStatuses(status, checkInStatus);
+        validateRosterKeyword(keyword);
         Instant now = now();
         ActivityRow activity = requireActivity(activityId, userId);
         var summary = admin.rosterSummary(activityId);
-        long total = admin.countRoster(activityId, status, checkInStatus);
-        var items = admin.roster(activityId, status, checkInStatus, pageSize, offset(page, pageSize)).stream()
+        long total = admin.countRoster(activityId, status, checkInStatus, keyword);
+        var items = admin.roster(activityId, status, checkInStatus, keyword, pageSize, offset(page, pageSize)).stream()
             .map(RosterView::from).toList();
         return new RosterPageView(ActivityView.from(activity, now), items, total, page, pageSize, summary);
     }
 
     public byte[] exportRoster(long activityId, String status, String checkInStatus, long userId) {
+        return exportRoster(activityId, status, checkInStatus, "", userId);
+    }
+
+    public byte[] exportRoster(long activityId, String status, String checkInStatus, String keyword, long userId) {
         validateRosterStatuses(status, checkInStatus);
+        validateRosterKeyword(keyword);
         requireActivity(activityId, userId);
         // Count and rows share this read-only REPEATABLE_READ transaction; never truncate a full export.
-        long total = admin.countRoster(activityId, status, checkInStatus);
+        long total = admin.countRoster(activityId, status, checkInStatus, keyword);
         if (total > MAX_EXPORT_ROWS) {
             throw new ApiException(HttpStatus.PAYLOAD_TOO_LARGE, "EXPORT_TOO_LARGE", "匹配名单超过 20,000 条，请缩小筛选范围后导出");
         }
-        return RegistrationCsv.encode(admin.roster(activityId, status, checkInStatus, MAX_EXPORT_ROWS, 0));
+        return RegistrationCsv.encode(admin.roster(activityId, status, checkInStatus, keyword, MAX_EXPORT_ROWS, 0));
     }
 
     private ActivityRow requireActivity(long activityId, long userId) {
@@ -92,6 +102,10 @@ public class AdminService {
     private static void validateRosterStatuses(String status, String checkInStatus) {
         validateStatus(status, ROSTER_STATUSES);
         validateStatus(checkInStatus, CHECK_IN_STATUSES);
+    }
+
+    private static void validateRosterKeyword(String keyword) {
+        if (keyword == null || keyword.length() > MAX_KEYWORD_LENGTH) invalid("搜索关键词最多 200 字");
     }
 
     private Instant now() {

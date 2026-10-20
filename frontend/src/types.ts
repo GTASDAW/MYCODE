@@ -213,6 +213,7 @@ export interface AdminRegistrationQuery {
   pageSize: number;
   status: RegistrationFilter;
   checkInStatus: CheckInFilter;
+  keyword: string;
 }
 
 export interface AdminRegistration {
