@@ -266,6 +266,60 @@ class RegistrationIntegrationTest {
     }
 
     @Test
+    void waitingPositionUsesMicrosecondThenIdOrderAndRecomputesAcrossCancelRejoinPromotion() {
+        long id = createActivity(1);
+        long active = users.findByUsername("demo").id();
+        long second = createUser();
+        long third = createUser();
+        registrations.register(id, active);
+        registrations.register(id, second);
+        registrations.register(id, third);
+
+        // Keep the tie just before the database clock so rejoining receives a later updated_at.
+        LocalDateTime tie = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1).withNano(123456);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND status='WAITING'", tie, id);
+        long secondRegistration = jdbc.queryForObject("SELECT id FROM registrations WHERE activity_id=? AND user_id=?", Long.class, id, second);
+        long thirdRegistration = jdbc.queryForObject("SELECT id FROM registrations WHERE activity_id=? AND user_id=?", Long.class, id, third);
+        long firstUser = secondRegistration < thirdRegistration ? second : third;
+        long secondUser = secondRegistration < thirdRegistration ? third : second;
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(1L);
+        assertThat(activities.get(id, secondUser).waitingPosition()).isEqualTo(2L);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", tie.minusNanos(1000), id, secondUser);
+        assertThat(activities.get(id, secondUser).waitingPosition()).isEqualTo(1L);
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(2L);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND status='WAITING'", tie, id);
+        var beforeDuplicate = jdbc.queryForMap("SELECT * FROM registrations WHERE activity_id=? AND user_id=?", id, firstUser);
+        assertThat(registrations.register(id, firstUser).waitingPosition()).isEqualTo(1L);
+        assertThat(jdbc.queryForMap("SELECT * FROM registrations WHERE activity_id=? AND user_id=?", id, firstUser)).isEqualTo(beforeDuplicate);
+        assertThat(activities.get(id, null).waitingPosition()).isNull();
+        assertThat(activities.get(id, active).waitingPosition()).isNull();
+
+        registrations.cancel(id, firstUser);
+        assertThat(activities.get(id, secondUser).waitingPosition()).isEqualTo(1L);
+        assertThat(activities.get(id, firstUser).waitingPosition()).isNull();
+        registrations.register(id, firstUser);
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(2L);
+
+        registrations.cancel(id, active);
+        assertThat(activities.get(id, secondUser).registrationStatus()).isEqualTo("ACTIVE");
+        assertThat(activities.get(id, secondUser).waitingPosition()).isNull();
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(1L);
+        assertThat(activities.get(id, firstUser).waitingCount()).isEqualTo(1);
+
+        jdbc.update("UPDATE activities SET registration_deadline=? WHERE id=?", LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1), id);
+        assertThat(activities.get(id, firstUser).closed()).isFalse();
+        assertThat(activities.get(id, firstUser).registrationClosed()).isTrue();
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(1L);
+
+        LocalDateTime started = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1);
+        jdbc.update("UPDATE activities SET starts_at=?, registration_deadline=? WHERE id=?",
+            started, started.minusSeconds(1), id);
+        assertThat(activities.get(id, firstUser).closed()).isTrue();
+        assertThat(activities.get(id, firstUser).registrationClosed()).isTrue();
+        assertThat(activities.get(id, firstUser).waitingPosition()).isEqualTo(1L);
+    }
+
+    @Test
     void startedActivityForbidsBothRegistrationAndCancellation() throws Exception {
         long id = createActivity(2);
         var principal = new AppUserDetails(users.findByUsername("demo"));

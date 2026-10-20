@@ -136,6 +136,8 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 
 ## 管理查询与统计口径
 
+活动响应的waitingPosition为当前可信Session本人候补顺位，只有本人WAITING且活动未取消时非空。共享WaitingQueueSql按原updated_at/id FIFO在既有SELECT内计算，同一投影的waitingCount和顺位保持同快照，不添加逐行Mapper查询或更改报名热锁。ActivityRow、本人报名与收藏记录统一传递该字段；详情和个人报名用共享WaitingPositionNotice显示，未知值明确不可用，开始后保留历史顺位并停止递补提示。只读字段不会复制到新活动、日历或审计写入。边界和读取合同见 [本人候补顺位](my-registrations-guide.md#本人候补顺位)。
+
 管理入口包括概览 `/admin/dashboard`、活动管理 `/admin/activities`、发布活动 `/admin/activities/new`、编辑活动 `/admin/activities/{id}/edit`、报名名单 `/admin/activities/{id}/registrations`、操作记录 `/admin/audit-logs` 和运行指标 `/admin/monitoring`。页面先通过既有认证与管理员权限检查，再挂载管理查询；普通用户访问这些路径不能触发管理数据请求。
 
 `GET /api/admin/activities` 接受 `page`（默认 1）、`pageSize`（默认 10）、`keyword`（默认空）、`status` 和 `category`（均默认 `ALL`），返回 `{items,total,page,pageSize}`。页码至少为 1，每页 1–100 条，关键词最多 200 字。关键词在标题或地点中作字面子串匹配，`%`、`_` 和反斜杠不会成为通配符；SQL 使用绑定参数和 `LOCATE`。结果按开始时间升序、活动 ID 升序排列。管理页面已提交条件来自 URL，草稿单独保存，刷新及历史保留，改变分类或数量回第一页，越界 replace 校正。

@@ -206,6 +206,10 @@ class MyRegistrationSearchIntegrationTest {
         assertThat(item.get("activity").get("id").asLong()).isEqualTo(activity);
         assertThat(item.get("activity").get("category").asString()).isEqualTo("UNCATEGORIZED");
         assertThat(registrations.mine(owner).getFirst().activity()).isEqualTo(activities.get(activity, owner));
+        var waitingOld = registrations.mine(waiting).getFirst();
+        assertThat(waitingOld.activity().waitingPosition()).isEqualTo(1L);
+        assertThat(registrations.searchMine(waiting, 1, 10, "WAITING").items()).singleElement()
+            .extracting(MyRegistrationView::activity).extracting(ActivityView::waitingPosition).isEqualTo(1L);
         activities.cancel(activity, new CancelActivityRequest("历史取消原因"), adminId());
         var cancelled = registrations.mine(owner).getFirst();
         assertThat(cancelled.id()).isEqualTo(registration);
@@ -354,6 +358,59 @@ class MyRegistrationSearchIntegrationTest {
         assertThat(next.summary()).isEqualTo(new MyRegistrationSummary(0, 0, 1, 0));
         assertThat(registrations.searchMine(owner, 1, 10, "CANCELLED").items()).hasSize(1)
             .allMatch(item -> item.activity().cancelled() && item.activity().registeredCount() == 0);
+    }
+
+    @Test
+    void waitingPositionAndCountKeepTheOldQueueSnapshotWhenEarlierWaitingCancels() {
+        long active = createUser("USER", "占用名额");
+        long earlier = createUser("USER", "前序候补");
+        long owner = createUser("USER", "候补快照本人");
+        long activity = createActivity(1);
+        register(activity, active);
+        register(activity, earlier);
+        long ownRegistration = register(activity, owner);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", utc(NOW.minusSeconds(2)), activity, earlier);
+        jdbc.update("UPDATE registrations SET updated_at=? WHERE activity_id=? AND user_id=?", utc(NOW.minusSeconds(1)), activity, owner);
+        var identity = principal(owner);
+        reads.afterTotals.set(() -> {
+            assertThat(clock.calls.get()).isEqualTo(1);
+            inOtherThread(() -> registrations.cancel(activity, earlier));
+            // The writer has its own clock reads; the page must not read the clock again afterward.
+            clock.calls.set(0);
+        });
+        clock.calls.set(0);
+        var queries = capture(() -> {
+            try {
+                mvc.perform(get(PATH).with(user(identity)).param("status", "WAITING").param("userId", Long.toString(earlier)))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(1))
+                    .andExpect(jsonPath("$.items[0].id").value(ownRegistration))
+                    .andExpect(jsonPath("$.items[0].status").value("WAITING"))
+                    .andExpect(jsonPath("$.items[0].activity.waitingPosition").value(2))
+                    .andExpect(jsonPath("$.items[0].activity.waitingCount").value(2));
+            } catch (Exception failure) {
+                throw new IllegalStateException("Authenticated queue snapshot read failed", failure);
+            }
+        });
+        assertThat(reads.afterTotals.get()).isNull();
+        assertThat(clock.calls.get()).isZero();
+        assertThat(queries).extracting(Query::statement).containsExactly(
+            CredentialVersionMapper.class.getName() + ".findByUserId",
+            RegistrationMapper.class.getName() + ".mineTotals", RegistrationMapper.class.getName() + ".searchMine");
+        assertThat(queries.subList(1, queries.size())).hasSize(2).allSatisfy(query -> {
+            assertThat(query.readOnly()).isTrue();
+            assertThat(query.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+            assertThat(query.parameters()).contains(owner).doesNotContain(earlier);
+        });
+        clock.calls.set(0);
+        var next = registrations.searchMine(owner, 1, 10, "WAITING");
+        assertThat(clock.calls.get()).isEqualTo(1);
+        assertThat(next.total()).isEqualTo(1);
+        assertThat(next.items()).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(ownRegistration);
+            assertThat(item.status()).isEqualTo("WAITING");
+            assertThat(item.activity().waitingPosition()).isEqualTo(1L);
+            assertThat(item.activity().waitingCount()).isEqualTo(1);
+        });
     }
 
     @Test

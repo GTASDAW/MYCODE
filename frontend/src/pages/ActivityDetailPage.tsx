@@ -14,6 +14,7 @@ import {
   ArrowRightOutlined,
   CheckCircleFilled,
   ClockCircleOutlined,
+  ReloadOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
@@ -39,6 +40,7 @@ import { FavoriteButton } from "./FavoriteButton";
 import { CalendarDownloadButton } from "./CalendarDownloadButton";
 import { ActivityCover } from "../ActivityCoverImage";
 import { ActivityCopyLink } from "./ActivityCopyLink";
+import { WaitingPositionNotice } from "../components/WaitingPositionNotice";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -90,7 +92,7 @@ function ActivityDetailPage() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const activity = resource.data;
-  useActivityClock([activity ?? undefined]);
+  const now = useActivityClock([activity ?? undefined]);
 
   async function mutate(cancel: boolean) {
     if (!activity || submission.current || activityClosed(activity) || !cancel && activityRegistrationClosed(activity)) return;
@@ -178,6 +180,8 @@ function ActivityDetailPage() {
         description="活动详情 · 时间均为北京时间"
         extra={
             <Space wrap>
+              <Button aria-label="刷新活动信息" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading}
+                disabled={busy} onClick={() => { if (!submission.current) resource.retry(); }}>刷新活动</Button>
               <FavoriteButton activityId={activity.id} detailPath={detailPath} />
               <CalendarDownloadButton activityId={activity.id} cancelled={activity.cancelled} detailPath={detailPath} refresh={resource.retry} />
               {auth.user?.role === "ADMIN" && <>
@@ -258,6 +262,7 @@ function ActivityDetailPage() {
           {(activity.waitingCount ?? 0) > 0 && (
             <p className="remaining-text">当前候补 {activity.waitingCount} 人</p>
           )}
+          <WaitingPositionNotice activity={activity} now={now} />
           <Progress
             percent={Math.min(
               100,

@@ -25,6 +25,8 @@ export interface Activity {
   capacity: number;
   registeredCount: number;
   waitingCount: number;
+  /** Current user's FIFO position when this projection is WAITING; absent for anonymous/non-waiting views. */
+  waitingPosition?: number | null;
   registrationStatus: "ACTIVE" | "WAITING" | "CANCELLED" | null;
   closed: boolean;
   cancelled: boolean;
