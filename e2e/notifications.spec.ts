@@ -169,7 +169,7 @@ async function makeCancellation(request: APIRequestContext, recipient: APIReques
   return activity;
 }
 
-test('真实递补和整场取消只通知对应参与者，重复操作与再次递补保持正确，已读和详情可用', async ({ page, request, playwright }, info) => {
+test('真实递补和整场取消只通知对应参与者，重复操作与再次递补保持正确，已读和详情可用', { tag: ['@smoke', '@redis'] }, async ({ page, request, playwright }, info) => {
   const clients: APIRequestContext[] = [];
   try {
     await loginApi(request);

@@ -254,7 +254,7 @@ test('通知类型与状态共同筛选分页，全局未读数量不受影响�
   await capture(page, info, 'notification-type-status');
 });
 
-test('全部已读确认可取消，单次提交覆盖所有类型分页且保留首次时间和他人通知', async ({ page, request, playwright }, info) => {
+test('全部已读确认可取消，单次提交覆盖所有类型分页且保留首次时间和他人通知', { tag: '@redis' }, async ({ page, request, playwright }, info) => {
   const fixture = await fixtures(request, info); await login(page, fixture.owner);
   const query: Query = { type: 'PROMOTED', page: 2, pageSize: 5 };
   await open(page, query); const before = await notifications(page.request, { pageSize: 100 });
@@ -412,7 +412,7 @@ test('切换通知类型时旧读取成功或失败不覆盖当前加载、角�
   }
 });
 
-test('旧全部已读成功与真实旧读取401迟到不污染切换账号或同账号重登后的通知和确认框', async ({ page, request }, info) => {
+test('旧全部已读成功与真实旧读取401迟到不污染切换账号或同账号重登后的通知和确认框', { tag: '@redis' }, async ({ page, request }, info) => {
   const fixture = await fixtures(request, info); await login(page, fixture.owner); await open(page);
   await filter(page, { type: 'PROMOTED' }, '通知类型', '候补递补');
   const loginInApp = async (account: Account) => {

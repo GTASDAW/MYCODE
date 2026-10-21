@@ -77,7 +77,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { path, contentType: 'image/png' });
 }
 
-test('本人修改密码后两个真实浏览器会话均失效，旧密码被拒绝，新密码完整保留空格并重新登录', async ({ page, request, browser }, info) => {
+test('本人修改密码后两个真实浏览器会话均失效，旧密码被拒绝，新密码完整保留空格并重新登录', { tag: '@redis' }, async ({ page, request, browser }, info) => {
   const account = await register(request);
   const otherContext = await browser.newContext({ baseURL: info.project.use.baseURL,
     viewport: info.project.use.viewport, isMobile: info.project.use.isMobile, hasTouch: info.project.use.hasTouch,
@@ -117,7 +117,7 @@ test('本人修改密码后两个真实浏览器会话均失效，旧密码被�
     () => otherContext.close(), () => logoutApi(request)]); }
 });
 
-test('改密校验拒绝不匹配与超UTF8输入，真实错误密码和相同密码不更新凭据，匿名与CSRF由后端拒绝', async ({ page, request }, info) => {
+test('改密校验拒绝不匹配与超UTF8输入，真实错误密码和相同密码不更新凭据，匿名与CSRF由后端拒绝', { tag: '@redis' }, async ({ page, request }, info) => {
   const account = await register(request);
   let primaryError: unknown;
   try {
@@ -148,7 +148,7 @@ test('改密校验拒绝不匹配与超UTF8输入，真实错误密码和相同�
   finally { await finish(primaryError, [() => logoutApi(page.request), () => logoutApi(request)]); }
 });
 
-test('改密真实提交成功但响应连接中断时不重发，手动重新登录确认可用新密码', async ({ page, request }, info) => {
+test('改密真实提交成功但响应连接中断时不重发，手动重新登录确认可用新密码', { tag: '@redis' }, async ({ page, request }, info) => {
   const account = await register(request);
   let posts = 0;
   let primaryError: unknown;
@@ -179,7 +179,7 @@ test('改密真实提交成功但响应连接中断时不重发，手动重新�
   finally { await finish(primaryError, [() => page.unroute(`**${endpoint}`), () => logoutApi(page.request), () => logoutApi(request)]); }
 });
 
-test('同账号会话轮换导致真实CSRF失效时只刷新一次再提交改密', async ({ page, request }) => {
+test('同账号会话轮换导致真实CSRF失效时只刷新一次再提交改密', { tag: '@redis' }, async ({ page, request }) => {
   const account = await register(request);
   let primaryError: unknown;
   try {
@@ -211,7 +211,7 @@ test('同账号会话轮换导致真实CSRF失效时只刷新一次再提交改�
   finally { await finish(primaryError, [() => logoutApi(page.request), () => logoutApi(request)]); }
 });
 
-test('改密响应处理中离开页面取消读取不承诺回滚，返回时字段清空且新凭据真实生效', async ({ page, request }, info) => {
+test('改密响应处理中离开页面取消读取不承诺回滚，返回时字段清空且新凭据真实生效', { tag: '@redis' }, async ({ page, request }, info) => {
   const account = await register(request);
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
   let fetched!: () => void; const ready = new Promise<void>(resolve => { fetched = resolve; });
@@ -240,7 +240,7 @@ test('改密响应处理中离开页面取消读取不承诺回滚，返回时�
 });
 
 for (const [lateStatus, sameAccount] of [[200, false], [401, false], [200, true], [401, true]] as const) {
-  test(`真实改密${lateStatus}迟到后${sameAccount ? '相同账号重新登录' : '切换账号'}不清除新会话或覆盖新页面`, async ({ page, request, playwright }, info) => {
+  test(`真实改密${lateStatus}迟到后${sameAccount ? '相同账号重新登录' : '切换账号'}不清除新会话或覆盖新页面`, { tag: '@redis' }, async ({ page, request, playwright }, info) => {
     const account = await register(request);
     const nextAccount = sameAccount ? account : await register(request);
     let revokedCookie: string | undefined;
@@ -302,7 +302,7 @@ for (const [lateStatus, sameAccount] of [[200, false], [401, false], [200, true]
 }
 
 for (const sameAccount of [false, true]) {
-  test(`真实403后的CSRF旧401迟到不会清除${sameAccount ? '同账号重新登录' : '新账号'}的会话或令牌`, async ({ page, request }, info) => {
+  test(`真实403后的CSRF旧401迟到不会清除${sameAccount ? '同账号重新登录' : '新账号'}的会话或令牌`, { tag: '@redis' }, async ({ page, request }, info) => {
     const account = await register(request);
     const next = sameAccount ? account : await register(request);
     let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });

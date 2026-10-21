@@ -69,7 +69,8 @@ async function logout(page: Page) {
 
 async function openProfile(page: Page) {
   await page.getByRole('button', { name: /账号菜单/ }).click();
-  await page.getByRole('menuitem', { name: '个人中心', exact: true }).click();
+  // The fixed header can relocate the dropdown between pointer down and up.
+  await page.getByRole('menuitem', { name: '个人中心', exact: true }).press('Enter');
   await expect(page.getByRole('heading', { name: '个人中心', exact: true })).toBeVisible();
 }
 
@@ -109,7 +110,7 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
-test('新用户注册、登录、报名、修改昵称并重新登录，权限与资料正确', async ({ page, request }, testInfo) => {
+test('新用户注册、登录、报名、修改昵称并重新登录，权限与资料正确', { tag: '@redis' }, async ({ page, request }, testInfo) => {
   const account = trackAccount() as AccountFixture;
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));

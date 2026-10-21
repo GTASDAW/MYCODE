@@ -2,21 +2,45 @@ name: Build, test and verify Compose
 
 on:
   push:
-    branches: [main]
     paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   pull_request:
     branches: [main]
     paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   workflow_dispatch:
+    inputs:
+      redis_all_e2e:
+        description: 'Release/deep verification: repeat all browser cases against Redis'
+        type: boolean
+        default: false
+  schedule:
+    # Daily at 02:00 Asia/Shanghai; manual verification is required before release.
+    - cron: '0 18 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: gather-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: gather-ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    name: Select fast or full verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      redis_all: ${{ steps.scope.outputs.redis_all }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+      - id: scope
+        run: node scripts/ci-scope.mjs
+
   container-images:
     name: Build reusable ${{ matrix.image }} image
     runs-on: ubuntu-24.04
@@ -90,6 +114,8 @@ jobs:
         run: |
           npm ci
           node --test scripts/ci-images.test.mjs
+          node --test scripts/ci-scope.test.mjs
+          node --test scripts/ci-suites.test.mjs
           npm run test:backup
       - name: Preserve frontend diagnostics
         if: always()
@@ -156,7 +182,7 @@ jobs:
 
   compose-e2e:
     name: Compose, restart and browser verification
-    needs: [frontend, backend, container-images]
+    needs: [scope, frontend, backend, container-images]
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -221,12 +247,20 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/compose-smoke.mjs 2>&1 | tee .runtime/ci/compose-smoke.log
-      - name: Run real desktop and mobile flows
+      - name: Run fast desktop and mobile smoke flows
+        if: needs.scope.outputs.full != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:e2e:smoke 2>&1 | tee .runtime/ci/browser-smoke.log
+      - name: Run all desktop and mobile flows
+        if: needs.scope.outputs.full == 'true'
         shell: bash
         run: |
           set -euo pipefail
           npm run test:e2e 2>&1 | tee .runtime/ci/browser-tests.log
       - name: Verify production route loading, recovery and Nginx cache contracts
+        if: needs.scope.outputs.full == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -234,6 +268,7 @@ jobs:
           docker compose -f compose.yaml -f .github/compose.ci.yaml cp web:/usr/share/nginx/html/.vite .runtime/ci/loading-dist/.vite
           LOADING_BASE_URL="$E2E_BASE_URL" LOADING_BUILD_PATH=.runtime/ci/loading-dist/.vite/loading-graph.json LOADING_DIST_PATH=.runtime/ci/loading-dist LOADING_OUTPUT_DIR=.runtime/ci/loading-browser-results LOADING_REPORT_DIR=.runtime/ci/loading-browser-report npm run test:loading 2>&1 | tee .runtime/ci/loading-browser.log
       - name: Verify strict in-memory auth limits and real browser recovery
+        if: needs.scope.outputs.full == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -272,7 +307,8 @@ jobs:
 
   redis-session:
     name: Redis shared Session on two backends
-    needs: [frontend, backend, container-images]
+    needs: [scope, frontend, backend, container-images]
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -344,6 +380,13 @@ jobs:
           set -euo pipefail
           node scripts/redis-session-check.mjs 2>&1 | tee .runtime/ci/redis-session-check.log
       - name: Run real browser flows through both replicas
+        if: needs.scope.outputs.redis_all != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run test:e2e:redis 2>&1 | tee .runtime/ci/redis-browser-tests.log
+      - name: Run every browser case through Redis for release or deep verification
+        if: needs.scope.outputs.redis_all == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -394,7 +437,8 @@ jobs:
 
   performance:
     name: Signup HTTP performance baseline
-    needs: [frontend, backend, container-images]
+    needs: [scope, frontend, backend, container-images]
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -482,3 +526,19 @@ jobs:
       - name: Remove only the isolated performance CI stack
         if: always()
         run: docker compose -f compose.yaml -f .github/compose.ci.yaml -f .github/compose.perf-ci.yaml down --volumes --remove-orphans
+
+  quality-gate:
+    name: CI quality gate
+    if: always()
+    needs: [scope, frontend, backend, container-images, compose-e2e, redis-session, performance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.21.0'
+      - name: Require every check selected by the risk policy
+        env:
+          CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci-scope.mjs verify

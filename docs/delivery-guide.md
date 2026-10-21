@@ -28,11 +28,46 @@ CI 的 `container-images` 矩阵按本次 SHA 分别构建 backend/web，两个�
 | --- | --- | --- |
 | `frontend` | 从 lockfile 安装，运行 API/CSRF、改密未知结果/订阅取消/重登状态、账户认证顺序、公开及个人 URL/详情来源安全、个人查询认证代次/取消保护、通知未读顺序、签到/文件响应/过期下载、操作记录 URL/微秒/详情作用域回归、TypeScript 检查和生产构建 | 不写数据库 |
 | `backend` | Java 21、Maven Wrapper，运行本人改密/版本撤销/并发 CAS/登录竞态/数据库拒绝、账户、活动生命周期、权限、公开查询快照、个人旧数组兼容/分页/全量统计/签到时间/认证和业务 SELECT 次数及实际计划、通知、签到/CSV、操作记录四类快照/无变化/回滚/权限/微秒/快照读取、真实并发锁顺序和候补 FIFO 测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
-| `compose-e2e` | 实际构建前后端容器，验证首次迁移、页面深链、重启后数据保留与 Session 失效，再运行桌面和手机浏览器回归 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
-| `redis-session` | 真实 Redis 双实例、跨实例身份/CSRF/权限、独立会话最新昵称、本人改密与旧会话迟到保存、重启保留登录、共享退出、闲置失效，再运行完整浏览器回归 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
-| `performance` | 固定资源下的两种报名场景、客户端原始延迟、18 轮一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
+| `compose-e2e` | 复用当次唯一构建的镜像，验证首次迁移、深链、重启持久化/Session失效；快速CI运行8项smoke，完整CI运行全部356项桌面/手机业务、20项加载及14项严格限流浏览器 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
+| `redis-session` | 仅完整CI：真实Redis双实例全部生命周期/CSRF/权限/改密晚保存/重启/退出/闲置检查，40项核心及认证浏览器、20项加载、14项共享限流恢复；发布/深度模式可重复全部356项业务浏览器 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
+| `performance` | 仅完整CI：固定资源下两种报名场景、18轮/1800次正式测量、400次写预热、一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
 
-工作流在推送 `main`、针对 `main` 的 Pull Request 和手工触发时运行；仅修改 `docs/`、`README.md`、`AGENTS.md` 时跳过，避免重复已经通过的业务检查。容器检查等待前端和后端检查通过。Actions 使用固定提交 SHA，Node.js 使用 24.21.0，MySQL 使用 8.4.11 并固定镜像 digest。
+工作流在Push、针对main的PR、手动及每天18:00 UTC（次日北京时间02:00）触发；仅修改 `docs/`、`README.md`、`AGENTS.md` 的Push/PR跳过。前端、后端、两镜像仍并行，容器等待这些门禁和范围判定成功；镜像只构建一次并复用，不新增第二套镜像缓存。Actions继续固定提交SHA，Node.js 24.21.0、MySQL 8.4.11及原digest保持。
+
+## CI分层与发布门禁
+
+`scripts/ci-scope.mjs` 根据Push的before/head或PR的base/head完整差异判定。普通页面、通知及业务实现变更走快速CI，后端仍执行全部真实MySQL测试。安全/配置/Mapper/迁移、账户/改密/报名与活动事务、共享HTTP/认证层、依赖、Docker、工作流、脚本和E2E变更升级完整CI；未知路径、历史缺失、首次Push及异常范围都按完整处理，重命名保留删除源路径。手动/定时始终完整，tag额外强制Redis全量。详细白名单以代码和策略测试为准。
+
+`CI quality gate` 以always运行并校验所选任务结果：快速要求前端、后端、两镜像及Compose成功，Redis/性能应明确跳过；完整要求全部成功。需要的检查失败、取消、跳过或范围判定失败，都不能得到成功总门禁。普通Push/PR可取消被新提交替代的旧运行；手动和定时任务不会被日常Push取消。
+
+2026-10-21通过GitHub API核对：main未保护，分支protection为404，生效rules/rulesets为空；只有两份测试workflow，没有部署步骤，environments/deployments/releases/repository hooks均为空，Pages为404。本轮不更改远端保护、发布或部署配置，不访问生产；这些证据仅涵盖仓库及GitHub可见配置，不能证明仓库外系统不存在。已有检查名称保留，新增总门禁用于后续保护配置。
+
+发布前必须在Actions手动选定准确发布ref，勾选 `redis_all_e2e`，确认该SHA的完整工作流及Redis全量成功；tag也强制相同全量路径。不能用快速CI、旧SHA或未完成运行作为发布通过，仓库没有新增自动发布。日常完整CI中，默认环境覆盖全部业务，Redis覆盖共享会话、全部改密/迟到401/CSRF恢复与核心报名/通知/权限；需要特定业务与Redis联动诊断时可手动全量，或把对应回归加入 `@redis`。
+
+Playwright保留workers=1：global setup明确拒绝其他值，所有worker共用同步读改写的manifest，多个用例还共享admin/demo及全量列表断言。直接改成2会有manifest丢写、账号状态和数据集合竞争；可靠并行需要独立数据库/账号/manifest，本轮不扩展此架构。`@smoke`、`@redis`只加选择标签，不删除断言、用例或改变超时/重试；CI自动验证集合包含关系、两种设备和全部密码恢复用例。
+
+本地可执行 `npm run test:e2e:smoke`、`npm run test:e2e:redis`，不加筛选的 `npm run test:e2e`继续执行全部业务。认证限流及生产加载保持独立配置，保留两模式检查。工具/浏览器安装整步实测约17–24秒，远小于浏览器主体；未单独测量下载/系统依赖时间，未新增浏览器缓存或宣称缓存收益。原npm/Maven/BuildKit缓存保持。
+
+### 优化前的真实耗时与预期
+
+[参考运行39533454095](https://github.com/GTASDAW/MYCODE/actions/runs/39533454095) 七项成功；每个job实际起止为下表，不包含其依赖等待：
+
+| Job | 实测耗时 | 主要耗时 |
+| --- | --- | --- |
+| 前端 | 23秒 | 测试、构建和脚本检查 |
+| MySQL后端 | 2分46秒 | 数据库初始化26秒；Maven验证133秒 |
+| web/backend镜像 | 16秒/17秒 | 已有BuildKit缓存和同run复用 |
+| Compose | 34分41秒 | 全量浏览器27分；加载45秒；严格限流5分18秒 |
+| Redis | 36分54秒 | 生命周期89秒；全量浏览器27分28秒；加载41秒；严格限流5分55秒 |
+| 固定负载 | 1分40秒 | 独立环境24秒；准备/测量/清理55秒 |
+
+默认容器的工具/浏览器安装整步22秒、镜像下载/加载3+5秒、起栈24秒、迁移/深链/重启22秒；Redis对应21秒、4+9秒、24秒。它们与后端独立MySQL初始化26秒分别计时，不能把这些准备成本全部归为浏览器下载。
+
+参考关键路径为Maven完成→Redis任务，依赖完成到开跑仅3秒；总体约39分47秒。另两次成功运行39437804576/39389787819分别35分16秒/37分12秒，瓶颈在Compose/Redis间变化；前端/镜像不是主瓶颈。Maven最慢类为PasswordChange 37.27秒、AuthRateLimit 15.63秒、CheckIn 14.29秒、Notification 13.41秒，保留全部真实数据库断言及现有串行配置。
+
+参考两模式各执行相同356项业务浏览器。复制活动文件在Compose用例报告合计158.5秒，密码125秒、分类118.3秒、签到105.2秒；最长单例约16.6秒，多数成本是大量串行用例累计，未发现据此可任意缩短的等待。普通CI保留8项，完整默认356+Redis40，较原356+356减少316次重复业务用例执行（44.4%），被减少的业务仍在默认环境全量覆盖。两模式限流/加载有不同存储与代理配置，继续各自验证；发布Redis全量路径也保留。
+
+**预计而非云端实测**：普通快速CI约5–7分钟，前端先在约半分钟反馈、MySQL约3分钟反馈；完整默认约32–38分钟，发布/深度双全量约35–45分钟。参考Redis选中40例的逐例报告合计约246秒、smoke8例约49秒，均是旧运行中四舍五入的用例时间之和，不是新job墙钟。本机smoke约78秒也不等于云端容器耗时。排队、冷缓存和runner波动另计；当Compose原本就是关键路径时，减少Redis重复执行不会等比例缩短完整工作流。
 
 版本对照由独立的 `.github/workflows/query-comparison.yml` 提供，只接受 `workflow_dispatch` 手工触发。它不是常规 `ci.yml` 的第六个推送检查，避免后续功能修改不断对固定旧版本重新实验。
 

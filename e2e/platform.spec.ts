@@ -140,7 +140,7 @@ async function logout(page: Page) {
   await expect(page.getByRole('button', { name: '登录 / 体验' })).toBeVisible();
 }
 
-test('活动列表显示真实接口数据，详情可直接访问且没有横向溢出', async ({ page }) => {
+test('活动列表显示真实接口数据，详情可直接访问且没有横向溢出', { tag: ['@smoke', '@redis'] }, async ({ page }) => {
   const runtimeErrors: string[] = [];
   page.on('pageerror', error => runtimeErrors.push(error.message));
   const response = await page.request.get('/api/activities/search?keyword=&status=ALL&page=1&pageSize=12');
@@ -162,7 +162,7 @@ test('活动列表显示真实接口数据，详情可直接访问且没有横�
   expect(runtimeErrors).toEqual([]);
 });
 
-test('管理员发布，参与者报名、取消、重新报名，记录与数据库接口一致', async ({ page }, testInfo) => {
+test('管理员发布，参与者报名、取消、重新报名，记录与数据库接口一致', { tag: ['@smoke', '@redis'] }, async ({ page }, testInfo) => {
   const runtimeErrors: string[] = [];
   page.on('pageerror', error => runtimeErrors.push(error.message));
   const title = `浏览器验证 ${testInfo.project.name} ${Date.now()}`;
@@ -236,7 +236,7 @@ test('错误密码会显示服务端错误，不会进入登录状态', async ({
   await expect(page.getByRole('button', { name: /账号菜单/ })).toHaveCount(0);
 });
 
-test('满员后进入候补，取消有效报名后按队列递补', async ({ page }) => {
+test('满员后进入候补，取消有效报名后按队列递补', { tag: '@redis' }, async ({ page }) => {
   await login(page, 'admin', 'Admin123!');
   const activity = await createFixture(page.request, `浏览器验证 ${Date.now()} 候补递补`, 1);
   // The first session takes the only seat through the real detail page.
@@ -296,7 +296,7 @@ test('满员后进入候补，取消有效报名后按队列递补', async ({ pa
   // Global teardown deletes only this run's exact fixtures, even when an assertion fails.
 });
 
-test('服务端 Session 失效后能回到登录并继续报名', async ({ page, request }, testInfo) => {
+test('服务端 Session 失效后能回到登录并继续报名', { tag: ['@smoke', '@redis'] }, async ({ page, request }, testInfo) => {
   await loginApi(request);
   const target = await createFixture(request, `浏览器验证 ${testInfo.project.name} ${Date.now()} Session`);
   await login(page, 'demo', 'Demo123!');
@@ -510,7 +510,7 @@ test('活动管理使用真实字面搜索、状态和分页，筛选回到第�
   await noDocumentOverflow(page);
 });
 
-test('普通用户的管理页面不查询数据，管理接口均由后端拒绝', async ({ page }) => {
+test('普通用户的管理页面不查询数据，管理接口均由后端拒绝', { tag: '@redis' }, async ({ page }) => {
   await login(page, 'demo', 'Demo123!');
   const all = await (await page.request.get('/api/activities')).json() as ActivityResponse[];
   expect(all.length).toBeGreaterThan(0);

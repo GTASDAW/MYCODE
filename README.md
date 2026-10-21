@@ -250,11 +250,11 @@ npm run build
 
 ## 自动检查与交付
 
-GitHub Actions 在推送 `main`、Pull Request 和手工触发时运行前端测试与构建、Java 21 + 真实 MySQL 集成测试、默认 Compose 环境的迁移与重启检查，以及 Redis 双实例共享登录和桌面/手机浏览器检查。两种 Session 模式分别验证，构建和检查不会发布网站。
+GitHub Actions 对普通 Push、面向main的PR运行快速CI：前端测试/构建、全部Java 21 + 真实MySQL回归、复用容器镜像的迁移/重启检查和8项桌面/手机smoke。认证/CSRF/会话、数据库、依赖、基础设施与测试合同变更自动升级完整CI；每天北京时间02:00及手动触发也运行完整CI，增加默认环境全部356项浏览器、Redis双实例生命周期及40项核心/认证浏览器、两模式加载/限流和固定负载。发布前对准确SHA手动运行并勾选 `redis_all_e2e`，或通过tag触发两模式全量；快速CI不能代替发布验收。范围策略、实测及预计耗时见 [交付指南](docs/delivery-guide.md#ci分层与发布门禁)。构建和检查不会发布网站。
 
 独立的 `performance` 任务在 `gather-perf-ci`、`activity_platform_perf` 和固定容器资源下执行两种报名场景，共 18 轮正式测量；当前 v2 脚本先执行 20 次读取和 400 次真实写预热，预热单独验证及清理。它记录客户端原始延迟、吞吐量、错误及真实数据库一致性；[性能评测](docs/performance-report.md) 保留首次 v1 历史结果，当前方法见 [查询优化复盘](docs/query-optimization-review.md)。
 
-单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。常规 `ci.yml` 保持原有五个检查，不在每次推送时重复固定旧版本实验。改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与本轮结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
+单独的 `.github/workflows/query-comparison.yml` 通过 `workflow_dispatch` 手工触发，按 A1 → B1 → B2 → A2 在同一隔离主机对照旧、新锁定查询，共 72 批、7200 次正式报名，1600 次写预热另记并清理。分层CI不在普通推送时重复固定负载或旧版本实验；当前版本固定负载随完整CI运行，旧版本对照仍仅手动。历史改动只收窄内部锁定投影，保留活动行锁、事务、候补 FIFO 和真实详情查询；假设、测量边界与历史结论见 [锁定查询优化复盘](docs/query-optimization-review.md)。
 
 这份历史对照固定 V2 和三列锁定投影，复现应检出 `d781648d7d9036b653a80e3082b609358a59df35`；V3 为取消判断增加第四列，V4 增加通知表与业务事务中的通知写入，V5 增加签到字段，V6 增加管理员操作表，V7 增加凭据版本和认证读取，V8 增加分类读取与筛选。脚本发现迁移、活动 Mapper 或报名事务不同会拒绝沿用旧实验。常规性能任务则在当前 V9 上运行单版 18 批，不把新业务结果写成历史 SQL 优化收益。
 
