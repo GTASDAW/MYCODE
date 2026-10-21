@@ -65,12 +65,16 @@ export interface MyRegistrationPage extends PageResult<MyRegistration> {
 }
 
 export type NotificationFilter = "ALL" | "UNREAD" | "READ";
+export type NotificationTypeFilter = "ALL" | "PROMOTED" | "ACTIVITY_CANCELLED";
 
 export interface NotificationQuery {
   page: number;
   pageSize: number;
   status: NotificationFilter;
+  type?: NotificationTypeFilter;
 }
+
+export interface NotificationReadAllResult { updatedCount: number }
 
 export interface NotificationItem {
   id: number;

@@ -1,114 +1,109 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLocation } from "react-router";
 import { api, ApiError } from "./api";
 import { useAuth } from "./auth";
 import type { AccountRequest } from "./authRequestGuard";
-import { NotificationRequestOrder } from "./notificationRequestOrder";
-import type { NotificationItem, NotificationPage, NotificationQuery } from "./types";
+import { NotificationRequests } from "./notificationRequests";
+import type { NotificationItem, NotificationPage, NotificationQuery, NotificationReadAllResult } from "./types";
 
 interface CountState {
   account: AccountRequest | null;
+  scope: string;
   value: number | null;
   loading: boolean;
   error: unknown;
 }
 
+type PageCurrent = () => boolean;
 interface NotificationContextValue {
   accountKey: string | null;
   unreadCount: number | null;
   countLoading: boolean;
   countError: unknown;
-  loadNotifications: (query: NotificationQuery, signal: AbortSignal) => Promise<NotificationPage>;
-  markRead: (id: number, signal: AbortSignal) => Promise<NotificationItem>;
+  loadNotifications: (query: NotificationQuery, signal: AbortSignal, isCurrent?: PageCurrent) => Promise<NotificationPage>;
+  markRead: (id: number, signal: AbortSignal, isCurrent?: PageCurrent) => Promise<NotificationItem>;
+  markAllRead: (signal: AbortSignal, isCurrent?: PageCurrent) => Promise<NotificationReadAllResult>;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 const cancelled = () => new DOMException("Notification request cancelled", "AbortError");
+const alwaysCurrent = () => true;
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const { loading, error, captureAccountRequest, isCurrentAccountRequest, expire } = useAuth();
   const { pathname } = useLocation();
   const account = loading || error ? null : captureAccountRequest();
   const accountKey = account ? `${account.userId}:${account.generation}` : null;
-  const notificationPageOpen = pathname === "/notifications";
-  const order = useRef(new NotificationRequestOrder());
-  const [count, setCount] = useState<CountState>({ account: null, value: null, loading: false, error: null });
+  const notificationPageOpen = pathname === "/notifications" || pathname === "/notifications/";
+  const scope = `${notificationPageOpen ? "notifications" : "outside"}:${accountKey}`;
+  const liveScope = useRef<string | null>(scope);
+  liveScope.current = scope;
+  const requests = useRef(new NotificationRequests());
+  const [count, setCount] = useState<CountState>({ account: null, scope, value: null, loading: false, error: null });
 
-  const loadNotifications = useCallback(async (query: NotificationQuery, signal: AbortSignal) => {
+  useLayoutEffect(() => {
+    liveScope.current = scope;
+    return () => { if (liveScope.current === scope) liveScope.current = null; };
+  }, [scope]);
+
+  const requestOptions = useCallback((signal: AbortSignal, isPageCurrent: PageCurrent = alwaysCurrent) => {
     const ticket = captureAccountRequest();
-    if (!ticket || signal.aborted) throw cancelled();
-    const read = order.current.beginRead();
-    const current = () => !signal.aborted && isCurrentAccountRequest(ticket);
-    setCount({ account: ticket, value: null, loading: true, error: null });
-    try {
-      const page = await api.notifications(query, signal);
-      if (!current()) throw cancelled();
-      if (order.current.isCurrent(read))
-        setCount({ account: ticket, value: page.unreadCount, loading: false, error: null });
-      return page;
-    } catch (err) {
-      if (!current()) throw cancelled();
-      if (order.current.isCurrent(read)) {
-        setCount({ account: ticket, value: null, loading: false, error: err });
+    const startedScope = liveScope.current;
+    if (!ticket || !startedScope || signal.aborted || !isPageCurrent()) throw cancelled();
+    return {
+      signal,
+      isCurrent: () => liveScope.current === startedScope && isCurrentAccountRequest(ticket) && isPageCurrent(),
+      onStart: () => setCount({ account: ticket, scope: startedScope, value: null, loading: true, error: null }),
+      onError: (err: unknown) => {
+        setCount({ account: ticket, scope: startedScope, value: null, loading: false, error: err });
         if (err instanceof ApiError && err.status === 401) expire();
-      }
-      throw err;
-    }
+      },
+      onCount: (value: number) => setCount({ account: ticket, scope: startedScope, value, loading: false, error: null }),
+    };
   }, [captureAccountRequest, isCurrentAccountRequest, expire]);
 
-  const markRead = useCallback(async (id: number, signal: AbortSignal) => {
-    const ticket = captureAccountRequest();
-    if (!ticket || signal.aborted) throw cancelled();
-    const current = () => !signal.aborted && isCurrentAccountRequest(ticket);
-    // Neither a read from before this write nor one taken during it may restore
-    // the previous unread count after the write completes.
-    order.current.invalidateReads();
-    setCount({ account: ticket, value: null, loading: true, error: null });
-    try {
-      const item = await api.readNotification(id, signal);
-      if (!current()) throw cancelled();
-      order.current.invalidateReads();
-      return item;
-    } catch (err) {
-      if (!current()) throw cancelled();
-      order.current.invalidateReads();
-      setCount({ account: ticket, value: null, loading: false, error: err });
-      if (err instanceof ApiError && err.status === 401) expire();
-      throw err;
-    }
-  }, [captureAccountRequest, isCurrentAccountRequest, expire]);
+  const loadNotifications = useCallback(async (query: NotificationQuery, signal: AbortSignal, isCurrent?: PageCurrent) => {
+    const options = requestOptions(signal, isCurrent);
+    return requests.current.read({ ...options, request: requestSignal => api.notifications(query, requestSignal),
+      onSuccess: page => options.onCount(page.unreadCount) });
+  }, [requestOptions]);
+
+  const markRead = useCallback(async (id: number, signal: AbortSignal, isCurrent?: PageCurrent) => {
+    const options = requestOptions(signal, isCurrent);
+    return requests.current.write({ ...options, request: requestSignal => api.readNotification(id, requestSignal),
+      onSuccess: () => {} });
+  }, [requestOptions]);
+
+  const markAllRead = useCallback(async (signal: AbortSignal, isCurrent?: PageCurrent) => {
+    const options = requestOptions(signal, isCurrent);
+    return requests.current.write({ ...options, request: api.readAllNotifications, onSuccess: () => {} });
+  }, [requestOptions]);
 
   useEffect(() => {
-    // A list response includes the global unread count, so the notification
-    // page owns its refresh without an additional count request.
+    // List snapshots include the global count, regardless of their filters.
     if (!accountKey || notificationPageOpen) return;
-    const ticket = captureAccountRequest();
-    if (!ticket) return;
     const controller = new AbortController();
-    const read = order.current.beginRead();
-    const current = () => !controller.signal.aborted &&
-      isCurrentAccountRequest(ticket) && order.current.isCurrent(read);
-    setCount({ account: ticket, value: null, loading: true, error: null });
-    api.notificationUnreadCount(controller.signal).then(({ unreadCount }) => {
-      if (current()) setCount({ account: ticket, value: unreadCount, loading: false, error: null });
-    }).catch((err) => {
-      if (!current()) return;
-      setCount({ account: ticket, value: null, loading: false, error: err });
-      if (err instanceof ApiError && err.status === 401) expire();
+    const current = () => liveScope.current === scope && !!account && isCurrentAccountRequest(account);
+    if (!current()) return;
+    const options = requestOptions(controller.signal, current);
+    void requests.current.read({ ...options, request: api.notificationUnreadCount,
+      onSuccess: result => options.onCount(result.unreadCount) }).catch(() => {
+      // The owned onError already published current failures; stale work is silent.
     });
     return () => controller.abort();
-  }, [accountKey, notificationPageOpen, captureAccountRequest, isCurrentAccountRequest, expire]);
+  }, [accountKey, notificationPageOpen, scope, requestOptions, isCurrentAccountRequest]);
 
-  const countBelongsToAccount = !!accountKey && !!count.account && isCurrentAccountRequest(count.account);
+  const countBelongsToScope = !!accountKey && count.scope === scope && !!count.account && isCurrentAccountRequest(count.account);
   return (
     <NotificationContext.Provider value={{
       accountKey,
-      unreadCount: countBelongsToAccount ? count.value : null,
-      countLoading: countBelongsToAccount ? count.loading : !!accountKey,
-      countError: countBelongsToAccount ? count.error : null,
+      unreadCount: countBelongsToScope ? count.value : null,
+      countLoading: countBelongsToScope ? count.loading : !!accountKey,
+      countError: countBelongsToScope ? count.error : null,
       loadNotifications,
       markRead,
+      markAllRead,
     }}>
       {children}
     </NotificationContext.Provider>

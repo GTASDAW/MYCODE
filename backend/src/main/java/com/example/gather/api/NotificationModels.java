@@ -18,4 +18,5 @@ public final class NotificationModels {
 
     public record NotificationPageView(List<NotificationView> items, long total, int page, int pageSize, long unreadCount) {}
     public record UnreadCountView(long unreadCount) {}
+    public record MarkAllReadView(long updatedCount) {}
 }

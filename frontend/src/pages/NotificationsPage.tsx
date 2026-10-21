@@ -1,99 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App as AntApp, Button, Card, Pagination, Select, Tag } from "antd";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Alert, Button, Card, Modal, Pagination, Select, Space, Tag } from "antd";
 import { CheckOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router";
-import { errorMessage } from "../api";
 import { useAuth } from "../auth";
 import { EmptyState, ErrorState, LoadingState, PageHeading } from "../components";
 import { formatDate, formatTime } from "../date";
 import { useNotifications } from "../notifications";
 import { parseNotificationQuery, serializeNotificationQuery } from "../notificationQuery";
-import type { NotificationFilter, NotificationQuery } from "../types";
+import type { NotificationFilter, NotificationQuery, NotificationTypeFilter } from "../types";
 import { useResource } from "../useResource";
+import { useNotificationActions } from "./useNotificationActions";
 
 export function NotificationsPage() {
-  const { search } = useLocation();
+  const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const auth = useAuth();
-  const { accountKey, loadNotifications, markRead } = useNotifications();
+  const { accountKey, loadNotifications, unreadCount, countLoading, countError } = useNotifications();
   const query = useMemo(() => parseNotificationQuery(search), [search]);
   const querySearch = serializeNotificationQuery(query);
-  const resource = useResource((signal) => loadNotifications(query, signal),
-    [accountKey, query.status, query.page, query.pageSize, loadNotifications]);
-  const { message } = AntApp.useApp();
-  const [readingId, setReadingId] = useState<number | null>(null);
-  const [mutationError, setMutationError] = useState<string | null>(null);
-  const mounted = useRef(false);
-  const submission = useRef<AbortController | null>(null);
-  const pageKey = `${accountKey}:${querySearch}`;
-  const currentPage = useRef(pageKey);
+  const account = auth.captureAccountRequest();
+  const [revision, setRevision] = useState(0);
+  const nextRevision = useRef(revision);
+  const makePageKey = (criteria: string, value: number) => `${pathname}:${accountKey}:${criteria}:${value}`;
+  const pageKey = makePageKey(querySearch, revision);
+  const currentPage = useRef<string | null>(pageKey);
   currentPage.current = pageKey;
+  const current = () => currentPage.current === pageKey && !!account && auth.isCurrentAccountRequest(account);
+  useLayoutEffect(() => {
+    currentPage.current = pageKey;
+    return () => { if (currentPage.current === pageKey) currentPage.current = null; };
+  }, [pageKey]);
+
+  function refresh() {
+    if (!current()) return pageKey;
+    const value = ++nextRevision.current;
+    const nextKey = makePageKey(querySearch, value);
+    // Invalidate synchronously, including the interval before React renders.
+    currentPage.current = nextKey;
+    setRevision(value);
+    return nextKey;
+  }
+  const actions = useNotificationActions(pageKey, current, refresh);
+  const resource = useResource((signal) => loadNotifications(query, signal, current), [pageKey, loadNotifications]);
 
   useEffect(() => {
-    if (search !== querySearch) navigate(`/notifications${querySearch}`, { replace: true });
-  }, [search, querySearch, navigate]);
+    if (current() && search !== querySearch) navigate({ pathname, search: querySearch }, { replace: true });
+  }, [search, querySearch, pageKey, navigate]);
 
   const lastPage = resource.data ? Math.max(1, Math.ceil(resource.data.total / query.pageSize)) : query.page;
   const correctingPage = !resource.loading && !resource.error && !!resource.data && query.page > lastPage;
   useEffect(() => {
-    if (correctingPage) navigate(`/notifications${serializeNotificationQuery({ ...query, page: lastPage })}`, { replace: true });
-  }, [correctingPage, lastPage, query.page, query.pageSize, query.status, navigate]);
-
-  useEffect(() => {
-    mounted.current = true;
-    setReadingId(null);
-    setMutationError(null);
-    return () => {
-      mounted.current = false;
-      submission.current?.abort();
-      submission.current = null;
-    };
-  }, [pageKey]);
+    if (!correctingPage || !current()) return;
+    const correctedSearch = serializeNotificationQuery({ ...query, page: lastPage });
+    const correctedKey = makePageKey(correctedSearch, revision);
+    actions.carryError(correctedKey);
+    currentPage.current = correctedKey;
+    navigate({ pathname, search: correctedSearch }, { replace: true });
+  }, [correctingPage, lastPage, pageKey, navigate]);
 
   function changeQuery(next: NotificationQuery) {
-    setMutationError(null);
-    if (serializeNotificationQuery(next) === querySearch) resource.retry();
-    else navigate(`/notifications${serializeNotificationQuery(next)}`);
+    if (!current() || actions.isBusy()) return;
+    const nextSearch = serializeNotificationQuery(next);
+    if (nextSearch === querySearch) refresh();
+    else navigate({ pathname, search: nextSearch });
   }
 
-  async function read(id: number) {
-    if (submission.current) return;
-    const account = auth.captureAccountRequest();
-    if (!account) return;
-    const startedPage = pageKey;
-    const controller = new AbortController();
-    submission.current = controller;
-    setReadingId(id);
-    setMutationError(null);
-    const current = () => mounted.current && !controller.signal.aborted &&
-      currentPage.current === startedPage && auth.isCurrentAccountRequest(account);
-    try {
-      await markRead(id, controller.signal);
-      if (!current()) return;
-      message.success("已标记为已读");
-      resource.retry();
-    } catch (err) {
-      if (!current()) return;
-      setMutationError(errorMessage(err));
-      // Refresh from the database even if a write response was lost.
-      resource.retry();
-    } finally {
-      if (submission.current === controller) {
-        submission.current = null;
-        if (current()) setReadingId(null);
-      }
-    }
-  }
-
-  const busy = readingId !== null;
+  const busy = actions.busy;
+  const bulkDisabled = busy || resource.loading || !!resource.error || countLoading || !!countError || unreadCount === null || unreadCount === 0;
   const pageSizeOptions = [...new Set([10, 20, 50, query.pageSize])].sort((a, b) => a - b);
   const emptyTitle = query.status === "UNREAD" ? "暂无未读通知" : query.status === "READ" ? "暂无已读通知" : "暂无通知";
   return (
     <div className="page-container">
       <PageHeading title="通知中心" section="我的账号"
         description="查看候补递补和活动取消消息，及时了解报名变化。"
-        extra={<Button aria-label="刷新通知" icon={<ReloadOutlined aria-hidden="true" />}
-          disabled={busy} loading={resource.loading} onClick={() => { setMutationError(null); resource.retry(); }}>刷新通知</Button>} />
+        extra={<Space wrap>
+          <Button aria-label="全部标为已读" title="全部标为已读" icon={<CheckOutlined aria-hidden="true" />}
+            disabled={bulkDisabled} onClick={actions.openConfirmation}>全部标为已读</Button>
+          <Button aria-label="刷新通知" icon={<ReloadOutlined aria-hidden="true" />}
+            disabled={busy} loading={resource.loading} onClick={() => { if (!actions.isBusy()) refresh(); }}>刷新通知</Button>
+        </Space>} />
       <Card className="notification-controls">
         <div className="notification-filters">
           <label htmlFor="notification-status">通知状态</label>
@@ -104,12 +89,20 @@ export function NotificationsPage() {
               { value: "READ", label: "已读通知" },
             ]}
             onChange={(status: NotificationFilter) => changeQuery({ ...query, status, page: 1 })} />
+          <label htmlFor="notification-type">通知类型</label>
+          <Select id="notification-type" aria-label="通知类型" value={query.type ?? "ALL"} disabled={busy}
+            options={[
+              { value: "ALL", label: "全部类型" },
+              { value: "PROMOTED", label: "候补递补" },
+              { value: "ACTIVITY_CANCELLED", label: "活动取消" },
+            ]}
+            onChange={(type: NotificationTypeFilter) => changeQuery({ ...query, type, page: 1 })} />
           <span className="metadata">未读数量统计全部通知，刷新后更新。</span>
         </div>
       </Card>
-      {mutationError && <Alert type="error" showIcon title={mutationError} className="form-alert" />}
+      {actions.error && <Alert type="error" showIcon title={actions.error} className="form-alert" />}
       {resource.loading || correctingPage ? <LoadingState /> : resource.error ? (
-        <ErrorState error={resource.error} retry={resource.retry} />
+        <ErrorState error={resource.error} retry={refresh} />
       ) : !resource.data?.items.length ? (
         <EmptyState title={emptyTitle} description="候补递补成功或已报名活动取消时，通知会显示在这里。" />
       ) : (
@@ -136,7 +129,7 @@ export function NotificationsPage() {
                 <div className="notification-item-actions">
                   <Link to={`/activities/${item.activityId}`} aria-label={`查看通知活动 ${item.activityTitle}`}>查看活动</Link>
                   <Button aria-label={`标记通知 ${item.id} 为已读`} icon={<CheckOutlined aria-hidden="true" />}
-                    disabled={!!item.readAt || busy} loading={readingId === item.id} onClick={() => void read(item.id)}>
+                    disabled={!!item.readAt || busy} loading={actions.operation === item.id} onClick={() => void actions.read(item.id)}>
                     {item.readAt ? "已读" : "标记已读"}
                   </Button>
                 </div>
@@ -151,6 +144,15 @@ export function NotificationsPage() {
           </Card>
         </>
       )}
+      <Modal title="全部标为已读" open={actions.confirmation} destroyOnHidden
+        onCancel={actions.closeConfirmation} closable={!busy} maskClosable={!busy} keyboard={!busy}
+        footer={[
+          <Button key="cancel" aria-label="取消全部已读" disabled={busy} onClick={actions.closeConfirmation}>取消</Button>,
+          <Button key="confirm" type="primary" aria-label="确认全部已读" loading={actions.operation === "all"}
+            disabled={bulkDisabled} onClick={() => void actions.readAll()}>确认全部已读</Button>,
+        ]}>
+        <p>覆盖所有类型和分页；处理期间新增通知保留未读</p>
+      </Modal>
     </div>
   );
 }

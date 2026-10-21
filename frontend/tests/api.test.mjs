@@ -294,7 +294,7 @@ test('notification reads use the current session without client identity and pre
   assert.deepEqual(await api.notifications({ page: 2, pageSize: 10, status: 'UNREAD', userId: 999 }, controller.signal), result);
   const path = new URL(calls[0].url, 'http://localhost');
   assert.equal(path.pathname, '/api/me/notifications');
-  assert.deepEqual(Object.fromEntries(path.searchParams), { page: '2', pageSize: '10', status: 'UNREAD' });
+  assert.deepEqual(Object.fromEntries(path.searchParams), { page: '2', pageSize: '10', status: 'UNREAD', type: 'ALL' });
   assert.deepEqual(await api.notificationUnreadCount(controller.signal), { unreadCount: 23 });
   assert.equal(calls[1].url, '/api/me/notifications/unread-count');
   for (const { options } of calls) {
@@ -328,6 +328,71 @@ test('marking a notification read uses CSRF without an identity body and replays
   }
   assert.equal(attempts[0].options.headers.get('X-CSRF-TOKEN'), 'token-1');
   assert.equal(attempts[1].options.headers.get('X-CSRF-TOKEN'), 'token-2');
+});
+
+test('notification type and status criteria are combined without changing the global unread response', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const page = { items: [], total: 0, unreadCount: 17, page: 2, pageSize: 20 };
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url, 'http://localhost');
+    assert.equal(path.pathname, '/api/me/notifications');
+    assert.deepEqual(Object.fromEntries(path.searchParams), { page: '2', pageSize: '20', status: 'READ', type: 'PROMOTED' });
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.body, undefined);
+    return response(200, page);
+  };
+  assert.deepEqual(await api.notifications({ page: 2, pageSize: 20, status: 'READ', type: 'PROMOTED', userId: 99 }, controller.signal), page);
+});
+
+test('bulk marking has no client identity, filter or body and only retries CSRF_INVALID once', async () => {
+  for (const again of [false, true]) {
+    const { api } = await freshApi();
+    const controller = new AbortController();
+    const calls = [];
+    let tokens = 0;
+    let writes = 0;
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      if (url === '/api/auth/csrf') return response(200, { token: `token-${++tokens}`, headerName: 'X-CSRF-TOKEN' });
+      writes++;
+      return writes === 1 || again ? response(403, { code: 'CSRF_INVALID' }) : response(200, { updatedCount: 7 });
+    };
+    if (again) await assert.rejects(api.readAllNotifications(controller.signal), error => error.code === 'CSRF_INVALID');
+    else assert.deepEqual(await api.readAllNotifications(controller.signal), { updatedCount: 7 });
+    const attempts = calls.filter(call => call.options.method === 'POST');
+    assert.equal(tokens, 2);
+    assert.equal(attempts.length, 2);
+    for (const { url, options } of attempts) {
+      assert.equal(url, '/api/me/notifications/read-all');
+      assert.equal(options.body, undefined);
+      assert.equal(options.signal, controller.signal);
+      assert.equal(options.credentials, 'same-origin');
+    }
+    assert.equal(attempts[0].options.headers.get('X-CSRF-TOKEN'), 'token-1');
+    assert.equal(attempts[1].options.headers.get('X-CSRF-TOKEN'), 'token-2');
+  }
+});
+
+test('bulk marking never retries authorization, rate-limit, unknown server or network errors', async () => {
+  for (const failure of [
+    { status: 401, code: 'UNAUTHORIZED' }, { status: 403, code: 'FORBIDDEN' },
+    { status: 403, code: 'UNKNOWN' }, { status: 429, code: 'AUTH_RATE_LIMITED' },
+    { status: 503, code: 'SERVICE_UNAVAILABLE' }, { status: 0, code: 'NETWORK_ERROR' },
+  ]) {
+    const { api } = await freshApi();
+    let tokens = 0;
+    let writes = 0;
+    globalThis.fetch = async url => {
+      if (url === '/api/auth/csrf') { tokens++; return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' }); }
+      writes++;
+      if (!failure.status) throw new TypeError('response lost');
+      return response(failure.status, { code: failure.code });
+    };
+    await assert.rejects(api.readAllNotifications(), error => error.status === failure.status && error.code === failure.code);
+    assert.equal(tokens, 1);
+    assert.equal(writes, 1);
+  }
 });
 
 test('notification ownership and authentication failures remain visible without replaying a read mutation', async () => {

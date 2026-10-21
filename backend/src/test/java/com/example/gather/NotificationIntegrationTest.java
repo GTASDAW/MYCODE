@@ -28,6 +28,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -37,6 +38,7 @@ import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
@@ -48,6 +50,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -60,6 +63,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(OutputCaptureExtension.class)
 class NotificationIntegrationTest {
     private static final Instant NOW = Instant.parse("2035-07-01T09:00:00.123456Z");
+    private static final String READ_ALL = "/api/me/notifications/read-all";
 
     @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
     static class TestConfiguration {
@@ -69,12 +73,14 @@ class NotificationIntegrationTest {
 
     static class MutableClock extends Clock {
         final AtomicReference<Instant> time = new AtomicReference<>(NOW);
+        final AtomicInteger calls = new AtomicInteger();
         @Override public ZoneId getZone() { return ZoneOffset.UTC; }
         @Override public Clock withZone(ZoneId zone) { return Clock.fixed(instant(), zone); }
-        @Override public Instant instant() { return time.get(); }
+        @Override public Instant instant() { calls.incrementAndGet(); return time.get(); }
     }
 
     record WriteFault(String method, boolean after, Runnable action) {}
+    record Statement(String method, String sql, Object parameters, boolean readOnly, Integer isolation) {}
 
     @Intercepts({
         @Signature(type = Executor.class, method = "query", args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}),
@@ -82,9 +88,20 @@ class NotificationIntegrationTest {
     })
     static class NotificationInterceptor implements Interceptor {
         final AtomicReference<Runnable> afterUnreadCount = new AtomicReference<>();
+        final AtomicReference<Runnable> afterUnreadIds = new AtomicReference<>();
         final AtomicReference<WriteFault> writeFault = new AtomicReference<>();
+        final ThreadLocal<List<Statement>> captured = new ThreadLocal<>();
+        final AtomicInteger bulkWrites = new AtomicInteger();
+        final AtomicInteger failBulkWriteAt = new AtomicInteger();
         @Override public Object intercept(Invocation invocation) throws Throwable {
-            String id = ((MappedStatement) invocation.getArgs()[0]).getId();
+            var statement = (MappedStatement) invocation.getArgs()[0];
+            String id = statement.getId();
+            if (captured.get() != null && id.startsWith(NotificationMapper.class.getName() + ".")) {
+                captured.get().add(new Statement(id.substring(id.lastIndexOf('.') + 1),
+                    statement.getBoundSql(invocation.getArgs()[1]).getSql(), invocation.getArgs()[1],
+                    TransactionSynchronizationManager.isCurrentTransactionReadOnly(),
+                    TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()));
+            }
             WriteFault fault = writeFault.get();
             if (fault != null && id.equals(NotificationMapper.class.getName() + "." + fault.method())
                 && writeFault.compareAndSet(fault, null)) {
@@ -94,8 +111,16 @@ class NotificationIntegrationTest {
                 return value;
             }
             Object value = invocation.proceed();
+            if (id.equals(NotificationMapper.class.getName() + ".markSelectedRead")
+                && bulkWrites.incrementAndGet() == failBulkWriteAt.get()) {
+                throw new DataAccessResourceFailureException("Injected bulk notification update failure");
+            }
             if (id.equals(NotificationMapper.class.getName() + ".unreadCount")) {
                 Runnable action = afterUnreadCount.getAndSet(null);
+                if (action != null) action.run();
+            }
+            if (id.equals(NotificationMapper.class.getName() + ".unreadIds")) {
+                Runnable action = afterUnreadIds.getAndSet(null);
                 if (action != null) action.run();
             }
             return value;
@@ -139,8 +164,13 @@ class NotificationIntegrationTest {
     @AfterEach
     void cleanOwnedFixturesOnly() {
         hooks.afterUnreadCount.set(null);
+        hooks.afterUnreadIds.set(null);
         hooks.writeFault.set(null);
+        hooks.captured.remove();
+        hooks.bulkWrites.set(0);
+        hooks.failBulkWriteAt.set(0);
         clock.time.set(NOW);
+        clock.calls.set(0);
         com.example.gather.support.OwnedIntegrationFixtures.remove(jdbc, activityIds, userIds);
     }
 
@@ -180,7 +210,8 @@ class NotificationIntegrationTest {
             new String[]{"page", " 1"}, new String[]{"page", "1.5"}, new String[]{"page", "2147483648"},
             new String[]{"pageSize", "0"}, new String[]{"pageSize", "101"}, new String[]{"pageSize", ""},
             new String[]{"pageSize", "number"}, new String[]{"status", ""}, new String[]{"status", "unread"},
-            new String[]{"status", "UNKNOWN"}, new String[]{"status", "ACTIVE"})) {
+            new String[]{"status", "UNKNOWN"}, new String[]{"status", "ACTIVE"}, new String[]{"type", ""},
+            new String[]{"type", "promoted"}, new String[]{"type", "UNKNOWN"}, new String[]{"type", "ALL "})) {
             mvc.perform(get("/api/me/notifications").with(user(principal(member))).param(pair[0], pair[1]))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
         }
@@ -223,6 +254,292 @@ class NotificationIntegrationTest {
     }
 
     @Test
+    void typeAndStatusUseTheSameOwnedFilterWhileUnreadCountRemainsGlobal() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        long other = createUser();
+        for (int i = 0; i < 12; i++) insertNotice(activity, member,
+            i % 2 == 0 ? "PROMOTED" : "ACTIVITY_CANCELLED", NOW, i < 4 ? NOW : null);
+        insertNotice(activity, other, "ACTIVITY_CANCELLED", NOW.plusSeconds(1), null);
+        var all = notifications.page(member, 1, 100, "ALL");
+        assertThat(notifications.page(member, 1, 100, "ALL", "ALL")).isEqualTo(all);
+        for (String type : List.of("ALL", "PROMOTED", "ACTIVITY_CANCELLED")) {
+            for (String status : List.of("ALL", "UNREAD", "READ")) {
+                var expected = all.items().stream().filter(item -> type.equals("ALL") || item.type().equals(type))
+                    .filter(item -> status.equals("ALL") || status.equals(item.readAt() == null ? "UNREAD" : "READ")).toList();
+                hooks.captured.set(new ArrayList<>());
+                var page = notifications.page(member, 2, 2, status, type);
+                var calls = hooks.captured.get();
+                hooks.captured.remove();
+                assertThat(page.total()).isEqualTo(expected.size());
+                assertThat(page.unreadCount()).isEqualTo(8);
+                assertThat(page.items()).containsExactlyElementsOf(expected.subList(Math.min(2, expected.size()), Math.min(4, expected.size())));
+                assertThat(calls).extracting(Statement::method).containsExactly("unreadCount", "count", "page");
+                assertThat(calls).allSatisfy(call -> {
+                    assertThat(call.readOnly()).isTrue();
+                    assertThat(call.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+                    assertThat(call.sql()).contains("user_id=?").doesNotContain("FOR UPDATE");
+                });
+                assertThat(calls.getFirst().sql()).doesNotContain("type=");
+                for (var call : calls.subList(1, 3)) {
+                    assertThat(parameters(call)).containsEntry("userId", member).containsEntry("status", status).containsEntry("type", type);
+                    if (!type.equals("ALL")) assertThat(call.sql()).contains("type=?");
+                    if (status.equals("READ")) assertThat(call.sql()).contains("read_at IS NOT NULL");
+                    if (status.equals("UNREAD")) assertThat(call.sql()).contains("read_at IS NULL");
+                }
+            }
+        }
+        mvc.perform(get("/api/me/notifications").with(user(principal(member))).param("type", "ACTIVITY_CANCELLED")
+            .param("status", "UNREAD").param("pageSize", "2").param("page", "2").param("userId", Long.toString(other)))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(4))
+            .andExpect(jsonPath("$.unreadCount").value(8)).andExpect(jsonPath("$.items.length()").value(2))
+            .andExpect(jsonPath("$.items[0].type").value("ACTIVITY_CANCELLED"));
+        mvc.perform(get("/api/me/notifications").param("type", "PROMOTED")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void bulkReadRequiresCsrfAndUsesOnlyTrustedOwnerAcrossEveryPageAndType() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        long other = createUser();
+        long alreadyRead = insertNotice(activity, member, NOW.minusSeconds(10), NOW.minusSeconds(5));
+        for (int i = 0; i < 13; i++) insertNotice(activity, member,
+            i % 2 == 0 ? "PROMOTED" : "ACTIVITY_CANCELLED", NOW, null);
+        long otherNotice = insertNotice(activity, other, NOW, null);
+        var businessBefore = jdbc.queryForMap("SELECT registered_count, cancelled_at FROM activities WHERE id=?", activity);
+        var registrationsBefore = registrationsRows(activity);
+        var auditBefore = jdbc.queryForList("SELECT * FROM activity_audit_logs WHERE activity_id=? ORDER BY id", activity);
+        mvc.perform(post(READ_ALL).with(csrf())).andExpect(status().isUnauthorized());
+        mvc.perform(post(READ_ALL).with(user(principal(member))))
+            .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("CSRF_INVALID"));
+        mvc.perform(post(READ_ALL).with(user(principal(member))).with(csrf().useInvalidToken()))
+            .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("CSRF_INVALID"));
+        assertThat(notifications.unreadCount(member).unreadCount()).isEqualTo(13);
+        mvc.perform(post(READ_ALL).with(user(principal(member))).with(csrf()).param("userId", Long.toString(other))
+            .param("type", "PROMOTED").param("status", "READ").param("page", "2")
+            .contentType(MediaType.APPLICATION_JSON).content("{\"userId\":" + other + ",\"readAt\":\"2040-01-01T00:00:00Z\"}"))
+            .andExpect(status().isOk()).andExpect(content().json("{\"updatedCount\":13}"));
+        assertThat(notifications.unreadCount(member).unreadCount()).isZero();
+        assertThat(notifications.page(member, 1, 100, "ALL").items()).hasSize(14).allSatisfy(item ->
+            assertThat(item.readAt()).isEqualTo(item.id() == alreadyRead ? NOW.minusSeconds(5) : NOW));
+        assertThat(notifications.page(other, 1, 100, "UNREAD").items()).extracting(NotificationView::id).containsExactly(otherNotice);
+        clock.time.set(NOW.plusSeconds(30));
+        mvc.perform(post(READ_ALL).with(user(principal(member))).with(csrf()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.updatedCount").value(0));
+        assertThat(notifications.page(member, 1, 100, "ALL").items()).allSatisfy(item ->
+            assertThat(item.readAt()).isEqualTo(item.id() == alreadyRead ? NOW.minusSeconds(5) : NOW));
+        assertThat(jdbc.queryForMap("SELECT registered_count, cancelled_at FROM activities WHERE id=?", activity)).isEqualTo(businessBefore);
+        assertThat(registrationsRows(activity)).isEqualTo(registrationsBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM activity_audit_logs WHERE activity_id=? ORDER BY id", activity)).isEqualTo(auditBefore);
+        long isolatedAdmin = createUser("ADMIN");
+        insertNotice(activity, isolatedAdmin, NOW, null);
+        mvc.perform(post(READ_ALL).with(user(principal(isolatedAdmin))).with(csrf()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.updatedCount").value(1));
+        assertThat(notifications.unreadCount(other).unreadCount()).isEqualTo(1);
+    }
+
+    @Test
+    void emptyBulkSelectionDoesNotUpdateAndUsesReadCommittedWithoutRowLocks() {
+        long member = createUser();
+        hooks.captured.set(new ArrayList<>());
+        assertThat(notifications.markAllRead(member).updatedCount()).isZero();
+        var calls = hooks.captured.get();
+        hooks.captured.remove();
+        assertThat(calls).hasSize(1).allSatisfy(call -> {
+            assertThat(call.method()).isEqualTo("unreadIds");
+            assertThat(call.readOnly()).isFalse();
+            assertThat(call.isolation()).isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
+            assertThat(call.sql()).contains("user_id=?", "read_at IS NULL", "ORDER BY id ASC").doesNotContain("FOR UPDATE", "MAX(");
+            assertThat(parameters(call)).containsEntry("userId", member);
+        });
+    }
+
+    @Test
+    void bulkCaptureExcludesLaterNotificationsEvenWithSameOrEarlierCreatedTime() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        long first = insertNotice(activity, member, NOW, null);
+        long future = insertNotice(activity, member, "ACTIVITY_CANCELLED", NOW.plusSeconds(5), null);
+        try (var writer = Executors.newSingleThreadExecutor()) {
+            hooks.afterUnreadIds.set(() -> await(writer.submit(() -> {
+                insertNotice(activity, member, NOW, null);
+                insertNotice(activity, member, "ACTIVITY_CANCELLED", NOW.minusSeconds(1), null);
+            })));
+            clock.time.set(NOW.plusNanos(789));
+            clock.calls.set(0);
+            assertThat(notifications.markAllRead(member).updatedCount()).isEqualTo(2);
+            assertThat(clock.calls.get()).isEqualTo(1);
+            assertThat(hooks.afterUnreadIds.get()).isNull();
+        }
+        assertThat(notifications.page(member, 1, 100, "UNREAD").items()).hasSize(2)
+            .noneMatch(item -> item.id() == first || item.id() == future);
+        assertThat(notifications.page(member, 1, 100, "READ").items()).hasSize(2).allSatisfy(item ->
+            assertThat(item.readAt()).isEqualTo(item.id() == future ? NOW.plusSeconds(5) : NOW));
+        assertThat(notifications.markAllRead(member).updatedCount()).isEqualTo(2);
+    }
+
+    @Test
+    void lowerIdInsertCommittedAfterCaptureRemainsUnread() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        var inserted = new CountDownLatch(1);
+        var releaseCommit = new CountDownLatch(1);
+        var transaction = new TransactionTemplate(transactions);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        try (var writer = Executors.newSingleThreadExecutor()) {
+            var pending = writer.submit(() -> transaction.execute(status -> {
+                long id = insertNotice(activity, member, NOW.minusSeconds(10), null);
+                inserted.countDown();
+                await(releaseCommit);
+                return id;
+            }));
+            try {
+                assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+                long high = insertNotice(activity, member, NOW, null);
+                hooks.afterUnreadIds.set(() -> { releaseCommit.countDown(); await(pending); });
+                assertThat(notifications.markAllRead(member).updatedCount()).isEqualTo(1);
+                long low = pending.get(10, TimeUnit.SECONDS);
+                assertThat(low).isLessThan(high);
+                assertThat(notifications.page(member, 1, 100, "UNREAD").items()).extracting(NotificationView::id).containsExactly(low);
+                assertThat(notifications.page(member, 1, 100, "READ").items()).extracting(NotificationView::id).containsExactly(high);
+            } finally {
+                releaseCommit.countDown();
+            }
+        }
+    }
+
+    @Test
+    void singleReadDuringBulkCaptureKeepsItsFirstTimestampAndIsNotCountedAgain() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        long first = insertNotice(activity, member, NOW, null);
+        for (int i = 0; i < 4; i++) insertNotice(activity, member, NOW, null);
+        clock.time.set(NOW.plusSeconds(1));
+        try (var reader = Executors.newSingleThreadExecutor()) {
+            hooks.afterUnreadIds.set(() -> {
+                assertThat(await(reader.submit(() -> notifications.markRead(first, member))).readAt()).isEqualTo(NOW.plusSeconds(1));
+                clock.time.set(NOW.plusSeconds(2));
+            });
+            assertThat(notifications.markAllRead(member).updatedCount()).isEqualTo(4);
+        }
+        assertThat(notifications.page(member, 1, 100, "READ").items()).hasSize(5).allSatisfy(item ->
+            assertThat(item.readAt()).isEqualTo(NOW.plusSeconds(item.id() == first ? 1 : 2)));
+    }
+
+    @Test
+    void concurrentBulkRequestsDoNotDoubleCountOrDeadlock() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        insertNotices(activity, member, 32);
+        var start = new CountDownLatch(1);
+        try (var readers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var results = new ArrayList<java.util.concurrent.Future<MarkAllReadView>>();
+            for (int i = 0; i < 8; i++) results.add(readers.submit(() -> {
+                await(start);
+                return notifications.markAllRead(member);
+            }));
+            start.countDown();
+            long updated = 0;
+            for (var result : results) updated += result.get(20, TimeUnit.SECONDS).updatedCount();
+            assertThat(updated).isEqualTo(32);
+        }
+        assertThat(notifications.unreadCount(member).unreadCount()).isZero();
+        assertThat(notifications.page(member, 1, 100, "READ").items()).hasSize(32).allSatisfy(item -> assertThat(item.readAt()).isEqualTo(NOW));
+    }
+
+    @Test
+    void overlappingBulkSelectionsKeepPrimaryKeyLockOrderAcrossBatchBoundaries() throws Exception {
+        long activity = createActivity(1);
+        long member = createUser();
+        var inserted = new CountDownLatch(1);
+        var releaseInsert = new CountDownLatch(1);
+        var capturedFirst = new CountDownLatch(1);
+        var releaseFirst = new CountDownLatch(1);
+        var secondUpdatedFirstBatch = new CountDownLatch(1);
+        var releaseSecond = new CountDownLatch(1);
+        var firstUpdateAttempted = new CountDownLatch(1);
+        var transaction = new TransactionTemplate(transactions);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        try (var workers = Executors.newFixedThreadPool(3)) {
+            var pending = workers.submit(() -> transaction.execute(status -> {
+                long id = insertNotice(activity, member, NOW.minusSeconds(10), null);
+                inserted.countDown();
+                await(releaseInsert);
+                return id;
+            }));
+            try {
+                await(inserted);
+                insertNotices(activity, member, 1001);
+                hooks.afterUnreadIds.set(() -> { capturedFirst.countDown(); await(releaseFirst); });
+                var first = workers.submit(() -> notifications.markAllRead(member));
+                await(capturedFirst);
+                releaseInsert.countDown();
+                await(pending);
+                hooks.writeFault.set(new WriteFault("markSelectedRead", true, () -> {
+                    secondUpdatedFirstBatch.countDown();
+                    await(releaseSecond);
+                }));
+                var second = workers.submit(() -> notifications.markAllRead(member));
+                await(secondUpdatedFirstBatch);
+                hooks.writeFault.set(new WriteFault("markSelectedRead", false, firstUpdateAttempted::countDown));
+                releaseFirst.countDown();
+                await(firstUpdateAttempted);
+                // The first request must wait at its lowest selected primary key until the second commits.
+                assertThatThrownBy(() -> first.get(200, TimeUnit.MILLISECONDS)).isInstanceOf(java.util.concurrent.TimeoutException.class);
+                releaseSecond.countDown();
+                assertThat(second.get(20, TimeUnit.SECONDS).updatedCount()).isEqualTo(1002);
+                assertThat(first.get(20, TimeUnit.SECONDS).updatedCount()).isZero();
+                assertThat(notifications.unreadCount(member).unreadCount()).isZero();
+            } finally {
+                releaseInsert.countDown();
+                releaseFirst.countDown();
+                releaseSecond.countDown();
+            }
+        }
+    }
+
+    @Test
+    void thousandAndOneRowsUseTwoOwnedOrderedBatchesAndSecondFailureRollsEverythingBack() {
+        long activity = createActivity(1);
+        long member = createUser();
+        long other = createUser();
+        insertNotices(activity, member, 1001);
+        insertNotice(activity, other, NOW, null);
+        var expectedIds = jdbc.queryForList("SELECT id FROM notifications WHERE user_id=? ORDER BY id", Long.class, member);
+        hooks.failBulkWriteAt.set(2);
+        hooks.captured.set(new ArrayList<>());
+        clock.calls.set(0);
+        assertThatThrownBy(() -> notifications.markAllRead(member)).isInstanceOf(DataAccessException.class);
+        assertThat(clock.calls.get()).isEqualTo(1);
+        var calls = hooks.captured.get();
+        hooks.captured.remove();
+        assertThat(calls).extracting(Statement::method).containsExactly("unreadIds", "markSelectedRead", "markSelectedRead");
+        assertThat(calls).allSatisfy(call -> {
+            assertThat(call.isolation()).isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
+            assertThat(call.readOnly()).isFalse();
+            assertThat(parameters(call)).containsEntry("userId", member);
+        });
+        for (int i = 1; i <= 2; i++) {
+            var call = calls.get(i);
+            assertThat(call.sql()).contains("FORCE INDEX (PRIMARY)", "GREATEST(created_at, ?)", "user_id=?", "read_at IS NULL", "id IN", "ORDER BY id ASC");
+            assertThat(selectedIds(call))
+                .containsExactlyElementsOf(expectedIds.subList((i - 1) * 1000, Math.min(i * 1000, 1001)));
+        }
+        assertThat(notifications.unreadCount(member).unreadCount()).isEqualTo(1001);
+        assertThat(notifications.page(member, 1, 1, "READ").total()).isZero();
+        hooks.failBulkWriteAt.set(0);
+        hooks.bulkWrites.set(0);
+        clock.time.set(NOW.plusSeconds(2).plusNanos(999));
+        clock.calls.set(0);
+        assertThat(notifications.markAllRead(member).updatedCount()).isEqualTo(1001);
+        assertThat(hooks.bulkWrites.get()).isEqualTo(2);
+        assertThat(clock.calls.get()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM notifications WHERE user_id=? AND read_at=?", Long.class, member, utc(NOW.plusSeconds(2))))
+            .isEqualTo(1001);
+        assertThat(notifications.unreadCount(other).unreadCount()).isEqualTo(1);
+    }
+
+    @Test
     void markReadIsConcurrentIdempotentAndKeepsItsFirstMicrosecondTimestamp() throws Exception {
         long activity = createActivity(1);
         long member = createUser();
@@ -262,7 +579,7 @@ class NotificationIntegrationTest {
                     throw new AssertionError("Writer must commit between aggregate and page reads", exception);
                 }
             });
-            var page = notifications.page(member, 1, 10, "UNREAD");
+            var page = notifications.page(member, 1, 10, "UNREAD", "PROMOTED");
             assertThat(hooks.afterUnreadCount.get()).isNull();
             assertThat(page.unreadCount()).isEqualTo(1);
             assertThat(page.total()).isEqualTo(1);
@@ -583,8 +900,8 @@ class NotificationIntegrationTest {
         long member = createUser();
         long notice = insertNotice(activity, member, NOW, null);
         String secret = "PRIVATE_NOTICE_" + UUID.randomUUID();
-        for (String path : List.of("/api/me/notifications", "/api/me/notifications/unread-count", readPath(notice))) {
-            var result = (path.endsWith("/read")
+        for (String path : List.of("/api/me/notifications", "/api/me/notifications/unread-count", readPath(notice), READ_ALL)) {
+            var result = (path.endsWith("/read") || path.equals(READ_ALL)
                 ? mvc.perform(post(path).with(user(principal(member))).with(csrf()).param("userId", secret))
                 : mvc.perform(get(path).with(user(principal(member))).param("userId", secret)))
                 .andExpect(status().isOk()).andReturn();
@@ -595,11 +912,15 @@ class NotificationIntegrationTest {
                 .isEqualTo(path.endsWith("/read") ? "/api/me/notifications/{id}/read" : path);
             assertThat(line).doesNotContain(secret).doesNotContain("Fixture notification");
         }
-        var rejected = mvc.perform(post(readPath(notice))).andExpect(status().isForbidden()).andReturn();
-        String requestId = rejected.getResponse().getHeader("X-Request-Id");
-        String line = output.getAll().lines().filter(value -> value.startsWith("{") && value.contains(requestId)
-            && value.contains("http_request")).findFirst().orElseThrow();
-        assertThat(json.readTree(line).get("route").asString()).isEqualTo("/api/me/notifications/{id}/read");
+        for (String path : List.of(readPath(notice), READ_ALL)) {
+            var rejected = mvc.perform(post(path).param("type", secret)).andExpect(status().isForbidden()).andReturn();
+            String requestId = rejected.getResponse().getHeader("X-Request-Id");
+            String line = output.getAll().lines().filter(value -> value.startsWith("{") && value.contains(requestId)
+                && value.contains("http_request")).findFirst().orElseThrow();
+            assertThat(json.readTree(line).get("route").asString())
+                .isEqualTo(path.equals(READ_ALL) ? READ_ALL : "/api/me/notifications/{id}/read");
+            assertThat(line).doesNotContain(secret).doesNotContain("Fixture notification");
+        }
     }
 
     private long createActivity(int capacity) {
@@ -610,17 +931,58 @@ class NotificationIntegrationTest {
     }
 
     private long createUser() {
+        return createUser("USER");
+    }
+
+    private long createUser(String role) {
         String username = "notice_" + UUID.randomUUID().toString().replace("-", "");
-        users.insert(username, users.findByUsername("demo").passwordHash(), "Notification fixture", "USER");
+        users.insert(username, users.findByUsername("demo").passwordHash(), "Notification fixture", role);
         long id = users.findByUsername(username).id();
         userIds.add(id);
         return id;
     }
 
     private long insertNotice(long activity, long member, Instant createdAt, Instant readAt) {
-        jdbc.update("INSERT INTO notifications(user_id, activity_id, type, activity_title, created_at, read_at) VALUES(?, ?, 'PROMOTED', 'Fixture notification', ?, ?)",
-            member, activity, utc(createdAt), readAt == null ? null : utc(readAt));
+        return insertNotice(activity, member, "PROMOTED", createdAt, readAt);
+    }
+
+    private long insertNotice(long activity, long member, String type, Instant createdAt, Instant readAt) {
+        jdbc.update("INSERT INTO notifications(user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at) "
+            + "VALUES(?, ?, ?, 'Fixture notification', ?, ?, ?)", member, activity, type,
+            type.equals("ACTIVITY_CANCELLED") ? "Fixture cancellation reason" : null,
+            utc(createdAt), readAt == null ? null : utc(readAt));
         return jdbc.queryForObject("SELECT MAX(id) FROM notifications WHERE activity_id=? AND user_id=?", Long.class, activity, member);
+    }
+
+    private void insertNotices(long activity, long member, int count) {
+        new TransactionTemplate(transactions).executeWithoutResult(status -> jdbc.batchUpdate(
+            "INSERT INTO notifications(user_id, activity_id, type, activity_title, cancellation_reason, created_at) "
+            + "VALUES(?, ?, ?, 'Fixture notification', ?, ?)", java.util.stream.IntStream.range(0, count).boxed().toList(), 1000, (statement, i) -> {
+                statement.setLong(1, member);
+                statement.setLong(2, activity);
+                statement.setString(3, i % 2 == 0 ? "PROMOTED" : "ACTIVITY_CANCELLED");
+                statement.setString(4, i % 2 == 0 ? null : "Fixture cancellation reason");
+                statement.setObject(5, utc(NOW.minusSeconds(i % 7)));
+            }));
+    }
+
+    private static <T> T await(java.util.concurrent.Future<T> task) {
+        try { return task.get(10, TimeUnit.SECONDS); }
+        catch (Exception exception) { throw new AssertionError("Concurrent notification operation must finish", exception); }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> parameters(Statement call) { return (Map<String, Object>) call.parameters(); }
+
+    @SuppressWarnings("unchecked")
+    private static List<Long> selectedIds(Statement call) { return (List<Long>) parameters(call).get("ids"); }
+
+    private static void await(CountDownLatch latch) {
+        try { assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue(); }
+        catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Concurrent notification latch interrupted", exception);
+        }
     }
 
     private void invalidNotificationInsert(long activity) {

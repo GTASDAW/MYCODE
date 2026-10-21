@@ -10,7 +10,7 @@ final class RequestRoute {
     private static final Set<String> METHODS = Set.of("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS");
     private static final Set<String> STATIC_ROUTES = Set.of("/api/activities", "/api/activities/search", "/api/auth/csrf", "/api/auth/me",
         "/api/auth/login", "/api/auth/logout", "/api/auth/register", "/api/me/profile", "/api/me/password", "/api/health", "/api/me/registrations", "/api/me/registrations/search", "/api/admin/overview",
-        "/api/admin/activities", "/api/admin/audit-logs", "/api/admin/attendance", "/api/admin/monitoring", "/api/me/notifications", "/api/me/notifications/unread-count", "/api/me/favorites");
+        "/api/admin/activities", "/api/admin/audit-logs", "/api/admin/attendance", "/api/admin/monitoring", "/api/me/notifications", "/api/me/notifications/unread-count", "/api/me/notifications/read-all", "/api/me/favorites");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",
         "/api/activities/{id}/cover", "/api/admin/activities/{id}/cover",
         "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations",

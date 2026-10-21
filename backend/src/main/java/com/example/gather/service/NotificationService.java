@@ -17,6 +17,8 @@ import java.util.Set;
 @Service
 public class NotificationService {
     private static final Set<String> STATUSES = Set.of("ALL", "UNREAD", "READ");
+    private static final Set<String> TYPES = Set.of("ALL", "PROMOTED", "ACTIVITY_CANCELLED");
+    private static final int READ_BATCH_SIZE = 1000;
     private final NotificationMapper notifications;
     private final Clock clock;
 
@@ -27,11 +29,17 @@ public class NotificationService {
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public NotificationPageView page(long userId, int page, int pageSize, String status) {
+        return page(userId, page, pageSize, status, "ALL");
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public NotificationPageView page(long userId, int page, int pageSize, String status, String type) {
         if (page < 1 || pageSize < 1 || pageSize > 100) invalid("页码至少为 1，每页数量应在 1 到 100 之间");
         if (status == null || !STATUSES.contains(status)) invalid("筛选状态不正确");
+        if (type == null || !TYPES.contains(type)) invalid("通知类型不正确");
         long unreadCount = notifications.unreadCount(userId);
-        long total = notifications.count(userId, status);
-        var items = notifications.page(userId, status, pageSize, ((long) page - 1L) * pageSize).stream()
+        long total = notifications.count(userId, status, type);
+        var items = notifications.page(userId, status, type, pageSize, ((long) page - 1L) * pageSize).stream()
             .map(NotificationView::from).toList();
         return new NotificationPageView(items, total, page, pageSize, unreadCount);
     }
@@ -48,6 +56,19 @@ public class NotificationService {
         var row = notifications.findOwned(id, userId);
         if (row == null) throw new ApiException(HttpStatus.NOT_FOUND, "NOTIFICATION_NOT_FOUND", "通知不存在");
         return NotificationView.from(row);
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public MarkAllReadView markAllRead(long userId) {
+        var ids = notifications.unreadIds(userId);
+        if (ids.isEmpty()) return new MarkAllReadView(0);
+        LocalDateTime now = LocalDateTime.ofInstant(clock.instant().truncatedTo(ChronoUnit.MICROS), ZoneOffset.UTC);
+        long updatedCount = 0;
+        // Every request locks its fixed selection in ascending ID order, including across batches.
+        for (int start = 0; start < ids.size(); start += READ_BATCH_SIZE) {
+            updatedCount += notifications.markSelectedRead(userId, ids.subList(start, Math.min(start + READ_BATCH_SIZE, ids.size())), now);
+        }
+        return new MarkAllReadView(updatedCount);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)

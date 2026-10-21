@@ -18,8 +18,10 @@ public class NotificationController {
     NotificationPageView page(@RequestParam(required = false) String page,
                               @RequestParam(required = false) String pageSize,
                               @RequestParam(required = false) String status,
+                              @RequestParam(required = false) String type,
                               @AuthenticationPrincipal AppUserDetails principal) {
-        return notifications.page(principal.id(), integer(page, 1), integer(pageSize, 10), status == null ? "ALL" : status);
+        return notifications.page(principal.id(), integer(page, 1), integer(pageSize, 10),
+            status == null ? "ALL" : status, type == null ? "ALL" : type);
     }
 
     @GetMapping("/unread-count")
@@ -30,6 +32,11 @@ public class NotificationController {
     @PostMapping("/{id}/read")
     NotificationView read(@PathVariable long id, @AuthenticationPrincipal AppUserDetails principal) {
         return notifications.markRead(id, principal.id());
+    }
+
+    @PostMapping("/read-all")
+    MarkAllReadView readAll(@AuthenticationPrincipal AppUserDetails principal) {
+        return notifications.markAllRead(principal.id());
     }
 
     private static int integer(String text, int fallback) {

@@ -49,7 +49,7 @@ flowchart LR
 - `created_at`、`read_at` 为 UTC `DATETIME(6)`；未读是 `read_at IS NULL`，已读时间不得早于创建时间。
 - `(user_id, created_at DESC, id DESC)` 支持本人时间排序；另有包含 `read_at` 的索引，用于未读/已读读取。
 
-普通用户接口不提供删除通知或批量标读。打开通知页面、跳转详情不会自动标记已读，用户通过每条消息的“标记已读”明确操作。
+通知不提供删除接口。打开通知页面、跳转详情不会自动标记已读；用户可逐条“标记已读”，或在确认覆盖范围后“全部标为已读”。
 
 ## 接口、权限与快照
 
@@ -58,16 +58,23 @@ flowchart LR
 | `GET /api/me/notifications` | `{items,total,page,pageSize,unreadCount}` | 当前登录用户 |
 | `GET /api/me/notifications/unread-count` | `{unreadCount}` | 当前登录用户 |
 | `POST /api/me/notifications/{id}/read` | 标记后的单条通知 | 当前登录用户，需 CSRF |
+| `POST /api/me/notifications/read-all` | `{updatedCount}`，本次实际新标读条数 | 当前登录用户，需 CSRF |
 
-列表默认 `page=1`、`pageSize=10`、`status=ALL`。页码为正的 Java `int`；每页 1–100 条；状态只能是区分大小写的 `ALL`、`UNREAD`、`READ`。空数字、非法数字、越界数量或未知状态返回 400 `VALIDATION_ERROR`。SQL 使用绑定参数，不拼接客户端输入。
+列表默认 `page=1`、`pageSize=10`、`status=ALL`、`type=ALL`。页码为正的 Java `int`，每页1–100条；status精确接受ALL、UNREAD、READ，type精确接受ALL、PROMOTED、ACTIVITY_CANCELLED，两者按AND组合。省略type保持旧列表合同，显式空值或未知值返回400 `VALIDATION_ERROR`，非法数字及分页同样拒绝。SQL使用绑定参数，COUNT与页内容共用类型和状态条件，不拼接客户端输入。
 
 每条通知包含 `id`、`type`、`activityId`、`activityTitle`、`cancellationReason`、UTC `createdAt` 和可空的 UTC `readAt`。响应不提供收件人列表或其他用户资料。用户 ID 来自可信的 `AppUserDetails`；传入 `userId` 等字段不能选择其他收件人。
 
-`total` 是本人当前状态筛选下的匹配数；`unreadCount` 始终是本人全部未读消息数，不受状态和分页影响。例如 21 条消息，其中 15 条未读，以每页 10 条查看已读筛选时，未读数仍为 15，已读筛选总数为 6，第一页显示这 6 条消息。列表按 `created_at DESC, id DESC` 排序，以 ID 消除时间相同时的顺序歧义。
+`total`是本人当前状态与类型共同筛选的匹配数；`unreadCount`始终是本人全部类型的未读数，不受筛选和分页影响。例如21条消息中15条未读，查看已读筛选时全局未读数仍为15。列表保持 `created_at DESC,id DESC` 排序，以ID消除时间相同时的顺序歧义。
 
 `NotificationService.page` 在只读 `REPEATABLE_READ` 事务中读取未读数、筛选总数和当前页，三条 SQL 共用 InnoDB 一致性快照。并发标读或新通知提交时，本次响应不会混用新旧数据；下一次请求再读取新状态。超过末页时接口返回空 `items`，保留真实总数与请求页码，由页面修正到最后一个合法页，最少为第一页。
 
 标读使用 `READ_COMMITTED` 事务。SQL 条件同时限定通知 ID、当前用户 ID 和 `read_at IS NULL`，第一次成功写入 `GREATEST(created_at, 服务端当前 UTC 微秒时间)`；随后查询本人通知返回结果。重复请求或并发标读保留第一次时间，不把每次点击变成新的已读时间。他人的 ID 与不存在的 ID 均返回 404 `NOTIFICATION_NOT_FOUND`，不泄露归属；匿名读取返回 401。
+
+### 全部已读的处理边界
+
+全部已读没有请求体或筛选参数，身份仅取Session，覆盖本人所有类型及分页。每次请求在READ_COMMITTED事务内先用一条普通SELECT，按ID升序捕获当时可见的本人未读ID集合；随后仅更新这些ID且仍未读的本人记录。捕获后新增的记录，以及捕获时尚未提交、之后才提交的较低ID记录，均保持未读；不使用最大ID或创建时间推测成员，不把“之后到达”误当作已查看。
+
+非空集合用一次服务端UTC微秒时刻，按最多1000个ID分块更新，全部分块在同一事务。更新SQL固定使用PRIMARY索引并按ID升序扫描，避免不同捕获集合或创建时间顺序改变跨批锁顺序。更新继续使用GREATEST(created_at,now)及read_at IS NULL，保留单条或其他批量操作先写入的首次时间；空集合返回0且不发UPDATE。任何一批失败整体回滚，返回updatedCount只统计本次真实改动。再次手动操作重新选择当时未读集合；未知响应不自动重放，客户端先重读确认。该流程不改通知生成、报名事务、标题/原因快照或审计，也不新增数据库字段、索引、依赖或迁移，门禁保持V12。
 
 CSRF 继续由既有 Spring Security 与 `api.ts` 处理：只有明确的 403 `CSRF_INVALID` 刷新 Token 并重试一次，401、普通权限拒绝、404 或未知失败不会按 CSRF 静默重放。日志与指标使用固定路由模板，不保存通知标题、原因或用户筛选参数。
 
@@ -76,11 +83,13 @@ CSRF 继续由既有 Spring Security 与 `api.ts` 处理：只有明确的 403 `
 `NotificationProvider` 在既有 `AuthProvider` 下管理顶栏未读数与通知请求协调，不复制登录身份，也不增加另一个 HTTP 客户端。
 
 - 登录身份就绪后，在非通知页面读取一次未读数；进入通知中心后，列表响应直接更新铃铛，不额外读取 `unread-count`。
-- 切换状态、翻页、点击“刷新通知”或成功标读后重新读取列表；离开通知中心时读取一次未读数。其他窗口产生消息后，当前窗口需要重新打开或手动刷新通知页。
+- 切换状态/类型、翻页、点击“刷新通知”或成功标读后重新读取列表；离开通知中心时读取一次未读数。批量成功也读取真实列表与全局数量，不直接把铃铛清零；其他窗口产生消息后仍通过重新打开或手动刷新更新，没有轮询。
 - 读取中与失败时显示 `—`；只有服务端实际返回 0 才表示没有未读消息。
-- 筛选与分页保存在 URL，默认值省略。刷新、历史导航、未登录直达后登录返回保留条件；改变状态或每页数量回第一页。没有使用前端当前页的未读行数推算总数。
+- 状态、类型及分页保存在URL，默认值省略；类型选项为全部类型、候补递补、活动取消。刷新、历史导航、未登录直达后登录返回保留条件，改变状态/类型/每页数量回第一页，非法URL类型归ALL。没有使用当前页未读行数推算总数，未读页减少后的越界以replace修正，至少第一页。
 
-列表读取、标读返回和迟到错误都检查请求所属账号与认证代次。即使退出后重新登录同一数字 ID 的账号，旧响应也失效；旧 401 不能退出新会话。页面进一步检查挂载状态、查询条件和取消信号，离开页面后不显示旧成功提示、不覆盖新页面或继续旧导航。
+“全部标为已读”确认框明确覆盖所有类型和分页；即便当前筛选为空，只要本人全局未读数已知且大于0仍可操作。加载、错误、数量未知/零或其他标读在途时禁用；确认期间防重复提交。成功关闭确认框并按当前条件重读；失败保留可见错误、重新读取真实状态，不能声称未知响应已回滚。
+
+列表读取、单条/批量返回和迟到错误都检查请求所属账号与认证代次。即使同账号重登，旧响应也失效，旧401不能退出新会话。页面范围包含路径、状态、类型、分页和刷新版本；渲染阶段即隔离旧确认框、错误和busy，成功、错误、finally、未读统计及排队页码修正均核当前范围。离页或条件改变取消旧请求，旧操作不显示成功、清除新pending或触发旧导航。
 
 `NotificationRequestOrder` 只管理统计读取顺序：新列表结果会让更早的铃铛请求失效；标读开始和完成都使旧统计读取失效，避免写之前或写期间取得的未读数重新覆盖最新值。页面读取通过 `useResource` 中止旧请求；React Strict Mode 清理也使用同一取消路径，没有重复事件监听和定时任务。
 
@@ -92,13 +101,13 @@ CSRF 继续由既有 Spring Security 与 `api.ts` 处理：只有明确的 403 `
 
 1. `RegistrationService.cancel` 或 `ActivityService.cancel`：活动主键锁、状态判断、事务以及通知插入时机。
 2. `NotificationService.promoted/activityCancelled → NotificationMapper → V4`：事务必须存在、SQL 收件人选择、快照与数据库约束。
-3. `NotificationController → NotificationService.page/markRead`：可信身份、筛选校验、只读快照和首次已读时间。
-4. `frontend/src/api.ts → notifications.tsx → notificationRequestOrder.ts`：统一 CSRF、认证代次与未读请求顺序。
-5. `NotificationsPage.tsx → notificationQuery.ts → Layout.tsx`：URL、翻页修正、操作生命周期、北京时间及顶栏入口。
+3. `NotificationController → NotificationService.page/markRead/markAllRead`：可信身份、组合筛选、只读快照、精确ID集合与首次已读时间。
+4. `frontend/src/api.ts → notifications.tsx → notificationRequests.ts → notificationRequestOrder.ts`：统一CSRF、认证代次与读写请求顺序。
+5. `NotificationsPage.tsx → useNotificationActions.ts → notificationQuery.ts → Layout.tsx`：URL、翻页修正、确认与操作生命周期、北京时间及顶栏入口。
 
 `NotificationIntegrationTest` 使用真实 MySQL，包含本人权限和 CSRF、筛选分页和统计快照、并发首次标读、数据库约束、重复/再次递补、取消的准确收件人和标题快照、两种行锁先后顺序，以及通知插入前后失败导致的业务回滚。它也检查日志使用固定通知路由、不泄露参数与快照内容。
 
-前端 `notifications.test.mjs` 验证 URL 和读取顺序及认证代次，`api.test.mjs` 验证通知请求不带客户端身份、信号、CSRF 和错误重试边界。`e2e/notifications.spec.ts` 使用真实业务事件验证桌面/手机页面；默认 Compose 冒烟和 Redis 双实例脚本核对通知的持久化、归属和跨实例标读。清理只删除本次准确归属活动的通知，发现临时账号引用外部活动的通知则拒绝整次清理。
+前端 `notifications.test.mjs` 验证URL、类型编解码、读取顺序、读写交错及认证代次，`api.test.mjs` 验证通知请求不带客户端身份、信号、CSRF和错误重试边界。`e2e/notifications.spec.ts` 使用真实业务事件验证桌面/手机页面；`e2e/notification-bulk.spec.ts` 覆盖组合筛选、全局标读、新通知保留未读、确认/错误恢复、URL与迟到响应隔离。默认Compose冒烟和Redis双实例脚本核对通知的持久化、归属和跨实例标读。清理只删除本次准确归属活动的通知，发现临时账号引用外部活动的通知则拒绝整次清理。
 
 代码中的断言与已执行通过是两个事实。各环境最终执行结果和数量统一见 [验证记录](verification.md)；运行命令与安全清理见 [交付指南](delivery-guide.md)，两实例数据与身份流向见 [共享 Session 指南](shared-session.md)。
 

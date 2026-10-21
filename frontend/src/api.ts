@@ -19,6 +19,7 @@ import type {
   NotificationQuery,
   NotificationPage,
   NotificationItem,
+  NotificationReadAllResult,
   AdminAuditLog,
   AdminAuditLogDetail,
   AdminAuditLogQuery,
@@ -371,6 +372,7 @@ export const api = {
         page: String(query.page),
         pageSize: String(query.pageSize),
         status: query.status,
+        type: query.type ?? "ALL",
       })}`,
       { signal },
     ),
@@ -378,6 +380,8 @@ export const api = {
     request<{ unreadCount: number }>("/me/notifications/unread-count", { signal }),
   readNotification: (id: number, signal?: AbortSignal) =>
     request<NotificationItem>(`/me/notifications/${id}/read`, { method: "POST", signal }),
+  readAllNotifications: (signal?: AbortSignal) =>
+    request<NotificationReadAllResult>("/me/notifications/read-all", { method: "POST", signal }),
   adminOverview: (signal?: AbortSignal) =>
     request<AdminOverview>("/admin/overview", { signal }),
   adminAttendance: (query: AttendanceQuery, signal?: AbortSignal) =>

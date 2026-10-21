@@ -80,9 +80,10 @@ flowchart LR
 | `DELETE /api/activities/{id}/registration` | 取消有效报名或退出候补 | 已登录用户 |
 | `GET /api/me/registrations` | 原完整数组，保留字段与更新时间/ID 降序 | 已登录用户，仅本人 |
 | `GET /api/me/registrations/search` | 本人筛选分页、全量统计与只读签到时间 | 已登录用户，普通用户与管理员均仅本人 |
-| `GET /api/me/notifications` | 本人状态筛选分页与全量未读数 | 已登录用户 |
+| `GET /api/me/notifications` | 本人状态、类型组合筛选分页与全量未读数 | 已登录用户 |
 | `GET /api/me/notifications/unread-count` | 本人全部未读数 | 已登录用户 |
 | `POST /api/me/notifications/{id}/read` | 标记本人通知已读，保留首次时间 | 已登录用户，需 CSRF |
+| `POST /api/me/notifications/read-all` | 全部类型、分页的本人未读通知标读，返回实际更新数 | 已登录用户，需 CSRF |
 
 登录、退出和获取当前用户的接口由认证模块提供。前端根据身份显示入口，最终授权仍由后端执行：隐藏按钮不能阻止别人直接调用接口。
 
@@ -96,9 +97,9 @@ flowchart LR
 
 递补在报名状态、人数变化后向实际递补者插入 `PROMOTED`；整场取消在状态批量取消前，向当时 `ACTIVE`/`WAITING` 集合插入 `ACTIVITY_CANCELLED`。两条路径继续持有活动主键行锁，`NotificationService` 写入方法必须加入已有事务；任何步骤失败，通知与业务状态一起回滚。重复状态不插入，新一次真实递补生成新事件。标题与原因保留事件快照，旧消息不跟随后来的编辑变化。
 
-`NotificationController → NotificationService → NotificationMapper` 从可信 Session 取得收件人 ID。列表默认 10 条、最多 100 条，按创建时间与 ID 降序；`ALL/UNREAD/READ` 筛选总数、全量本人未读数和当前页共享只读 `REPEATABLE_READ` 快照。标读只更新本人尚未读行，在 `READ_COMMITTED` 下保留首次 UTC 微秒时间；他人和不存在的通知均返回 404。
+`NotificationController → NotificationService → NotificationMapper` 从可信 Session 取得收件人 ID。列表默认 10 条、最多 100 条，按创建时间与 ID 降序；`ALL/UNREAD/READ` 状态与 `ALL/PROMOTED/ACTIVITY_CANCELLED` 类型共同过滤总数和当前页，全量本人未读数不受过滤影响，三次读取共享只读 `REPEATABLE_READ` 快照。单条标读只更新本人尚未读行，在 `READ_COMMITTED` 下保留首次 UTC 微秒时间；他人和不存在的通知均返回 404。全部标读在同一 `READ_COMMITTED` 事务先读取当时可见的本人未读精确 ID 集合，再按主键升序每批最多 1000 行更新；所有批次一起提交或回滚，只更新仍未读的选中行，返回实际更新数。捕获之后新增或迟到提交的低 ID 行保持未读，不以最大 ID 或时间戳代替集合边界。
 
-前端 `/notifications` 受登录保护，筛选分页保存到 URL。`NotificationProvider` 复用 `AuthProvider` 的身份和认证代次，列表响应同时更新顶栏；非通知页面在登录后读取未读数、离开通知页时再读取，标读后重新加载当前页，没有轮询。未知或失败用 `—` 表示，认证、请求顺序与中止保护避免旧结果覆盖新账号或最新已读状态。接口、V4、事件插入时机和测试阅读路径见 [站内通知指南](notification-guide.md)。
+前端 `/notifications` 受登录保护，状态、类型及分页保存到 URL。`NotificationProvider` 复用 `AuthProvider` 的身份和认证代次，列表响应同时更新顶栏；非通知页面在登录后读取未读数、离开通知页时再读取，没有轮询。全部标读须确认覆盖所有类型和分页；标读成功或失败后重新读取当前页与全量未读数，处理期间的新通知可能使角标仍非零，未知响应不自动重提。未知或失败用 `—` 表示，认证代次、页面条件、请求顺序与中止保护覆盖成功、错误及收尾，避免旧结果覆盖新状态。接口、V4、事件插入时机和测试阅读路径见 [站内通知指南](notification-guide.md)。
 
 ## 公开活动发现
 
