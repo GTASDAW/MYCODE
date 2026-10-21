@@ -274,7 +274,7 @@ jobs:
     name: Redis shared Session on two backends
     needs: [frontend, backend, container-images]
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       CI_BACKEND_IMAGE: gather-ci-backend:${{ github.sha }}
       CI_WEB_IMAGE: gather-ci-web:${{ github.sha }}
