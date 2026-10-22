@@ -38,6 +38,7 @@ import { safeActivityDetailReturn } from "../activityDetailNavigation";
 import { activityCategoryLabel } from "../activityCategory";
 import { FavoriteButton } from "./FavoriteButton";
 import { CalendarDownloadButton } from "./CalendarDownloadButton";
+import { ShareActivityButton } from "./ShareActivityButton";
 import { ActivityCover } from "../ActivityCoverImage";
 import { ActivityCopyLink } from "./ActivityCopyLink";
 import { WaitingPositionNotice } from "../components/WaitingPositionNotice";
@@ -183,6 +184,7 @@ function ActivityDetailPage() {
               <Button aria-label="刷新活动信息" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading}
                 disabled={busy} onClick={() => { if (!submission.current) resource.retry(); }}>刷新活动</Button>
               <FavoriteButton activityId={activity.id} detailPath={detailPath} />
+              <ShareActivityButton activityId={activity.id} />
               <CalendarDownloadButton activityId={activity.id} cancelled={activity.cancelled} detailPath={detailPath} refresh={resource.retry} />
               {auth.user?.role === "ADMIN" && <>
               <ActivityCopyLink activityId={activity.id} />

@@ -607,6 +607,10 @@ main:focus {
   font-size: 14px;
   margin: 0 0 18px;
 }
+.detail-page .page-heading-row {
+  flex-direction: column;
+  align-items: stretch;
+}
 .detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;

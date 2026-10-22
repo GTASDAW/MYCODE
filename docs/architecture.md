@@ -135,6 +135,10 @@ V12 在活动行增加可空 registration_deadline，CHECK严格早于starts_at�
 
 RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒当前时刻，按取消、开始、截止顺序拒绝；取消路径不提前截止，既有候补仍能在开始前按FIFO递补与通知。页面由独立activityRegistrationClosed控制报名入口，原activityClosed控制开始前取消/管理；已有边界计时器加入截止时间，无轮询。API、错误码和字段链路见 [报名截止时间](activity-lifecycle.md#报名截止时间)。
 
+## 活动链接分享
+
+详情页的“复制活动链接”由独立ShareActivityButton与activityShare处理：只用接口返回的正安全整数ID和当前HTTP/HTTPS站点origin生成 `/activities/{id}`，不复制from、查询或hash，也不重读接口。复制失败显示只读链接供手动选择，匿名及已结束/取消详情同样可用。AuthRequestGuard提供认证代次的只读订阅，分享按钮通过useSyncExternalStore观察同一代次；退出请求失败也能及时重置旧操作和弹窗，不复制认证状态。活动/路径/search/hash/代次及操作票据共同保护迟到成功、失败和finally，离页清理反馈；接口、数据库与会话规则保持。
+
 ## 管理查询与统计口径
 
 活动响应的waitingPosition为当前可信Session本人候补顺位，只有本人WAITING且活动未取消时非空。共享WaitingQueueSql按原updated_at/id FIFO在既有SELECT内计算，同一投影的waitingCount和顺位保持同快照，不添加逐行Mapper查询或更改报名热锁。ActivityRow、本人报名与收藏记录统一传递该字段；详情和个人报名用共享WaitingPositionNotice显示，未知值明确不可用，开始后保留历史顺位并停止递补提示。只读字段不会复制到新活动、日历或审计写入。边界和读取合同见 [本人候补顺位](my-registrations-guide.md#本人候补顺位)。

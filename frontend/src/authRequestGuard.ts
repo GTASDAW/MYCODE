@@ -40,14 +40,25 @@ export class AuthRequestGuard {
   private profileVersion = 0;
   private reads = 0;
   private writes = 0;
+  private authenticationListeners = new Set<() => void>();
 
   beginAuthentication(): number {
     this.profileVersion++;
-    return ++this.generation;
+    const generation = ++this.generation;
+    for (const listener of [...this.authenticationListeners]) {
+      if (this.authenticationListeners.has(listener)) listener();
+    }
+    return generation;
   }
 
   captureAuthentication(): number {
     return this.generation;
+  }
+
+  subscribeAuthentication(listener: () => void): () => void {
+    const subscription = () => listener();
+    this.authenticationListeners.add(subscription);
+    return () => { this.authenticationListeners.delete(subscription); };
   }
 
   isCurrentAuthentication(generation: number): boolean {

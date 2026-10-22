@@ -28,8 +28,8 @@ CI 的 `container-images` 矩阵按本次 SHA 分别构建 backend/web，两个�
 | --- | --- | --- |
 | `frontend` | 从 lockfile 安装，运行 API/CSRF、改密未知结果/订阅取消/重登状态、账户认证顺序、公开及个人 URL/详情来源安全、个人查询认证代次/取消保护、通知未读顺序、签到/文件响应/过期下载、操作记录 URL/微秒/详情作用域回归、TypeScript 检查和生产构建 | 不写数据库 |
 | `backend` | Java 21、Maven Wrapper，运行本人改密/版本撤销/并发 CAS/登录竞态/数据库拒绝、账户、活动生命周期、权限、公开查询快照、个人旧数组兼容/分页/全量统计/签到时间/认证和业务 SELECT 次数及实际计划、通知、签到/CSV、操作记录四类快照/无变化/回滚/权限/微秒/快照读取、真实并发锁顺序和候补 FIFO 测试 | MySQL 8.4 服务容器，独立 `activity_platform_test` |
-| `compose-e2e` | 复用当次唯一构建的镜像，验证首次迁移、深链、重启持久化/Session失效；快速CI运行8项smoke，完整CI运行全部356项桌面/手机业务、20项加载及14项严格限流浏览器 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
-| `redis-session` | 仅完整CI：真实Redis双实例全部生命周期/CSRF/权限/改密晚保存/重启/退出/闲置检查，40项核心及认证浏览器、20项加载、14项共享限流恢复；发布/深度模式可重复全部356项业务浏览器 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
+| `compose-e2e` | 复用当次唯一构建的镜像，验证首次迁移、深链、重启持久化/Session失效；快速CI运行8项smoke，完整CI运行全部376项桌面/手机业务、20项加载及14项严格限流浏览器 | 独立 Compose 项目 `gather-ci`，数据库 `activity_platform_e2e` |
+| `redis-session` | 仅完整CI：真实Redis双实例全部生命周期/CSRF/权限/改密晚保存/重启/退出/闲置检查，40项核心及认证浏览器、20项加载、14项共享限流恢复；发布/深度模式可重复全部376项业务浏览器 | 单独 runner，Compose 项目 `gather-redis-ci`，与默认容器任务独立的 MySQL/Redis 卷 |
 | `performance` | 仅完整CI：固定资源下两种报名场景、18轮/1800次正式测量、400次写预热、一致性和精确清理 | 单独 runner，Compose 项目 `gather-perf-ci`，数据库 `activity_platform_perf` |
 
 工作流在Push、针对main的PR、手动及每天18:00 UTC（次日北京时间02:00）触发；仅修改 `docs/`、`README.md`、`AGENTS.md` 的Push/PR跳过。前端、后端、两镜像仍并行，容器等待这些门禁和范围判定成功；镜像只构建一次并复用，不新增第二套镜像缓存。Actions继续固定提交SHA，Node.js 24.21.0、MySQL 8.4.11及原digest保持。

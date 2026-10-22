@@ -27,6 +27,7 @@ interface AuthContextValue {
   captureAccountRequest: () => AccountRequest | null;
   isCurrentAccountRequest: (request: AccountRequest) => boolean;
   captureAuthenticationRequest: () => number;
+  subscribeAuthentication: (listener: () => void) => () => void;
   isCurrentAuthenticationRequest: (generation: number) => boolean;
   completePasswordChange: (request: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void) => Promise<void>;
   signOutToConfirmPassword: (request: AccountRequest, signal: AbortSignal, onComplete: (result: PasswordSignOutResult) => void) => Promise<void>;
@@ -127,6 +128,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const captureAuthenticationRequest = useCallback(() =>
     requests.current.captureAuthentication(), []);
+  const subscribeAuthentication = useCallback((listener: () => void) =>
+    requests.current.subscribeAuthentication(listener), []);
   const isCurrentAuthenticationRequest = useCallback((generation: number) =>
     requests.current.isCurrentAuthentication(generation), []);
 
@@ -265,6 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         captureAccountRequest,
         isCurrentAccountRequest,
         captureAuthenticationRequest,
+        subscribeAuthentication,
         isCurrentAuthenticationRequest,
         completePasswordChange,
         signOutToConfirmPassword,
