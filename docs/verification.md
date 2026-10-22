@@ -785,3 +785,18 @@ c09da5a的首次 [分层CI 39554167525](https://github.com/GTASDAW/MYCODE/action
 | 数据与环境 | 启动前核本机回环、既有MySQL8.4.11/UUID/V12，写入前核SQL/API绑定，历史样本仅新建归属记录。三轮精确清理25/59/5活动、0/2/0报名、22/60/4审计、6/48/2合成用户，通知/收藏均0。最终两库六业务表及Flyway全字段类型化摘要与迁移checksum同基线，演示2用户/5活动/2报名、测试2用户/3活动保持；核PID/路径/参数/启动时间/端口后关闭本轮项目进程，恢复初始停止状态，原其他项目IPv6 5173未动 |
 
 原始日志、截图、构建、数据/凭据仅留忽略目录。新改动命中认证/E2E高风险路径，推送仍走既有完整CI，不绕过门禁；本机未运行Docker/Redis双实例，按用户要求不等待新远端完整CI，不提前宣称新提交云端全绿。
+
+## 按需 JaCoCo 覆盖率（2026-10-22）
+
+仅在 `backend/pom.xml` 增加未默认激活的 `coverage` profile，固定 JaCoCo 0.8.15；initialize 阶段 prepare-agent、verify 阶段 report，复用现有 Surefire 3.5.6/JUnit 6 测试和 Java 21。只生成 HTML/XML，不设最低覆盖率，不排除业务类，不改变测试发现规则，不调整业务、数据库、既有依赖版本或 CI 分层。使用命令和报告路径见 [README](../README.md#按需查看-java-覆盖率)。
+
+本机使用既有 Microsoft JDK 21.0.12.1、Maven 3.9.11 与真实 MySQL 8.4.11。启动前核对既有配置/数据目录及服务器 UUID，测试前核对独立 `activity_platform_test`、V12 和两库六业务表加 Flyway 的类型化摘要，未重置、清空或补迁移。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| 全量覆盖率 | `mvnw.cmd -B -Pcoverage clean verify` 成功，28 份 Surefire 报告共 281 项，0 失败、错误、跳过；本机此次总耗时 3 分 37 秒，不作为与其他主机或未插桩运行的性能对照 |
+| 真实报告 | 新的非空 `jacoco.exec` 被 report goal 读取，生成 `target/site/jacoco/index.html`、`jacoco.xml`，未输出 CSV；XML 有本次执行会话和命中的源代码行，类 109/109、方法 357/360、行 1168/1199、分支 650/741。以上是当前后端测试的字节码覆盖证据，不代表 SQL、浏览器或全部业务边界都已覆盖 |
+| 普通测试兼容 | 不带 profile 执行 `mvnw.cmd -B "-Dtest=NotificationIntegrationTest" test`，29/29 通过；未执行 JaCoCo goals，执行数据及 HTML/XML 的 SHA-256、修改时间均未变化，确认普通测试不刷新覆盖率 |
+| 数据与产物保护 | 两次测试后，两库六业务表加 Flyway 的全字段类型化摘要及迁移 checksum 均与基线相同；`git check-ignore` 确认执行数据和报告由 `backend/target/` 忽略，日志由 `.runtime/` 忽略，未跟踪任何 target 产物。结束核对本轮 MySQL 的路径、配置、PID、启动时刻和端口后正常关闭，恢复初始服务状态，其他项目未动 |
+
+日志、报告、执行数据与基线只留已忽略目录；不要求后续每轮全量覆盖率，日常继续按修改范围运行专项。覆盖率用于寻找测试盲区，不替代原有真实 MySQL、权限、CSRF 和事务/锁断言。按用户要求，推送后不等待远端 CI；未将本地结果写成新提交的远端通过结论。

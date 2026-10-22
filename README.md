@@ -231,6 +231,28 @@ npm run test:e2e
 
 后端测试使用独立的 `activity_platform_test` 数据库和真实 MySQL，覆盖事务、权限、CSRF、重复操作、关闭活动，以及 100 个不同用户竞争 10 个名额和跨活动首次报名。公开与管理查询验证统计、字面搜索、状态与分页；公开查询另验证同一次时钟、真实并发取消中的统计/页面快照和可信个人状态。账户测试验证密码哈希、并发重名、可信身份与独立会话的最新昵称。活动生命周期测试控制报名、用户取消、编辑与组织者取消的两种行锁顺序，并检查开始边界、历史、数据库约束和中途异常回滚。通知测试验证准确收件人、快照、重复与再次事件、插入前后失败回滚、并发首次标读和本人读取权限。浏览器测试覆盖实际页面与前后端连接，包含桌面和手机视口。
 
+### 按需查看 Java 覆盖率
+
+后端提供手动启用的 `coverage` Maven profile，固定使用 JaCoCo 0.8.15，复用现有 Surefire/JUnit 测试。普通 `mvnw test`、`mvnw verify` 和现有 CI 不启用覆盖率，也不设置最低覆盖率门槛。
+
+先启动并核对本项目的真实 MySQL，确认独立测试库为 `activity_platform_test`、迁移为 V12；不要连接演示业务库或生产库。以下 PowerShell 命令从仓库根目录执行，JDK 路径和账号为既有本地配置：
+
+```powershell
+$env:JAVA_HOME = (Resolve-Path '.\.tools\java\jdk-21.0.12.1+1').Path
+$env:TEST_DB_URL = 'jdbc:mysql://127.0.0.1:3307/activity_platform_test?characterEncoding=UTF-8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true'
+$env:TEST_DB_USERNAME = 'activity'
+$env:TEST_DB_PASSWORD = 'activity_dev_password'
+Set-Location backend
+.\mvnw.cmd -B -Pcoverage clean verify
+Set-Location ..
+```
+
+Linux/macOS 在配置好 JDK 21 和同名 `TEST_DB_*` 环境变量后，从 `backend` 执行 `sh ./mvnw -B -Pcoverage clean verify`。JaCoCo 在测试 JVM 中收集数据，`verify` 阶段生成 `backend/target/site/jacoco/index.html` 和 `backend/target/site/jacoco/jacoco.xml`；HTML 可逐层查看包、类、方法、代码行和分支，执行数据为 `backend/target/jacoco.exec`。以上路径均相对仓库根目录，已由 `backend/target/` 忽略，不提交报告。
+
+日常后端功能优先运行相关专项；需要查看该专项的测试盲区时，在 `backend` 使用 `.\mvnw.cmd -B -Pcoverage "-Dtest=NotificationIntegrationTest" clean verify`，替换为实际测试类。专项报告仍列出全部业务类，未执行的代码会显示未覆盖，不代表运行了完整回归。每次覆盖率命令保留 `clean`，避免混入旧执行数据；不要跳过测试、关闭 Surefire fork 或覆盖其 `argLine` 后仍把旧报告当成本次结果。需要恢复普通测试时不带 `-Pcoverage`，例如 `.\mvnw.cmd "-Dtest=NotificationIntegrationTest" test`；普通测试不会刷新残留的覆盖率报告。
+
+覆盖率用于寻找测试盲区，不能替代权限、CSRF、真实 MySQL 事务/锁与边界断言，也不是唯一质量指标。不要求每次修改执行全量覆盖率；插件和报告说明见 [JaCoCo 官方文档](https://www.jacoco.org/jacoco/trunk/doc/maven.html)。
+
 如果已经安装 Chrome，可以用系统浏览器运行测试，无须下载 Chromium：
 
 ```powershell

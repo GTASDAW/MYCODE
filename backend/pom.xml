@@ -20,4 +20,33 @@
     <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
   </dependencies>
   <build><finalName>gather-backend</finalName><plugins><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin></plugins></build>
+  <profiles>
+    <profile>
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.15</version>
+            <executions>
+              <execution>
+                <id>coverage-agent</id>
+                <phase>initialize</phase>
+                <goals><goal>prepare-agent</goal></goals>
+              </execution>
+              <execution>
+                <id>coverage-report</id>
+                <phase>verify</phase>
+                <goals><goal>report</goal></goals>
+                <configuration>
+                  <formats><format>HTML</format><format>XML</format></formats>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
