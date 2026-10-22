@@ -17,8 +17,8 @@ async function write(request: APIRequestContext, path: string, data?: unknown) {
   const token = await csrf(request);
   return request.post(path, { headers: { [token.headerName]: token.token }, data });
 }
-async function register(request: APIRequestContext) {
-  const account = trackAccount(['密-']) as Account;
+async function register(request: APIRequestContext): Promise<Account> {
+  const account = trackAccount(['密-']);
   const response = await write(request, '/api/auth/register', { username: account.username,
     displayName: account.displayName, password: oldPassword });
   expect(response.status()).toBe(201);
@@ -37,7 +37,7 @@ async function logoutApi(request: APIRequestContext) {
   expect((await write(request, '/api/auth/logout')).status()).toBe(200);
 }
 async function finish(primaryError: unknown, operations: Array<() => Promise<unknown>>) {
-  const errors = primaryError === undefined ? [] : [primaryError];
+  const errors: unknown[] = primaryError === undefined ? [] : [primaryError];
   for (const operation of operations) try { await operation(); } catch (error) { errors.push(error); }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, 'Password verification and cleanup failed; first error is the original failure.');

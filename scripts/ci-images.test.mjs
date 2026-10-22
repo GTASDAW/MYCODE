@@ -92,6 +92,7 @@ test('fast and full gates preserve risk escalation, both devices, diagnostics an
   assert.match(gate, /needs: \[scope, frontend, backend, container-images, compose-e2e, redis-session, performance\]/);
   assert.match(gate, /CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/);
   assert.match(gate, /node scripts\/ci-scope\.mjs verify/);
+  assert.match(jobs.get('frontend'), /npm run check:e2e:types/);
   for (const device of ['desktop', 'mobile']) assert(read('playwright.config.ts').includes(`name: '${device}'`));
 });
 

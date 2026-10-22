@@ -75,7 +75,7 @@ async function logout(request: APIRequestContext) {
 }
 
 async function finish(primaryError: unknown, cleanup: Array<() => Promise<unknown>>) {
-  const errors = primaryError === undefined ? [] : [primaryError];
+  const errors: unknown[] = primaryError === undefined ? [] : [primaryError];
   for (const operation of cleanup) try { await operation(); } catch (error) { errors.push(error); }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, 'Production loading verification and cleanup failed; first error is the original failure.');

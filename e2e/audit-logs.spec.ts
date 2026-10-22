@@ -39,8 +39,8 @@ async function logoutApi(request: APIRequestContext) {
   expect((await write(request, '/api/auth/logout')).status()).toBe(200);
 }
 
-async function register(request: APIRequestContext) {
-  const account = trackAccount(['旧-', '新-']) as Account;
+async function register(request: APIRequestContext): Promise<Account> {
+  const account = trackAccount(['旧-', '新-']);
   const response = await write(request, '/api/auth/register', 'POST', {
     username: account.username, displayName: account.displayName, password: 'Demo123!',
   });
@@ -177,7 +177,7 @@ async function closeDetail(page: Page, id: number) {
 }
 
 async function finishTest(primaryError: unknown, cleanup: Array<() => Promise<unknown>>) {
-  const errors = primaryError === undefined ? [] : [primaryError];
+  const errors: unknown[] = primaryError === undefined ? [] : [primaryError];
   for (const operation of cleanup) {
     try { await operation(); } catch (error) { errors.push(error); }
   }

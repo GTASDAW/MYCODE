@@ -320,7 +320,7 @@ for (const sameAccount of [false, true]) {
       const me = await page.request.get('/api/auth/me'); expect(me.status()).toBe(200); expect((await me.json()).id).toBe(next.id);
     } catch (error) { primaryError = error; }
     finally {
-      release(); const errors = primaryError === undefined ? [] : [primaryError];
+      release(); const errors: unknown[] = primaryError === undefined ? [] : [primaryError];
       for (const cleanup of [() => Promise.all(jobs), () => page.unroute('**/api/me/password'), () => logout(page.request)])
         try { await cleanup(); } catch (error) { errors.push(error); }
       if (errors.length === 1) throw errors[0];

@@ -40,6 +40,10 @@ CI 的 `container-images` 矩阵按本次 SHA 分别构建 backend/web，两个�
 
 `CI quality gate` 以always运行并校验所选任务结果：快速要求前端、后端、两镜像及Compose成功，Redis/性能应明确跳过；完整要求全部成功。需要的检查失败、取消、跳过或范围判定失败，都不能得到成功总门禁。普通Push/PR可取消被新提交替代的旧运行；手动和定时任务不会被日常Push取消。
 
+Compose和Redis均使用45分钟任务总预算，包含业务浏览器、加载/限流恢复、诊断上传及清理；这是防止完整检查在收尾时触及实测35分钟边界，不代表提速或缩减用例。总门禁仍以job最终结果为准，即使各step已成功，job超时/取消也会拦截。
+
+前端CI额外运行 `npm run check:e2e:types`，通过 `e2e/tsconfig.json` 对全部E2E及两份Playwright配置执行noEmit类型检查；先安装根目录和frontend现有lockfile依赖，不需要数据库或浏览器。待注册fixture保留可空ID，只有登记服务端ID后返回已注册账户；错误收尾数组接受unknown，不用强转或忽略错误绕过检查。
+
 2026-10-21通过GitHub API核对：main未保护，分支protection为404，生效rules/rulesets为空；只有两份测试workflow，没有部署步骤，environments/deployments/releases/repository hooks均为空，Pages为404。本轮不更改远端保护、发布或部署配置，不访问生产；这些证据仅涵盖仓库及GitHub可见配置，不能证明仓库外系统不存在。已有检查名称保留，新增总门禁用于后续保护配置。
 
 发布前必须在Actions手动选定准确发布ref，勾选 `redis_all_e2e`，确认该SHA的完整工作流及Redis全量成功；tag也强制相同全量路径。不能用快速CI、旧SHA或未完成运行作为发布通过，仓库没有新增自动发布。日常完整CI中，默认环境覆盖全部业务，Redis覆盖共享会话、全部改密/迟到401/CSRF恢复与核心报名/通知/权限；需要特定业务与Redis联动诊断时可手动全量，或把对应回归加入 `@redis`。

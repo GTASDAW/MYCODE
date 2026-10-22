@@ -116,6 +116,7 @@ jobs:
           node --test scripts/ci-images.test.mjs
           node --test scripts/ci-scope.test.mjs
           node --test scripts/ci-suites.test.mjs
+          npm run check:e2e:types
           npm run test:backup
       - name: Preserve frontend diagnostics
         if: always()
@@ -184,7 +185,8 @@ jobs:
     name: Compose, restart and browser verification
     needs: [scope, frontend, backend, container-images]
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # Full browser, loading, auth recovery, diagnostics and cleanup share this budget.
+    timeout-minutes: 45
     env:
       CI_BACKEND_IMAGE: gather-ci-backend:${{ github.sha }}
       CI_WEB_IMAGE: gather-ci-web:${{ github.sha }}

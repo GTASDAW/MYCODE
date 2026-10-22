@@ -44,7 +44,7 @@ async function logoutApi(request: APIRequestContext) {
 }
 
 async function finish(primaryError: unknown, operations: Array<() => Promise<unknown>>) {
-  const errors = primaryError === undefined ? [] : [primaryError];
+  const errors: unknown[] = primaryError === undefined ? [] : [primaryError];
   for (const operation of operations) try { await operation(); } catch (error) { errors.push(error); }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, 'Attendance verification failed; the first error preserves the original failure.');

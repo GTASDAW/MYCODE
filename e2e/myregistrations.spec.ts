@@ -85,8 +85,8 @@ async function logoutApi(request: APIRequestContext) {
   expect(me.status()).toBe(200);
   expect((await write(request, '/api/auth/logout')).status()).toBe(200);
 }
-async function register(request: APIRequestContext) {
-  const account = trackAccount(['个人-']) as Account;
+async function register(request: APIRequestContext): Promise<Account> {
+  const account = trackAccount(['个人-']);
   const response = await write(request, '/api/auth/register', 'POST', { username: account.username, displayName: account.displayName, password });
   expect(response.status()).toBe(201);
   const user = await response.json();

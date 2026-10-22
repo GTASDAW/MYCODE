@@ -66,6 +66,35 @@ test('quality gate cannot turn required, cancelled or skipped verification into 
   assert.throws(() => verifyResults(release));
 });
 
+test('job cancellation still blocks the gate after every individual step reports success', () => {
+  const timedOut = results(true);
+  timedOut['compose-e2e'] = { result: 'cancelled', steps: [
+    { name: 'business browsers', conclusion: 'success' },
+    { name: 'loading and auth recovery', conclusion: 'success' },
+    { name: 'cleanup', conclusion: 'success' },
+  ] };
+  assert.throws(() => verifyResults(timedOut), /compose-e2e must succeed/);
+});
+
+test('missing jobs, unfinished states and malformed scope flags never pass fast or full gates', () => {
+  for (const full of [false, true]) {
+    for (const job of ['scope', 'frontend', 'backend', 'container-images', 'compose-e2e', 'redis-session', 'performance']) {
+      const missing = results(full); delete missing[job];
+      assert.throws(() => verifyResults(missing), undefined, `${full}/${job}/missing`);
+      for (const state of ['pending', 'in_progress', 'timed_out', 'neutral', 'action_required', '', undefined]) {
+        const invalid = results(full); invalid[job].result = state;
+        assert.throws(() => verifyResults(invalid), undefined, `${full}/${job}/${state}`);
+      }
+    }
+    for (const flag of ['full', 'redis_all']) for (const value of ['', 'TRUE', true, undefined]) {
+      const invalid = results(full); invalid.scope.outputs[flag] = value;
+      assert.throws(() => verifyResults(invalid));
+    }
+  }
+  const release = results(true); release.scope.outputs.redis_all = 'true';
+  assert.doesNotThrow(() => verifyResults(release));
+});
+
 test('real Git history retains protected rename sources and missing history requires full verification', () => {
   const directory = mkdtempSync(join(tmpdir(), 'gather-ci-scope-'));
   const git = (...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

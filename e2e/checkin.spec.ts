@@ -49,8 +49,8 @@ async function logoutApi(request: APIRequestContext) {
   expect((await write(request, '/api/auth/logout')).status()).toBe(200);
 }
 
-async function register(request: APIRequestContext, prefixes = ['中-', '改-']) {
-  const account = trackAccount(prefixes) as Account;
+async function register(request: APIRequestContext, prefixes = ['中-', '改-']): Promise<Account> {
+  const account = trackAccount(prefixes);
   const response = await write(request, '/api/auth/register', {
     username: account.username, displayName: account.displayName, password: accountPassword,
   });
