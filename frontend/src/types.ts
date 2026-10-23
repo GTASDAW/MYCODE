@@ -50,6 +50,7 @@ export interface FavoriteItem { activity: Activity; favoritedAt: string }
 export type FavoritePage = PageResult<FavoriteItem>;
 
 export interface MyRegistrationQuery {
+  keyword?: string;
   page: number;
   pageSize: number;
   status: RegistrationFilter;

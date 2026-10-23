@@ -362,6 +362,7 @@ export const api = {
   searchRegistrations: (query: MyRegistrationQuery, signal?: AbortSignal) =>
     request<MyRegistrationPage>(
       `/me/registrations/search?${new URLSearchParams({
+        ...(query.keyword ? { keyword: query.keyword } : {}),
         page: String(query.page),
         pageSize: String(query.pageSize),
         status: query.status,

@@ -4,11 +4,13 @@ import {
   defaultMyRegistrationQuery,
   myRegistrationListPath,
   parseMyRegistrationQuery,
+  readMyRegistrationQuery,
   serializeMyRegistrationQuery,
 } from '../src/myRegistrationQuery.ts';
 import { myRegistrationDetailsPath, safeActivityDetailReturn } from '../src/activityDetailNavigation.ts';
 import { safeActivityListPath, activityDetailsPath } from '../src/activityDiscovery.ts';
 import { AuthRequestGuard, readAccountResource } from '../src/authRequestGuard.ts';
+import { safeReturnPath } from '../src/pages/authNavigation.ts';
 
 test('personal registration URLs preserve all status filters and pagination while normalizing defaults and unknown identity fields', () => {
   assert.deepEqual(parseMyRegistrationQuery(''), defaultMyRegistrationQuery);
@@ -32,6 +34,48 @@ test('invalid personal pagination and status cannot become API criteria; valid m
     { status: 'ACTIVE', page: 2147483647, pageSize: 100 });
   assert.deepEqual(parseMyRegistrationQuery('?status=active&pageSize=7'), { status: 'ALL', page: 1, pageSize: 7 });
   assert.equal(parseMyRegistrationQuery('?status=CHECKED_IN').status, 'ALL');
+});
+
+test('personal keywords round trip literally in canonical URL order while empty and old queries keep their original shape', () => {
+  for (const keyword of ['中文地点', '  标题 前后空格  ', '%_\\', '只含😀', '   ', 'a'.repeat(200), '😀'.repeat(100)]) {
+    const query = { keyword, status: 'WAITING', page: 2, pageSize: 20 };
+    const search = serializeMyRegistrationQuery(query);
+    assert.deepEqual([...new URLSearchParams(search).keys()], ['keyword', 'status', 'page', 'pageSize']);
+    assert.deepEqual(parseMyRegistrationQuery(search), query);
+    assert.deepEqual(readMyRegistrationQuery(search), { query, notice: null });
+    assert.equal(myRegistrationListPath(query), `/my-registrations${search}`);
+  }
+  for (const search of ['', '?keyword=', '?status=ALL&page=1&pageSize=10']) {
+    assert.deepEqual(parseMyRegistrationQuery(search), defaultMyRegistrationQuery);
+    assert.equal(serializeMyRegistrationQuery(parseMyRegistrationQuery(search)), '');
+  }
+  assert.equal(serializeMyRegistrationQuery({ ...defaultMyRegistrationQuery, keyword: '' }), '');
+  assert.equal(Object.hasOwn(parseMyRegistrationQuery(''), 'keyword'), false);
+});
+
+test('overlong personal URL keywords are cleared with notice rather than truncated while valid status and pagination survive', () => {
+  for (const keyword of ['中'.repeat(201), '😀'.repeat(101)]) {
+    const search = `?${new URLSearchParams({ keyword, status: 'ACTIVE', page: '0003', pageSize: '07', userId: '999' })}`;
+    const { query, notice } = readMyRegistrationQuery(search);
+    assert.deepEqual(query, { status: 'ACTIVE', page: 3, pageSize: 7 });
+    assert.match(notice, /200.*已清空关键词.*其他有效筛选条件保留/);
+    assert.equal(serializeMyRegistrationQuery(query), '?status=ACTIVE&page=3&pageSize=7');
+    assert.deepEqual(parseMyRegistrationQuery(search), query);
+  }
+});
+
+test('detail and login returns retain personal keyword criteria and normalize overlong nested keywords safely', () => {
+  const query = { keyword: ' 中文%_\\ ', status: 'WAITING', page: 2, pageSize: 20 };
+  const personal = myRegistrationListPath(query);
+  assert.equal(safeActivityDetailReturn(personal), personal);
+  const detail = myRegistrationDetailsPath(42, personal);
+  assert.equal(safeReturnPath(detail), detail);
+  assert.equal(new URLSearchParams(detail.split('?')[1]).get('from'), personal);
+  assert.equal(safeReturnPath(personal), personal);
+  const oversized = `/my-registrations?${new URLSearchParams({ keyword: 'a'.repeat(201), status: 'CANCELLED', page: '3', pageSize: '20' })}`;
+  assert.equal(safeActivityDetailReturn(oversized), '/my-registrations?status=CANCELLED&page=3&pageSize=20');
+  assert.equal(safeActivityDetailReturn('/my-registrations?keyword=%E4%B8%AD%E6%96%87&userId=999'),
+    '/my-registrations?keyword=%E4%B8%AD%E6%96%87');
 });
 
 test('detail navigation accepts canonical personal and public lists without broadening the existing public-list validator', () => {

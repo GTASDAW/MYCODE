@@ -12,6 +12,8 @@ public interface RegistrationMapper {
         + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + WaitingQueueSql.COUNT + WaitingQueueSql.POSITION
         + "a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
+    String MY_SEARCH_MATCH = "(#{status}='ALL' OR r.status=#{status}) "
+        + "AND (#{keyword}='' OR LOCATE(#{keyword}, a.title)>0 OR LOCATE(#{keyword}, a.location)>0)";
 
     // The activity row already serializes every mutation. Do not lock a missing registration:
     // under REPEATABLE READ that would take gap locks shared by unrelated activities.
@@ -41,20 +43,21 @@ public interface RegistrationMapper {
         + "WHERE r.user_id=#{userId} ORDER BY r.updated_at DESC, r.id DESC")
     List<MyRegistrationRow> findMine(@Param("userId") long userId);
 
-    // The filter affects total only: all four summary counts always cover this user's complete history.
-    @Select("""
-        SELECT COALESCE(SUM(CASE WHEN #{status}='ALL' OR r.status=#{status} THEN 1 ELSE 0 END), 0) AS total,
+    // Status and keyword affect total only: all summary counts cover this user's complete history.
+    @Select("SELECT COALESCE(SUM(CASE WHEN " + MY_SEARCH_MATCH + " THEN 1 ELSE 0 END), 0) AS total, " + """
                COALESCE(SUM(r.status='ACTIVE'), 0) AS active_registrations,
                COALESCE(SUM(r.status='WAITING'), 0) AS waiting_registrations,
                COALESCE(SUM(r.status='CANCELLED'), 0) AS cancelled_registrations,
                COALESCE(SUM(r.status='ACTIVE' AND r.checked_in_at IS NOT NULL), 0) AS checked_in_registrations
-        FROM registrations r WHERE r.user_id=#{userId}
+        FROM registrations r JOIN activities a ON a.id=r.activity_id WHERE r.user_id=#{userId}
         """)
-    MyRegistrationTotals mineTotals(@Param("userId") long userId, @Param("status") String status);
+    MyRegistrationTotals mineTotals(@Param("userId") long userId, @Param("status") String status,
+                                    @Param("keyword") String keyword);
 
     @Select("SELECT " + MY_VIEW_COLUMNS + " FROM registrations r JOIN activities a ON a.id=r.activity_id "
-        + "WHERE r.user_id=#{userId} AND (#{status}='ALL' OR r.status=#{status}) "
+        + "WHERE r.user_id=#{userId} AND " + MY_SEARCH_MATCH + " "
         + "ORDER BY r.updated_at DESC, r.id DESC LIMIT #{limit} OFFSET #{offset}")
     List<MyRegistrationRow> searchMine(@Param("userId") long userId, @Param("status") String status,
+                                       @Param("keyword") String keyword,
                                        @Param("limit") int limit, @Param("offset") long offset);
 }

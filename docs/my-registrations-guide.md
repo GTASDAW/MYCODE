@@ -1,8 +1,8 @@
 # 我的报名：本人签到、分页与联表读取
 
-“我的报名”将有效报名、候补和取消历史放在同一个真实查询中，提供状态筛选、分页、手动刷新及本人签到结果。管理员也可以参加活动，因此普通用户和管理员都只查看自己的记录；后台报名名单仍负责管理整场参与者与签到写操作。
+“我的报名”将有效报名、候补和取消历史放在同一个真实查询中，提供活动关键词搜索、状态筛选、分页、手动刷新及本人签到结果。管理员也可以参加活动，因此普通用户和管理员都只查看自己的记录；后台报名名单仍负责管理整场参与者与签到写操作。
 
-本轮复用 V5 的 `checked_in_at`，没有新增迁移、索引、依赖、轮询或缓存。报名、递补、取消、签到和通知写事务保持原有行为，网站继续在本机演示。
+签到字段沿用 V5 的 `checked_in_at`，当前保持 V12；关键词搜索没有新增迁移、索引、依赖、轮询或缓存。报名、递补、取消、签到和通知写事务保持原有行为，网站继续在本机演示。
 
 ## 两个读取合同
 
@@ -11,7 +11,9 @@
 | `GET /api/me/registrations` | 保留原完整数组，每项仍为 `{id,status,activity}`；不添加签到时间或操作人字段，内部改为一次联表读取 |
 | `GET /api/me/registrations/search` | 返回 `{items,total,page,pageSize,summary}`，每项为 `{id,status,activity,checkedInAt}`，页面使用此接口 |
 
-新接口默认 `page=1&pageSize=10&status=ALL`，页码至少 1，每页 1–100 条，状态只接受 `ALL|ACTIVE|WAITING|CANCELLED`。省略参数使用默认值；显式空值、非整数、越界数量或未知状态返回 400 `VALIDATION_ERROR`。匿名返回 401，客户端传入 `userId` 不能改变可信登录身份。
+新接口默认 `page=1&pageSize=10&status=ALL`，页码至少 1，每页 1–100 条，状态只接受 `ALL|ACTIVE|WAITING|CANCELLED`。这些参数省略时使用默认值，显式空值、非整数、越界数量或未知状态返回 400 `VALIDATION_ERROR`。匿名返回 401，客户端传入 `userId` 不能改变可信登录身份。
+
+可选 `keyword` 默认空字符串，空值不限制活动；最多200个UTF-16代码单元，不裁剪首尾空格，按活动标题或地点的字面子串匹配。关键词使用绑定参数和 `LOCATE`，`%`、`_`、引号与反斜杠不会成为通配或SQL语法；超长返回400，不偷偷截断。关键词和报名状态按AND组合，仅影响 `items` 与 `total`，旧数组接口和省略关键词的请求保持兼容。
 
 `id` 是报名记录 ID，`activity.id` 是所属活动 ID。两种接口均按报名 `updated_at DESC, id DESC` 稳定排序；活动内容包含真实人数、候补人数、本人 `registrationStatus`、开始状态与公开取消历史。活动开始状态使用每次请求唯一的 UTC 微秒时刻，接口时间为 UTC，页面按北京时间展示。
 
@@ -38,14 +40,14 @@
 
 ## 快照与查询证据
 
-`RegistrationService.searchMine` 使用只读 `REPEATABLE_READ`：一次聚合同时取得筛选总数和四项全量统计，再一次联表取得当前页的报名与活动。第一次一致性读取建立 InnoDB 快照；即使其他事务在两次读取之间提交取消或签到，本次列表与统计仍对应同一快照，后续刷新才能看到该提交。读取不添加活动行锁，不改变写操作的 `READ_COMMITTED` 设计。
+`RegistrationService.searchMine` 使用只读 `REPEATABLE_READ`：一次聚合同时取得筛选总数和四项全量统计，再一次联表取得当前页的报名与活动。关键词总数与列表复用同一匹配SQL，聚合联表读取活动标题/地点，匹配条件只放在 `total` 的CASE中，不进入四项统计的WHERE；WHERE仍只限定本人。第一次一致性读取建立 InnoDB 快照；即使其他事务在两次读取之间提交取消或签到，本次列表与统计仍对应同一快照，后续刷新才能看到该提交。读取不添加活动行锁，不改变写操作的 `READ_COMMITTED` 设计。
 
 ```mermaid
 sequenceDiagram
     participant UI as 我的报名页面
     participant S as RegistrationService
     participant DB as MySQL
-    UI->>S: 当前身份、状态、页码、数量
+    UI->>S: 当前身份、关键词、状态、页码、数量
     S->>S: 固定一次 UTC 微秒时刻
     S->>DB: 聚合总数和本人全量统计
     Note right of DB: 建立本次只读快照
@@ -65,20 +67,22 @@ V8 的活动分类通过 `MY_VIEW_COLUMNS → MyRegistrationRow.activity()` 同�
 
 ## URL、详情返回与认证保护
 
-页面已提交条件来自 `/my-registrations` URL，默认值省略；默认 10 条，提供 10、20、50 条选项，合法 URL 自定义数量也保留。未知状态和非法数字规范为安全默认值，未知身份参数丢弃。切换状态或数量回第一页；手动刷新确实请求数据库，刷新和浏览器前进后退保留条件。
+页面已提交条件来自 `/my-registrations` URL，按 `keyword,status,page,pageSize` 排序并省略默认值；默认 10 条，提供 10、20、50 条选项，合法 URL 自定义数量也保留。未知状态和非法数字规范为安全默认值，未知身份参数丢弃；超长URL关键词清空并提示，其他有效条件保留，不截断关键词。
+
+搜索框有独立草稿，点击查询或回车后生效并回第一页，第一页同条件提交也重新查询。切换状态或数量只沿用已提交关键词并回第一页；手动刷新、错误重试也不提交草稿。重置和清除筛选清空关键词/状态，回第一页并保留数量。刷新、历史和详情/登录返回保留已提交条件；无匹配记录时提供清除筛选入口，四项统计仍覆盖本人全部历史。
 
 从记录进入详情时，`from` 保存规范的个人列表地址，“返回我的报名”保留原筛选与页码；详情刷新或登录后仍保留来源。返回重新读取，取消造成末页越界时以 `replace` 回最后合法页，空集合回第一页，不形成历史或请求循环。公开来源继续显示原列表返回行为。
 
 统一详情来源仅分派精确内部 `/activities` 或 `/my-registrations`，只解析对应已知条件并规范化；外部网址、双斜杠、管理路径、详情路径、点路径、原始反斜杠/控制字符和片段不接受。原 `safeActivityListPath` 保持只接受公开活动列表的合同，未扩成通用任意内部跳转。
 
-个人页面复用 `AuthProvider.captureAccountRequest` 和 `readAccountResource`，成功和错误都核对认证代次及取消信号；`useResource` 管理当前条件、刷新序号和请求中止。详情读取和报名/取消也核对认证代次、页面与提交信号；同账号重新登录仍产生新代次，旧成功不能覆盖新记录，旧 401 不能退出新会话。没有重复认证状态或 HTTP 客户端；统计加载/失败显示 `—`，不拿当前页推算或将失败伪装成 0。
+个人页面复用 `AuthProvider.captureAccountRequest` 和 `readAccountResource`，成功和错误都核对认证代次及取消信号；页面作用域包含规范关键词/状态/分页、认证代次和刷新版本，刷新及导航事件立即使旧读取失效，排队越界修正也核对当前条件。`useResource` 继续管理请求顺序和中止。详情读取和报名/取消也核对认证代次、页面与提交信号；同账号重新登录仍产生新代次，旧成功不能覆盖新记录，旧 401 不能退出新会话。没有重复认证状态或 HTTP 客户端；统计加载/失败显示 `—`，不拿当前页推算或将失败伪装成 0。
 
 ## 阅读与验证路径
 
 1. 从 `frontend/src/myRegistrationQuery.ts → pages/MyRegistrationsPage.tsx → api.ts` 跟踪 URL 与请求；从 `activityDetailNavigation.ts → pages/ActivityDetailPage.tsx` 跟踪安全来源、详情和登录返回。
 2. 从 `ActivityController.searchMine → RegistrationService.searchMine → RegistrationMapper.mineTotals/searchMine → MyRegistrationRow/MyRegistrationModels` 跟踪可信身份、统计与两种 ID；再比较旧 `mine/findMine` 的数组兼容。
 3. 从 `frontend/src/authRequestGuard.ts` 和 `tests/myregistrations.test.mjs` 查看真实迟到成功、同账号重登后的旧 401，以及已取消请求不能开始或发布结果的断言。
-4. 从 `MyRegistrationSearchIntegrationTest` 查看真实 MySQL 的权限、旧字段、稳定分页、全量统计、UTC 时间、参数/越界、单次时钟、取消/签到夹在两次读取间、数据 SELECT 次数与实际执行计划；原业务并发与回滚测试继续保留。
-5. 从 `e2e/myregistrations.spec.ts` 查看桌面/手机的真实记录、10/3 分页、筛选、URL/登录/详情返回、本人签到、越界、失败重试与迟到身份回归；默认容器与共享 Redis 脚本另核对各实例本人数据和旧数组。测试自己的开始活动独立初始化，不改已有样例时间，按 manifest 精确清理。
+4. 从 `MyRegistrationSearchIntegrationTest` 查看真实 MySQL 的权限、旧字段、稳定分页、全量统计、UTC 时间、参数/越界、单次时钟、取消/签到夹在两次读取间、数据 SELECT 次数与实际执行计划；`MyRegistrationKeywordIntegrationTest` 补充关键词字面匹配、UTF-16长度、统计不过滤及并发编辑/取消快照，原业务并发与回滚测试继续保留。
+5. 从 `e2e/myregistrations.spec.ts` 与 `e2e/myregistrations-keyword.spec.ts` 查看桌面/手机的真实记录、分页、状态/关键词、URL/登录/详情返回、本人签到、越界、失败重试与迟到身份回归；默认容器与共享 Redis 脚本另核对各实例本人数据和旧数组。测试自己的开始活动独立初始化，不改已有样例时间，按 manifest 精确清理。
 
-前端本轮 60 项回归和 TypeScript/生产构建已执行通过，保留已有构建体积提示。完整后端、浏览器、容器和 Redis 环境的实际运行与失败修复统一以 [验证记录](verification.md) 为准，不以检查代码存在代替通过。
+各轮后端、前端、浏览器、构建、容器和 Redis 环境的实际运行与失败修复统一以 [验证记录](verification.md) 为准，不以检查代码存在代替通过，也不以固定SELECT次数推断查询成本恒定或性能提升。

@@ -117,13 +117,13 @@ V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 
 
 ## 个人报名读取
 
-`GET /api/me/registrations/search` 默认 `page=1&pageSize=10&status=ALL`，状态为 `ALL|ACTIVE|WAITING|CANCELLED`，每页 1–100 条。返回 `{items,total,page,pageSize,summary}`；行是 `{id,status,activity,checkedInAt}`，`id` 是报名 ID，`activity.id` 是活动 ID。只暴露本人的可空 UTC 签到时间，不包含管理员 ID 或昵称；用户不能自行签到。
+`GET /api/me/registrations/search` 默认 `page=1&pageSize=10&status=ALL`，状态为 `ALL|ACTIVE|WAITING|CANCELLED`，每页 1–100 条。可选 `keyword` 默认空，最多200个UTF-16代码单元、不trim，按活动标题或地点作绑定参数字面包含匹配，与状态共同筛选items/total；四项summary仍本人全量。返回 `{items,total,page,pageSize,summary}`；行是 `{id,status,activity,checkedInAt}`，`id` 是报名 ID，`activity.id` 是活动 ID。只暴露本人的可空 UTC 签到时间，不包含管理员 ID 或昵称；用户不能自行签到。
 
 筛选只影响 `items` 和 `total`。`summary` 的 `activeRegistrations`、`waitingRegistrations`、`cancelledRegistrations`、`checkedInRegistrations` 覆盖本人全部记录，已签到仅计 `ACTIVE` 中非空签到时间；排序为报名 `updated_at DESC, id DESC`。身份来自可信 Session，传入 `userId` 不改变归属。越界返回请求页码、真实总数/统计和空列表，由页面校正。
 
 `RegistrationService.searchMine` 在只读 `REPEATABLE_READ` 中固定一次 UTC 微秒时刻，第一次聚合合并筛选总数与全量统计，第二次联表读取当前页活动、候补数和本人状态，两次共用数据库快照。旧 `mine` 保留 `{id,status,activity}` 数组和排序，内部改为一次联表查询，不逐条调用 `ActivityService.get`。候补 COUNT 仍是关联子查询；应用数据 SELECT 为旧接口 1 次、新分页 2 次，不代表底层工作量恒定或已有性能收益。
 
-前端状态/页码/每页数量存于 `/my-registrations` URL，默认省略，改变状态或数量回第一页；刷新、历史和详情返回保留条件，越界 `replace` 修正。详情来源按精确内部 `/activities` 或 `/my-registrations` 分派与规范化，保留原公开列表安全合同；个人读取和详情操作使用认证代次、请求中止及页面条件保护，旧 401 不使新会话退出。读取不增加活动写锁，没有轮询、新迁移或新索引。合同与真实执行计划见 [我的报名指南](my-registrations-guide.md)。
+前端关键词/状态/页码/每页数量存于 `/my-registrations` URL，默认省略；关键词草稿查询后回第一页，状态或数量变化沿用已提交关键词。刷新、历史和详情返回保留条件，越界 `replace` 修正。详情来源按精确内部 `/activities` 或 `/my-registrations` 分派与规范化，保留原公开列表安全合同；个人读取和详情操作使用认证代次、请求中止及页面条件保护，旧 401 不使新会话退出。关键词总数与列表共用SQL条件，四项全量统计不受搜索影响，仍两次业务SELECT和同RR快照。读取不增加活动写锁，没有轮询、新迁移或新索引。合同与真实执行计划见 [我的报名指南](my-registrations-guide.md)。
 
 ## 复制活动与普通发布
 

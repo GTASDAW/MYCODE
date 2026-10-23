@@ -63,9 +63,10 @@ public class ActivityController {
     MyRegistrationPageView searchMine(@RequestParam(required = false) String page,
                                       @RequestParam(required = false) String pageSize,
                                       @RequestParam(required = false) String status,
+                                      @RequestParam(defaultValue = "") String keyword,
                                       @AuthenticationPrincipal AppUserDetails principal) {
         return registrations.searchMine(principal.id(), integer(page, 1), integer(pageSize, 10),
-            status == null ? "ALL" : status);
+            status == null ? "ALL" : status, keyword);
     }
 
     private static int integer(String text, int fallback) {

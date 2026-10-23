@@ -87,17 +87,25 @@ public class RegistrationService {
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public MyRegistrationPageView searchMine(long userId, int page, int pageSize, String status) {
+        return searchMine(userId, page, pageSize, status, "");
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public MyRegistrationPageView searchMine(long userId, int page, int pageSize, String status, String keyword) {
         if (page < 1 || pageSize < 1 || pageSize > 100) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码至少为 1，每页数量应在 1 到 100 之间");
         }
         if (status == null || !SEARCH_STATUSES.contains(status)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "报名筛选状态不正确");
         }
+        if (keyword == null || keyword.length() > 200) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "关键词最多 200 个字符");
+        }
         // Aggregate and joined page share the transaction's InnoDB snapshot and one UTC microsecond instant.
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        var totals = registrations.mineTotals(userId, status);
+        var totals = registrations.mineTotals(userId, status, keyword);
         long offset = ((long) page - 1L) * pageSize;
-        var items = registrations.searchMine(userId, status, pageSize, offset).stream()
+        var items = registrations.searchMine(userId, status, keyword, pageSize, offset).stream()
             .map(row -> new MyRegistrationView(row.registrationId(), row.status(), ActivityView.from(row.activity(), now),
                 row.checkedInAt() == null ? null : row.checkedInAt().toInstant(ZoneOffset.UTC))).toList();
         return new MyRegistrationPageView(items, totals.total(), page, pageSize,

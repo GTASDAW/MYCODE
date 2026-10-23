@@ -37,6 +37,26 @@ test('personal registration search sends only query criteria and the abort signa
   assert.equal(calls[1].url, '/api/me/registrations');
 });
 
+test('personal registration keyword is sent literally with existing criteria; missing and empty keywords retain unfiltered requests', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const page = { items: [], total: 0, page: 1, pageSize: 20,
+    summary: { activeRegistrations: 9, waitingRegistrations: 4, cancelledRegistrations: 2, checkedInRegistrations: 3 } };
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response(200, page); };
+  for (const keyword of [' 中文%_\\ ', '   ', '😀'.repeat(100)]) {
+    assert.deepEqual(await api.searchRegistrations({ keyword, status: 'WAITING', page: 1, pageSize: 20, userId: 999 }, controller.signal), page);
+    const { url, options } = calls.at(-1);
+    assert.deepEqual(Object.fromEntries(new URL(url, 'http://localhost').searchParams),
+      { keyword, status: 'WAITING', page: '1', pageSize: '20' });
+    assert.equal(options.signal, controller.signal);
+  }
+  for (const query of [{ page: 1, pageSize: 10, status: 'ALL' }, { page: 1, pageSize: 10, status: 'ALL', keyword: '' }]) {
+    await api.searchRegistrations(query);
+    assert.equal(calls.at(-1).url, '/api/me/registrations/search?page=1&pageSize=10&status=ALL');
+  }
+});
+
 test('an expired CSRF token is refreshed and the original write is replayed only once', async () => {
   const { api } = await freshApi();
   const calls = [];
