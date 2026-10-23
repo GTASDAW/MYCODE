@@ -6,6 +6,8 @@ final class ActivityQuerySql {
 
     static final String FILTER = """
         <where>
+          <if test="startFromUtc != null">AND a.starts_at &gt;= #{startFromUtc}</if>
+          <if test="startUntilUtc != null">AND a.starts_at &lt; #{startUntilUtc}</if>
           <if test="category != 'ALL'">AND a.category = #{category}</if>
           <if test="keyword != ''">
             AND (LOCATE(#{keyword}, a.title) &gt; 0 OR LOCATE(#{keyword}, a.location) &gt; 0)

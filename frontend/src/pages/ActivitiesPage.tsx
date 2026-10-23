@@ -15,6 +15,8 @@ import { useResource } from "../useResource";
 import { useActivityClock } from "../useActivityClock";
 import type { ActivityCategoryFilter, ActivityFilter, ActivitySearchQuery } from "../types";
 import { activityCategoryFilterOptions } from "../activityCategory";
+import { ActivityStartDateFields } from "../ActivityStartDateFields";
+import { activityStartDateRangeError } from "../activityStartDate";
 import { readAccountResource } from "../authRequestGuard";
 import {
   activityListPath,
@@ -32,6 +34,9 @@ export function ActivitiesPage() {
   const { query, notice } = parseActivityQuery(location.search);
   const canonicalSearch = serializeActivityQuery(query);
   const [keywordDraft, setKeywordDraft] = useState(query.keyword);
+  const [startDateFromDraft, setStartDateFromDraft] = useState(query.startDateFrom ?? "");
+  const [startDateToDraft, setStartDateToDraft] = useState(query.startDateTo ?? "");
+  const [dateError, setDateError] = useState<string | null>(null);
   const [normalizationNotice, setNormalizationNotice] = useState<string | null>(notice);
   const [revision, setRevision] = useState(0);
   const scope = `${generation}:${canonicalSearch}:${revision}`;
@@ -58,11 +63,14 @@ export function ActivitiesPage() {
 
   useEffect(() => {
     setKeywordDraft(query.keyword);
+    setStartDateFromDraft(query.startDateFrom ?? "");
+    setStartDateToDraft(query.startDateTo ?? "");
+    setDateError(null);
     if (notice) setNormalizationNotice(notice);
     if (location.search !== canonicalSearch) {
       navigate({ pathname: "/activities", search: canonicalSearch }, { replace: true });
     }
-  }, [location.search, canonicalSearch, query.keyword, notice, navigate]);
+  }, [location.search, canonicalSearch, query.keyword, query.startDateFrom, query.startDateTo, notice, navigate]);
 
   useEffect(() => {
     if (!current() || resource.loading || resource.error || !resource.data) return;
@@ -72,7 +80,7 @@ export function ActivitiesPage() {
     }
   }, [
     resource.data, resource.loading, resource.error,
-    scope, query.keyword, query.status, query.category, query.page, query.pageSize, navigate,
+    scope, query.keyword, query.status, query.category, query.startDateFrom, query.startDateTo, query.page, query.pageSize, navigate,
   ]);
 
   function changeQuery(next: ActivitySearchQuery) {
@@ -84,10 +92,13 @@ export function ActivitiesPage() {
 
   function clearFilters() {
     setKeywordDraft("");
+    setStartDateFromDraft("");
+    setStartDateToDraft("");
+    setDateError(null);
     changeQuery({ ...defaultActivityQuery, pageSize: query.pageSize });
   }
 
-  const hasFilters = query.keyword !== "" || query.status !== "ALL" || query.category !== "ALL";
+  const hasFilters = query.keyword !== "" || query.status !== "ALL" || query.category !== "ALL" || !!query.startDateFrom || !!query.startDateTo;
   const pageSizeOptions = [...new Set([12, 24, 48, query.pageSize])].sort((a, b) => a - b);
   return (
     <div className="page-container">
@@ -119,7 +130,11 @@ export function ActivitiesPage() {
           className="filter-form"
           onSubmit={(event) => {
             event.preventDefault();
-            changeQuery({ ...query, keyword: keywordDraft, page: 1 });
+            const error = activityStartDateRangeError(startDateFromDraft, startDateToDraft);
+            setDateError(error);
+            if (error) return;
+            changeQuery({ ...query, keyword: keywordDraft, startDateFrom: startDateFromDraft || undefined,
+              startDateTo: startDateToDraft || undefined, page: 1 });
           }}
         >
           <div className="filter-field">
@@ -158,6 +173,8 @@ export function ActivitiesPage() {
             <Select<ActivityCategoryFilter> id="discovery-category" aria-label="活动分类" value={query.category}
               options={activityCategoryFilterOptions} onChange={category => changeQuery({ ...query, category, page: 1 })} />
           </div>
+          <ActivityStartDateFields prefix="discovery" from={startDateFromDraft} to={startDateToDraft} error={dateError}
+            onFromChange={setStartDateFromDraft} onToChange={setStartDateToDraft} onError={setDateError} />
           <div className="filter-actions">
             <Button type="primary" htmlType="submit" icon={<SearchOutlined aria-hidden="true" />}>
               查询
@@ -198,7 +215,7 @@ export function ActivitiesPage() {
         ) : activities.length === 0 ? (
           <EmptyState
             title={hasFilters ? "暂无符合条件的活动" : "还没有发布的活动"}
-            description={hasFilters ? "试试其他关键词、活动状态或分类。" : "活动发布后会显示在这里。"}
+            description={hasFilters ? "试试其他关键词、活动状态、分类或开始日期。" : "活动发布后会显示在这里。"}
             action={hasFilters ? <Button onClick={clearFilters}>清除筛选</Button> : undefined}
           />
         ) : (

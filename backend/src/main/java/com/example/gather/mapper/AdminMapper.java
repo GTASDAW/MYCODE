@@ -29,11 +29,13 @@ public interface AdminMapper {
         + ActivityQuerySql.FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
     List<ActivityRow> activities(@Param("userId") long userId, @Param("now") LocalDateTime now,
                                 @Param("keyword") String keyword, @Param("status") String status, @Param("category") String category,
+                                @Param("startFromUtc") LocalDateTime startFromUtc, @Param("startUntilUtc") LocalDateTime startUntilUtc,
                                 @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("<script>SELECT COUNT(*) FROM activities a " + ActivityQuerySql.FILTER + "</script>")
     long countActivities(@Param("now") LocalDateTime now, @Param("keyword") String keyword, @Param("status") String status,
-                         @Param("category") String category);
+                         @Param("category") String category, @Param("startFromUtc") LocalDateTime startFromUtc,
+                         @Param("startUntilUtc") LocalDateTime startUntilUtc);
 
     String ROSTER_FILTER = """
         WHERE r.activity_id = #{activityId}

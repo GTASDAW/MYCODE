@@ -50,6 +50,12 @@ public class ActivityService {
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ActivitySearchPageView search(int page, int pageSize, String keyword, String status, String category, Long userId) {
+        return search(page, pageSize, keyword, status, category, null, null, userId);
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ActivitySearchPageView search(int page, int pageSize, String keyword, String status, String category,
+                                         String startDateFrom, String startDateTo, Long userId) {
         if (page < 1 || pageSize < 1 || pageSize > 100) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "页码至少为 1，每页数量应在 1 到 100 之间");
         }
@@ -60,12 +66,13 @@ public class ActivityService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "筛选状态不正确");
         }
         ActivityCategories.filter(category);
+        var dates = ActivityStartDateRange.parse(startDateFrom, startDateTo);
         // One microsecond UTC instant and one InnoDB snapshot cover the aggregate and page response.
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         LocalDateTime utcNow = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
-        var totals = activities.searchTotals(utcNow, keyword, status, category);
+        var totals = activities.searchTotals(utcNow, keyword, status, category, dates.fromUtc(), dates.untilUtc());
         long offset = ((long) page - 1L) * pageSize;
-        var items = activities.search(userId, utcNow, keyword, status, category, pageSize, offset).stream()
+        var items = activities.search(userId, utcNow, keyword, status, category, dates.fromUtc(), dates.untilUtc(), pageSize, offset).stream()
             .map(row -> ActivityView.from(row, now)).toList();
         return new ActivitySearchPageView(items, totals.total(), page, pageSize,
             new ActivitySearchSummary(totals.upcomingActivities(), totals.availableSeats()));

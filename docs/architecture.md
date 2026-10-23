@@ -107,6 +107,8 @@ flowchart LR
 
 V8 为活动响应增加 `category`，公开及管理列表接受默认 `ALL` 的分类过滤，与状态和关键词共同作用于聚合和当前页，维持原快照、时间和排序。创建缺失/null 分类默认未分类，编辑缺失/null 保留现值，分类编辑和真实审计共用原活动锁及事务；个人报名的独立联表同步字段，报名热锁四列保持。固定代码、兼容规则、URL 与执行计划阅读路径见 [分类指南](activity-category-guide.md)。
 
+公开与管理列表还接受可选 `startDateFrom/startDateTo`，按北京时间开始日期筛选，首尾日期包含、单端允许、无默认日期。严格校验2000至2100年的真实日期与起止顺序，转为UTC半开区间直接比较 `starts_at`；列表、COUNT及公开summary复用同一SQL条件、原RR快照和单次当前时刻。日期随已提交条件存URL，输入草稿查询后生效；不改变管理概览、旧数组响应或V12结构。参数及非法URL回退见 [活动发现指南](activity-discovery.md#按开始日期筛选)。
+
 V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 的 GET/POST/DELETE 查询、收藏和取消；响应状态为 `{favorited,favoritedAt}`，分页为 `{items,total,page,pageSize}`，每项包含活动对象和收藏时间。两次业务 SELECT 共用 REPEATABLE_READ 快照及单次时刻，当前页联表读取本人报名状态和实际候补数，复用 `ActivityView`，不逐条查活动。认证版本 SELECT 另计一次。所有存在活动可收藏，既有公开响应不增加收藏字段；页面 `/my-favorites` 按需加载，详情返回只接受规范内部来源。清理与基线扩展到六表，先核对并删除准确声明的收藏对，再处理原五表。
 
 公开查询在只读 `REPEATABLE_READ` 事务中固定一次 UTC 微秒时间，聚合与分页共享快照；`total` 和 `summary` 覆盖整个筛选集合，统计不由当前页卡片计算。排序为 `starts_at ASC, id ASC`，越界返回真实总数、统计与空 `items`。公开读取不增加活动写锁，也不改变报名的 `READ_COMMITTED` 事务。

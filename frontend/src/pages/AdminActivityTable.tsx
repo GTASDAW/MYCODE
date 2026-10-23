@@ -12,6 +12,11 @@ import { useActivityClock } from "../useActivityClock";
 import { ActivityCopyLink } from "./ActivityCopyLink";
 import "./adminActivityTable.css";
 
+const emptyActivitiesDescription = <>
+  <div>暂无符合条件的活动</div>
+  <div className="metadata">试试其他关键词、状态、分类或开始日期。</div>
+</>;
+
 const columns = (onChanged: (activity: Activity) => void): TableColumnsType<Activity> => [
   {
     title: "活动名称",
@@ -101,7 +106,7 @@ export function AdminActivityTable({
   const screens = Grid.useBreakpoint();
   useActivityClock(activities);
   if (!screens.md) return <>
-    {loading ? <LoadingState /> : activities.length === 0 ? <Empty description="暂无符合条件的活动" /> :
+    {loading ? <LoadingState /> : activities.length === 0 ? <Empty description={emptyActivitiesDescription} /> :
       <div className="admin-activity-mobile-list" aria-label="活动管理列表">
         {activities.map(activity => <Card size="small" key={activity.id} data-activity-id={activity.id}
           title={<Link to={`/activities/${activity.id}`}>{activity.title}</Link>} extra={<ActivityStatus activity={activity} personal={false} />}>
@@ -131,7 +136,7 @@ export function AdminActivityTable({
       loading={loading}
       pagination={pagination}
       scroll={{ x: 2020 }}
-      locale={{ emptyText: "暂无符合条件的活动" }}
+      locale={{ emptyText: emptyActivitiesDescription }}
     />
   );
 }

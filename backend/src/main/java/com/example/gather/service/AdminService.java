@@ -44,14 +44,20 @@ public class AdminService {
     }
 
     public ActivityPageView activities(int page, int pageSize, String keyword, String status, String category, long userId) {
+        return activities(page, pageSize, keyword, status, category, null, null, userId);
+    }
+
+    public ActivityPageView activities(int page, int pageSize, String keyword, String status, String category,
+                                       String startDateFrom, String startDateTo, long userId) {
         validatePage(page, pageSize);
         validateStatus(status, ACTIVITY_STATUSES);
         ActivityCategories.filter(category);
         if (keyword == null || keyword.length() > MAX_KEYWORD_LENGTH) invalid("搜索关键词最多 200 字");
+        var dates = ActivityStartDateRange.parse(startDateFrom, startDateTo);
         Instant now = now();
         LocalDateTime utcNow = utc(now);
-        long total = admin.countActivities(utcNow, keyword, status, category);
-        var items = admin.activities(userId, utcNow, keyword, status, category, pageSize, offset(page, pageSize)).stream()
+        long total = admin.countActivities(utcNow, keyword, status, category, dates.fromUtc(), dates.untilUtc());
+        var items = admin.activities(userId, utcNow, keyword, status, category, dates.fromUtc(), dates.untilUtc(), pageSize, offset(page, pageSize)).stream()
             .map(row -> ActivityView.from(row, now)).toList();
         return new ActivityPageView(items, total, page, pageSize);
     }

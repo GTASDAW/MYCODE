@@ -1166,6 +1166,34 @@ test('public and admin category searches combine only their criteria and retain 
   }
 });
 
+test('public and admin date searches send optional dates literally, omit empty endpoints and retain cancellation without client identity', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController();
+  const calls = [];
+  const page = { items: [{ id: 42 }], total: 1, page: 2, pageSize: 7,
+    summary: { upcomingActivities: 1, availableSeats: 2 } };
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return response(200, page); };
+  for (const dates of [{}, { startDateFrom: '', startDateTo: '' }, { startDateFrom: '2000-01-01' },
+    { startDateTo: '2100-12-31' }, { startDateFrom: '2000-01-01', startDateTo: '2100-12-31' },
+    { startDateFrom: '2026-10-23&status=CANCELLED', startDateTo: '2026-10-23 +%_' }]) {
+    const query = { keyword: ' 中文 %_ +&? ', status: 'OPEN', category: 'CULTURE', page: 2, pageSize: 7,
+      userId: 999, role: 'ADMIN', ...dates };
+    for (const search of [api.searchActivities, api.adminActivities]) {
+      assert.deepEqual(await search(query, controller.signal), page);
+      const { url, options } = calls.at(-1);
+      assert.deepEqual(Object.fromEntries(new URL(url, 'http://localhost').searchParams), {
+        keyword: query.keyword, status: query.status, category: query.category, page: '2', pageSize: '7',
+        ...Object.fromEntries(Object.entries(dates).filter(([, value]) => value !== '')),
+      });
+      assert.equal(options.signal, controller.signal);
+      assert.equal(options.credentials, 'same-origin');
+      assert.equal(options.body, undefined);
+    }
+  }
+  assert.ok(calls.filter(call => call.url.startsWith('/api/activities/search?')).length === 6);
+  assert.ok(calls.filter(call => call.url.startsWith('/api/admin/activities?')).length === 6);
+});
+
 test('category writes retain old omitted/null calls, whitelist editable fields, and carry cancellation on publishing', async () => {
   const { api } = await freshApi();
   const controller = new AbortController();

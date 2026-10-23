@@ -958,6 +958,17 @@ main:focus {
 .filter-select {
   width: 180px;
 }
+.filter-date {
+  width: 180px;
+}
+.filter-date .ant-input {
+  min-width: 0;
+  width: 100%;
+}
+.filter-date-error {
+  width: 100%;
+  color: #cf1322;
+}
 .filter-field .ant-select {
   width: 100%;
 }
@@ -1354,7 +1365,8 @@ main:focus {
     margin-bottom: 20px;
   }
   .filter-field,
-  .filter-select {
+  .filter-select,
+  .filter-date {
     width: 100%;
   }
   .filter-actions {

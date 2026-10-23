@@ -32,8 +32,11 @@ public class ActivityController {
                                   @RequestParam(defaultValue = "") String keyword,
                                   @RequestParam(defaultValue = "ALL") String status,
                                   @RequestParam(required = false) String category,
+                                  @RequestParam(required = false) String startDateFrom,
+                                  @RequestParam(required = false) String startDateTo,
                                   @AuthenticationPrincipal AppUserDetails principal) {
-        return activities.search(page, pageSize, keyword, status, category == null ? "ALL" : category, principal == null ? null : principal.id());
+        return activities.search(page, pageSize, keyword, status, category == null ? "ALL" : category,
+            startDateFrom, startDateTo, principal == null ? null : principal.id());
     }
 
     @GetMapping("/activities/{id}")

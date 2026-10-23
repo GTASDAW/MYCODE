@@ -203,6 +203,8 @@ export interface AdminActivityQuery {
   keyword: string;
   status: ActivityFilter;
   category: ActivityCategoryFilter;
+  startDateFrom?: string;
+  startDateTo?: string;
 }
 
 export type ActivitySearchQuery = AdminActivityQuery;

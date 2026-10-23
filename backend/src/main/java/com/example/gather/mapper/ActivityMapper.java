@@ -26,12 +26,14 @@ public interface ActivityMapper {
         FROM activities a
         """ + ActivityQuerySql.FILTER + "</script>")
     ActivitySearchTotals searchTotals(@Param("now") LocalDateTime now, @Param("keyword") String keyword,
-                                      @Param("status") String status, @Param("category") String category);
+                                      @Param("status") String status, @Param("category") String category,
+                                      @Param("startFromUtc") LocalDateTime startFromUtc, @Param("startUntilUtc") LocalDateTime startUntilUtc);
 
     @Select("<script>SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} "
         + ActivityQuerySql.FILTER + " ORDER BY a.starts_at ASC, a.id ASC LIMIT #{limit} OFFSET #{offset}</script>")
     List<ActivityRow> search(@Param("userId") Long userId, @Param("now") LocalDateTime now,
                              @Param("keyword") String keyword, @Param("status") String status, @Param("category") String category,
+                             @Param("startFromUtc") LocalDateTime startFromUtc, @Param("startUntilUtc") LocalDateTime startUntilUtc,
                              @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} WHERE a.id=#{id}")

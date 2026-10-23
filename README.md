@@ -61,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 
 创建时可选填报名截止时间，必须晚于当前且早于开始，发布后固定；不填则活动开始时截止，复制时清空。截止后停止报名、重报和加入候补，已报名/候补仍可在开始前取消，已有候补继续FIFO递补；页面独立显示“报名已截止”。V12新增可空字段，历史不回填，详情与迁移合同见 [报名截止时间](docs/activity-lifecycle.md#报名截止时间)。
 
-发现页支持标题或地点搜索、八种状态筛选和真实后端分页，默认每页 12 条。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
+发现页支持标题或地点搜索、八种状态、分类及按北京时间开始日期筛选，默认每页 12 条。日期可只填一端，范围包含首尾两天，管理活动列表使用相同规则。搜索条件保存在 URL，刷新、登录后回详情和返回列表仍保留；统计覆盖整个筛选集合，报名后返回会重新读取。接口、统计快照与代码阅读路径见 [活动搜索、筛选与分页](docs/activity-discovery.md)。
 
 活动另有技术交流、运动户外、文化艺术、其他及未分类五种固定单选分类。发布默认未分类，管理员可在允许编辑时修改；活动卡片、详情和管理列表显示分类，个人报名内嵌活动响应也包含分类，操作记录展示真实前后值。公开与管理列表可叠加分类、关键词和状态查询，管理列表也保存 URL 条件、刷新与历史；旧客户端省略分类仍兼容，旧活动不推断分类。接口、迁移和阅读路径见 [活动分类指南](docs/activity-category-guide.md)。
 
@@ -136,13 +136,13 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `POST /api/me/password` | 验证原密码后修改本人密码，撤销旧登录 | 登录且需要 CSRF、改密尝试限流 |
 | `GET /api/activities`、`GET /api/activities/{id}` | 保留原数组列表、详情 | 公开 |
 | `GET /api/activities/{id}/cover` | 当前 JPEG 封面，支持 ETag 校验；未设置返回 404 | 公开，不含个人状态 |
-| `GET /api/activities/search` | 搜索、状态筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
+| `GET /api/activities/search` | 关键词、状态、分类、开始日期筛选、分页与全筛选范围统计 | 公开，个人报名状态只属于当前登录身份 |
 | `GET /api/admin/overview` | 活动与报名概览 | 管理员 |
 | `GET /api/admin/attendance` | 按北京时间活动开始日期查看当前签到分析，全量统计与分页对比 | 管理员 |
 | `GET /api/admin/monitoring` | 当前实例的请求、耗时和连接池快照 | 管理员 |
 | `GET /api/admin/audit-logs` | 操作类型、活动 ID 筛选与分页，不返回长文本变更 | 管理员 |
 | `GET /api/admin/audit-logs/{id}` | 操作时快照与完整字段变更，缺失返回 404 | 管理员 |
-| `GET /api/admin/activities` | 搜索、状态筛选、分页管理列表 | 管理员 |
+| `GET /api/admin/activities` | 关键词、状态、分类、开始日期筛选及分页管理列表 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 分页、按报名与签到状态查看名单及整场签到统计 | 管理员 |
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 确认已开始活动的有效报名者签到，保留首次记录 | 管理员且需要 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 导出全部符合两类筛选的 CSV，超 20,000 条返回 413 | 管理员 |

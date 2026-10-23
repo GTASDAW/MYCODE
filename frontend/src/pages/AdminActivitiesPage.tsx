@@ -5,6 +5,8 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { activityCategoryFilterOptions } from "../activityCategory";
+import { ActivityStartDateFields } from "../ActivityStartDateFields";
+import { activityStartDateRangeError } from "../activityStartDate";
 import { adminActivityListPath, defaultAdminActivityQuery, parseAdminActivityQuery, serializeAdminActivityQuery } from "../adminActivityQuery";
 import { ErrorState, PageHeading } from "../components";
 import type { ActivityCategoryFilter, ActivityFilter, AdminActivityQuery } from "../types";
@@ -21,6 +23,9 @@ export function AdminActivitiesPage() {
   const currentSearch = useRef(canonicalSearch);
   currentSearch.current = canonicalSearch;
   const [keywordDraft, setKeywordDraft] = useState(query.keyword);
+  const [startDateFromDraft, setStartDateFromDraft] = useState(query.startDateFrom ?? "");
+  const [startDateToDraft, setStartDateToDraft] = useState(query.startDateTo ?? "");
+  const [dateError, setDateError] = useState<string | null>(null);
   const [normalizationNotice, setNormalizationNotice] = useState(notice);
   const resource = useAdminRead(signal => api.adminActivities(query, signal), `activity-management:${canonicalSearch}`);
   const total = resource.data?.total ?? 0;
@@ -29,14 +34,18 @@ export function AdminActivitiesPage() {
 
   useEffect(() => {
     setKeywordDraft(query.keyword);
+    setStartDateFromDraft(query.startDateFrom ?? "");
+    setStartDateToDraft(query.startDateTo ?? "");
+    setDateError(null);
     if (notice) setNormalizationNotice(notice);
     if (location.search !== canonicalSearch)
       navigate(adminActivityListPath(query), { replace: true });
-  }, [location.search, canonicalSearch, query.keyword, notice, navigate]);
+  }, [location.search, canonicalSearch, query.keyword, query.startDateFrom, query.startDateTo, notice, navigate]);
   useEffect(() => {
     if (correctingPage && currentSearch.current === canonicalSearch && auth.isCurrentAuthenticationRequest(generation))
       navigate(adminActivityListPath({ ...query, page: lastPage }), { replace: true });
-  }, [correctingPage, lastPage, generation, canonicalSearch, query.keyword, query.status, query.category, query.page, query.pageSize, navigate]);
+  }, [correctingPage, lastPage, generation, canonicalSearch, query.keyword, query.status, query.category,
+    query.startDateFrom, query.startDateTo, query.page, query.pageSize, navigate]);
 
   function changeQuery(next: AdminActivityQuery) {
     setNormalizationNotice(null);
@@ -45,14 +54,18 @@ export function AdminActivitiesPage() {
   }
   const pageSizeOptions = [...new Set([10, 20, 50, query.pageSize])].sort((a, b) => a - b);
   return <div className="page-container">
-    <PageHeading title="活动管理" section="管理后台" description="按关键词、状态和分类查询活动，编辑信息或查看报名名单。"
+    <PageHeading title="活动管理" section="管理后台" description="按关键词、状态、分类和开始日期查询活动，编辑信息或查看报名名单。"
       extra={<Link to="/admin/activities/new"><Button type="primary" icon={<PlusOutlined aria-hidden="true" />}>发布活动</Button></Link>} />
     {normalizationNotice && <Alert className="discovery-notice" type="warning" showIcon title={normalizationNotice}
       closable onClose={() => setNormalizationNotice(null)} />}
     <Card className="table-card" title="活动列表">
       <form className="filter-form" onSubmit={event => {
         event.preventDefault();
-        changeQuery({ ...query, keyword: keywordDraft.trim(), page: 1 });
+        const error = activityStartDateRangeError(startDateFromDraft, startDateToDraft);
+        setDateError(error);
+        if (error) return;
+        changeQuery({ ...query, keyword: keywordDraft.trim(), startDateFrom: startDateFromDraft || undefined,
+          startDateTo: startDateToDraft || undefined, page: 1 });
       }}>
         <div className="filter-field">
           <label htmlFor="activity-keyword">关键词</label>
@@ -74,9 +87,14 @@ export function AdminActivitiesPage() {
           <Select<ActivityCategoryFilter> id="activity-category" aria-label="活动分类" value={query.category}
             options={activityCategoryFilterOptions} onChange={category => changeQuery({ ...query, category, page: 1 })} />
         </div>
+        <ActivityStartDateFields prefix="activity" from={startDateFromDraft} to={startDateToDraft} error={dateError}
+          onFromChange={setStartDateFromDraft} onToChange={setStartDateToDraft} onError={setDateError} />
         <div className="filter-actions">
           <Button type="primary" htmlType="submit" icon={<SearchOutlined aria-hidden="true" />}>查询</Button>
-          <Button onClick={() => { setKeywordDraft(""); changeQuery({ ...defaultAdminActivityQuery, pageSize: query.pageSize }); }}>重置</Button>
+          <Button onClick={() => {
+            setKeywordDraft(""); setStartDateFromDraft(""); setStartDateToDraft(""); setDateError(null);
+            changeQuery({ ...defaultAdminActivityQuery, pageSize: query.pageSize });
+          }}>重置</Button>
           <Button aria-label="刷新活动" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading} onClick={resource.retry}>刷新活动</Button>
         </div>
       </form>
