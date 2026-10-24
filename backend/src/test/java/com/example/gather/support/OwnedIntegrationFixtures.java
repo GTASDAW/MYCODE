@@ -25,10 +25,21 @@ public final class OwnedIntegrationFixtures {
         var transaction = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         transaction.executeWithoutResult(status -> {
             if (!"activity_platform_test".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))
-                || !"12".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
-                throw new IllegalStateException("Fixture cleanup requires the dedicated V12 test database");
+                || !"13".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
+                throw new IllegalStateException("Fixture cleanup requires the dedicated V13 test database");
             }
-            jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
+            jdbc.queryForList("SELECT id, credential_version, avatar_image, avatar_hash FROM users LIMIT 0");
+            if (!Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND IS_NULLABLE='YES' "
+                + "AND ((COLUMN_NAME='avatar_image' AND DATA_TYPE='mediumblob') OR (COLUMN_NAME='avatar_hash' "
+                + "AND DATA_TYPE='char' AND CHARACTER_MAXIMUM_LENGTH=64 AND CHARACTER_SET_NAME='ascii'))", Long.class)))
+                throw new IllegalStateException("Fixture cleanup requires the V13 avatar column types");
+            if (!Long.valueOf(1).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS "
+                + "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND CONSTRAINT_NAME='chk_user_avatar_pair' AND ENFORCED='YES'", Long.class)))
+                throw new IllegalStateException("Fixture cleanup requires the enforced V13 avatar pair constraint");
+            noReferences(jdbc, "SELECT COUNT(*) FROM users WHERE (avatar_image IS NULL) <> (avatar_hash IS NULL) "
+                + "OR (avatar_image IS NOT NULL AND (NOT REGEXP_LIKE(avatar_hash, '^[0-9a-f]{64}$', 'c') "
+                + "OR BINARY avatar_hash <> BINARY SHA2(avatar_image,256)))", List.of(), "Invalid existing avatar pairs or checksums");
             jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
             jdbc.queryForList("SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0");
             if (!activities.isEmpty()) {

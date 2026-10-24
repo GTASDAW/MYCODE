@@ -373,27 +373,29 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert(!db.calls.some(sql => sql.includes('activity_favorites')));
 });
 
-test('current performance preparation refuses missing V12, registration-deadline, end-time, cover or category before seed reads or application writes', async () => {
-  for (const missing of ['migration', 'category', 'registration-deadline', 'end-time', 'cover']) {
+test('current performance preparation refuses missing V13, avatar, registration-deadline, end-time, cover or category before seed reads or application writes', async () => {
+  for (const missing of ['migration', 'category', 'registration-deadline', 'end-time', 'cover', 'avatar']) {
     const calls = [];
     const db = { async query(sql) {
       calls.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ name: 'activity_platform_perf', serverUuid: 'isolated-server', version: '8.4.7' }]];
-      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', ...(missing === 'migration' ? [] : ['12'])]
+      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', ...(missing === 'migration' ? [] : ['13'])]
         .map(version => ({ version, success: 1 }))];
       if (sql.includes('category') && missing === 'category') throw new Error('Category schema absent');
       if (sql.includes('registration_deadline') && missing === 'registration-deadline') throw new Error('Registration deadline schema absent');
       if (sql.includes('ends_at') && missing === 'end-time') throw new Error('End-time schema absent');
       if (sql.includes('cover_hash') && missing === 'cover') throw new Error('Cover schema absent');
+      if (sql.includes('information_schema.COLUMNS') && missing === 'avatar') throw new Error('Avatar schema absent');
       return [[]];
     } };
-    await assert.rejects(verifyPerformanceDatabase(db, {}), missing === 'migration' ? /migrations must be applied/ : missing === 'cover' ? /Cover schema absent/ : missing === 'end-time' ? /End-time schema absent/ : missing === 'registration-deadline' ? /Registration deadline schema absent/ : /Category schema absent/);
+    await assert.rejects(verifyPerformanceDatabase(db, {}), missing === 'migration' ? /migrations must be applied/ : missing === 'avatar' ? /Avatar schema absent/ : missing === 'cover' ? /Cover schema absent/ : missing === 'end-time' ? /End-time schema absent/ : missing === 'registration-deadline' ? /Registration deadline schema absent/ : /Category schema absent/);
     assert(!calls.some(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)));
     assert(!calls.some(sql => sql.includes('COUNT(*) FROM users')));
     assert.equal(calls.some(sql => sql.includes('category')), missing !== 'migration');
-    assert.equal(calls.some(sql => sql.includes('ends_at')), ['registration-deadline', 'end-time', 'cover'].includes(missing));
-    assert.equal(calls.some(sql => sql.includes('registration_deadline')), ['registration-deadline', 'end-time', 'cover'].includes(missing));
-    assert.equal(calls.some(sql => sql.includes('cover_hash')), missing === 'cover');
+    assert.equal(calls.some(sql => sql.includes('ends_at')), ['registration-deadline', 'end-time', 'cover', 'avatar'].includes(missing));
+    assert.equal(calls.some(sql => sql.includes('registration_deadline')), ['registration-deadline', 'end-time', 'cover', 'avatar'].includes(missing));
+    assert.equal(calls.some(sql => sql.includes('cover_hash')), ['cover', 'avatar'].includes(missing));
+    assert.equal(calls.some(sql => sql.includes('avatar_image')), missing === 'avatar');
   }
 });
 
@@ -408,7 +410,7 @@ test('historical V2 performance preparation reaches seed checks without requirin
     assert.fail('Historical V2 preparation queried a current-only field or table.');
   } };
   await assert.rejects(verifyPerformanceDatabase(db, { phase: 'A1' }), error => error === seedBoundary);
-  assert(!calls.some(sql => /registration_deadline|ends_at|cover_image|cover_hash|category|credential_version|checked_in|notifications|activity_audit_logs/.test(sql)));
+  assert(!calls.some(sql => /avatar_image|avatar_hash|registration_deadline|ends_at|cover_image|cover_hash|category|credential_version|checked_in|notifications|activity_audit_logs/.test(sql)));
 });
 
 test('external check-in audit references reject performance cleanup before any deletion', async () => {

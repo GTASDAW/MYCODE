@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 ```
 
-脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表，V10 增加活动封面及内容摘要，V11 增加可空结束时间，V12 增加可空报名截止时间；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
+脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表，V10 增加活动封面及内容摘要，V11 增加可空结束时间，V12 增加可空报名截止时间，V13 增加默认空的用户头像及成对摘要；不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。
 
 ## 演示账号
 
@@ -80,6 +80,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
 管理员在活动报名名单中查看整场有效报名、已签到和未签到人数，按账号或昵称关键词、报名与签到状态共同筛选；条件存于URL，刷新、登录和详情返回保留，整场统计不随筛选改变。活动开始后可手工确认有效报名者到场，首次时间和操作人保留，不提供撤销或自动截止。导出 CSV 使用相同已提交条件，包含全部匹配记录，最多 20,000 条，采用 UTF-8 BOM、北京时间与面向 Excel 查看用途的文本保护；空集合仅有表头。合同、事务、下载安全与演示见 [签到与 CSV 导出指南](docs/checkin-export-guide.md)。
 
 也可以从登录页进入“注册账号”，创建自己的普通用户。注册成功后需要登录；账号菜单中的“个人中心”可以修改昵称，登录名保持固定。昵称修改后当前页面同步更新，其他独立会话在下一次读取当前用户时取得最新资料。个人中心另有修改本人密码卡片，成功后需重新登录，其他旧会话在下次请求失效；未知提交结果提供手动重新登录确认。接口、安全规则和阅读路径见 [用户注册与个人中心](docs/account-guide.md) 与 [修改密码及会话失效](docs/password-change-guide.md)。
+
+个人中心可上传、更换或移除本人头像，账号菜单同步显示；支持 PNG/JPEG、最大 2 MiB，服务端真实解码后中心裁切并重编码为 256×256 JPEG。图片存于数据库，只经当前本人认证读取，失败显示默认头像；头像与昵称独立保存，不覆盖未保存昵称。V13 历史头像保持为空，不支持粘贴网络图片 URL，详见 [头像合同与验证](docs/account-guide.md#本人头像)。
 
 后台“操作记录”按活动 ID 与操作类型筛选，支持分页、刷新、URL 条件与详情抽屉。成功创建、实际编辑、首次取消和首次签到与业务一起提交；详情完整展示字段前后值，活动标题与人员名称保留操作时快照。重复取消、重复签到或无变化编辑不新增，每次创建新活动各记一条；历史事件不补造，也没有修改或删除记录接口。事务、白名单和精确清理见 [管理员操作记录](docs/audit-log-guide.md)。
 
@@ -133,6 +135,9 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `POST /api/auth/logout` | 退出 | 需要 CSRF |
 | `GET /api/auth/me` | 从数据库读取当前用户最新资料 | 登录 |
 | `PATCH /api/me/profile` | 修改当前用户昵称 | 登录且需要 CSRF |
+| `GET /api/me/avatar` | 读取本人 JPEG 头像，no-store；未设置返回 404 | 登录，仅本人 |
+| `POST /api/me/avatar` | multipart `file` 上传或替换本人头像，返回当前用户资料 | 登录且需要 CSRF |
+| `DELETE /api/me/avatar` | 移除本人头像，重复成功，返回当前用户资料 | 登录且需要 CSRF |
 | `POST /api/me/password` | 验证原密码后修改本人密码，撤销旧登录 | 登录且需要 CSRF、改密尝试限流 |
 | `GET /api/activities`、`GET /api/activities/{id}` | 保留原数组列表、详情 | 公开 |
 | `GET /api/activities/{id}/cover` | 当前 JPEG 封面，支持 ETag 校验；未设置返回 404 | 公开，不含个人状态 |
@@ -235,7 +240,7 @@ npm run test:e2e
 
 后端提供手动启用的 `coverage` Maven profile，固定使用 JaCoCo 0.8.15，复用现有 Surefire/JUnit 测试。普通 `mvnw test`、`mvnw verify` 和现有 CI 不启用覆盖率，也不设置最低覆盖率门槛。
 
-先启动并核对本项目的真实 MySQL，确认独立测试库为 `activity_platform_test`、迁移为 V12；不要连接演示业务库或生产库。以下 PowerShell 命令从仓库根目录执行，JDK 路径和账号为既有本地配置：
+先启动并核对本项目的真实 MySQL，确认独立测试库为 `activity_platform_test`、迁移为 V13；不要连接演示业务库或生产库。以下 PowerShell 命令从仓库根目录执行，JDK 路径和账号为既有本地配置：
 
 ```powershell
 $env:JAVA_HOME = (Resolve-Path '.\.tools\java\jdk-21.0.12.1+1').Path
@@ -288,7 +293,7 @@ GitHub Actions 对普通 Push、面向main的PR运行快速CI：前端测试/构
 
 1. 从 `frontend/src/api.ts` 看页面如何发送 HTTP 请求。
 2. 从 `backend/src/main/java/com/example/gather` 的 Controller、Service、Mapper 跟踪请求。
-3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类、V9 收藏表、V10 活动封面、V11 可空结束时间及 V12 报名截止时间的增量迁移。
+3. 从 `backend/src/main/resources/db/migration` 看六张业务表、唯一约束、V2 候补状态、V3 活动取消元数据、V4 通知历史、V5 签到字段、V6 管理员操作记录、V7 用户凭据版本、V8 活动分类、V9 收藏表、V10 活动封面、V11 可空结束时间、V12 报名截止时间及 V13 本人头像的增量迁移。
 4. 用一个报名请求串起 React → HTTP → Spring Security → Service → SQL → MySQL → 页面刷新。
 
 - [源码阅读指南](docs/learning-guide.md)

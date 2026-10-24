@@ -116,6 +116,7 @@ class AccountIntegrationTest {
                     "displayName", "  " + DISPLAY_NAME + "  ", "role", "ADMIN", "id", demoId, "userId", demoId))))
             .andExpect(status().isCreated()).andExpect(jsonPath("$.username").value(username))
             .andExpect(jsonPath("$.displayName").value(DISPLAY_NAME)).andExpect(jsonPath("$.role").value("USER"))
+            .andExpect(jsonPath("$.avatarUrl").isEmpty())
             .andExpect(jsonPath("$.password").doesNotExist()).andExpect(jsonPath("$.passwordHash").doesNotExist()).andReturn();
         var row = users.findByUsername(username);
         assertThat(row.id()).isNotEqualTo(demoId);

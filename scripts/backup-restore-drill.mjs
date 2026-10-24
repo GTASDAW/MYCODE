@@ -61,7 +61,12 @@ class Api {
     const response=await fetch(this.origin+path,{method,headers,body,redirect:'error',signal:AbortSignal.timeout(20000)});
     for(const cookie of response.headers.getSetCookie()) {const [key,value]=cookie.split(';')[0].split('=');this.cookies.set(key,value);}
     check(response.status===status,`恢复演练接口校验失败（HTTP ${response.status}）`);
-    if(response.headers.get('Content-Type')?.startsWith('image/jpeg')) return Buffer.from(await response.arrayBuffer());
+    if(response.headers.get('Content-Type')?.startsWith('image/jpeg')) {
+      if(new URL(path,this.origin).pathname==='/api/me/avatar') {
+        check(response.headers.get('Cache-Control')==='no-store'&&response.headers.get('X-Content-Type-Options')==='nosniff','恢复头像必须禁止缓存并禁止 MIME 嗅探');
+      }
+      return Buffer.from(await response.arrayBuffer());
+    }
     return response.status===204?null:response.json();
   }
   login(username,password) {return this.call('/api/auth/login',{method:'POST',form:{username,password}});}
@@ -74,6 +79,18 @@ function pngFixture() {
   const rows=Buffer.alloc((48*3+1)*27);
   for(let y=0;y<27;y++) for(let x=0;x<48;x++) {const offset=y*(48*3+1)+1+x*3;rows[offset]=40+x*3;rows[offset+1]=100+y*4;rows[offset+2]=220;}
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(rows)),chunk('IEND',Buffer.alloc(0))]);
+}
+function jpegDimensions(bytes) {
+  check(bytes[0]===255&&bytes[1]===216,'头像样本必须是 JPEG');
+  for(let position=2;position+8<bytes.length;) {
+    check(bytes[position]===255,'头像 JPEG 标记损坏');
+    const marker=bytes[position+1],length=bytes.readUInt16BE(position+2);
+    check(length>=2&&position+2+length<=bytes.length,'头像 JPEG 段长度损坏');
+    if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker))
+      return {height:bytes.readUInt16BE(position+5),width:bytes.readUInt16BE(position+7)};
+    position+=2+length;
+  }
+  throw new DrillError('头像 JPEG 缺少尺寸信息');
 }
 async function createActivity(admin,title,capacity=1) {
   return admin.call('/api/admin/activities',{method:'POST',status:201,data:{title,description:'恢复演练：中文、emoji 😀、逗号,引号"与换行\n第二行',
@@ -103,6 +120,11 @@ async function prepareFixture(config,origin,runId,adminPassword) {
   }
   const first=new Api(origin),second=new Api(origin);
   await first.login(users[0].username,password);await second.login(users[1].username,password);
+  const avatarFile=new FormData();avatarFile.append('file',new Blob([pngFixture()],{type:'image/png'}),'restore-avatar.png');
+  const profile=await first.call('/api/me/avatar',{method:'POST',multipart:avatarFile});
+  const avatar=await first.call('/api/me/avatar'),dimensions=jpegDimensions(avatar);
+  check(dimensions.width===256&&dimensions.height===256&&profile.avatarUrl===`/api/me/avatar?v=${digest(avatar)}`,'恢复样本头像必须为256像素方形JPEG且资料摘要一致');
+  await second.call(profile.avatarUrl,{status:404});
   const main=await createActivity(admin,`备份恢复：中文 😀, 分号; ${runId.slice(0,8)}`);
   check(main.endsAt&&Date.parse(main.endsAt)>Date.parse(main.startsAt),'恢复样本非空结束时间缺失');
   check(main.registrationDeadline&&Date.parse(main.registrationDeadline)>Date.now()
@@ -126,7 +148,8 @@ async function prepareFixture(config,origin,runId,adminPassword) {
     const [registration]=await db.execute("INSERT INTO registrations(activity_id,user_id,status) VALUES(?,?,'ACTIVE')",[startedId,users[0].id]);registrationId=registration.insertId;
   } finally {await db.end();}
   await admin.call(`/api/admin/activities/${startedId}/registrations/${registrationId}/check-in`,{method:'POST'});
-  return {main:withCover,cancelledId:cancelled.id,startedId,users,password,imageHash:digest(image),imageBytes:image.length};
+  return {main:withCover,cancelledId:cancelled.id,startedId,users,password,imageHash:digest(image),imageBytes:image.length,
+    avatarHash:digest(avatar),avatarBytes:avatar.length};
 }
 
 async function startWeb(port,apiPort) {
@@ -160,7 +183,13 @@ async function verifyRecovered(origin,fixture,adminPassword) {
   const legacy=await admin.call(`/api/activities/${fixture.startedId}`);
   check(legacy.endsAt===null&&legacy.registrationDeadline===null,'恢复后的历史空结束时间或截止时间不一致');
   const first=new Api(origin),second=new Api(origin);
-  await first.login(fixture.users[0].username,fixture.password);await second.login(fixture.users[1].username,fixture.password);
+  const owner=await first.login(fixture.users[0].username,fixture.password);
+  const other=await second.login(fixture.users[1].username,fixture.password);
+  check(owner.avatarUrl===`/api/me/avatar?v=${fixture.avatarHash}`&&other.avatarUrl===null,'恢复后的本人头像元数据或他人空头像不一致');
+  const avatar=await first.call(owner.avatarUrl),dimensions=jpegDimensions(avatar);
+  check(digest(avatar)===fixture.avatarHash&&avatar.length===fixture.avatarBytes&&dimensions.width===256&&dimensions.height===256,'恢复后的头像完整字节、摘要或256像素尺寸不一致');
+  await second.call(owner.avatarUrl,{status:404});
+  await new Api(origin).call(owner.avatarUrl,{status:401});
   const history=await first.call('/api/me/registrations/search?pageSize=100');
   check(history.items.some(row=>row.activity.id===fixture.startedId&&row.checkedInAt&&row.activity.registrationDeadline===null),'恢复后的本人签到记录缺失');
   check(history.items.some(row=>row.activity.id===fixture.main.id&&row.status==='WAITING'&&row.activity.endsAt===fixture.main.endsAt&&row.activity.registrationDeadline===fixture.main.registrationDeadline),'恢复后的候补记录或截止时间缺失');
@@ -169,7 +198,7 @@ async function verifyRecovered(origin,fixture,adminPassword) {
   check(favorites.items.some(row=>row.activity.id===fixture.main.id&&row.activity.endsAt===fixture.main.endsAt&&row.activity.registrationDeadline===fixture.main.registrationDeadline),'恢复后的收藏、结束时间或截止时间缺失');
   check((await second.call('/api/me/notifications?status=ALL')).total>0,'恢复后的递补通知缺失');
   check((await admin.call(`/api/admin/audit-logs?activityId=${fixture.main.id}`)).total>=2,'恢复后的操作记录缺失');
-  return {admin,checks:['nullable-and-nonnull-registration-deadline','nullable-and-nonnull-end-time','cover-byte-sha256','credentials-and-roles','active-waiting-cancelled-history','check-in','favorites','notifications','audit-log']};
+  return {admin,checks:['nullable-and-nonnull-registration-deadline','nullable-and-nonnull-end-time','cover-byte-sha256','avatar-byte-sha256-256-jpeg','avatar-owner-authentication-and-no-store','credentials-and-roles','active-waiting-cancelled-history','check-in','favorites','notifications','audit-log']};
 }
 async function verifyConstraints(config,fixture) {
   const db=await connection(config);
@@ -184,10 +213,14 @@ async function verifyConstraints(config,fixture) {
       ['UPDATE activities SET ends_at=starts_at-INTERVAL 1 MICROSECOND WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
       ['UPDATE activities SET registration_deadline=starts_at WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
       ['UPDATE activities SET registration_deadline=starts_at+INTERVAL 1 MICROSECOND WHERE id=?',[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE users SET avatar_hash=NULL WHERE id=?',[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE users SET avatar_image=NULL WHERE id=?',[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE users SET avatar_hash=REPEAT('g',64) WHERE id=?",[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE users SET avatar_image=X'' WHERE id=?",[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
     ]) {
       let rejected=false;
       try {await db.execute(sql,args);} catch(error) {rejected=error.code===code;}
-      check(rejected,'恢复后的外键、唯一键、名额、结束时间或截止时间约束未按预期拒绝非法数据');
+      check(rejected,'恢复后的外键、唯一键、名额、结束时间、截止时间或头像约束未按预期拒绝非法数据');
     }
     await db.execute('UPDATE activities SET registration_deadline=NULL WHERE id=?',[fixture.main.id]);
     const [[nullable]]=await db.execute('SELECT registration_deadline FROM activities WHERE id=?',[fixture.main.id]);
@@ -195,6 +228,9 @@ async function verifyConstraints(config,fixture) {
     await db.execute('UPDATE activities SET registration_deadline=starts_at-INTERVAL 1 MICROSECOND WHERE id=?',[fixture.main.id]);
     const [[strict]]=await db.execute('SELECT registration_deadline=starts_at-INTERVAL 1 MICROSECOND AS valid FROM activities WHERE id=?',[fixture.main.id]);
     check(Number(strict.valid)===1,'恢复后的报名截止时间约束必须允许早于开始时间一微秒');
+    await db.execute('UPDATE users SET avatar_image=NULL,avatar_hash=NULL WHERE id=?',[fixture.users[0].id]);
+    const [[emptyAvatar]]=await db.execute('SELECT avatar_image,avatar_hash FROM users WHERE id=?',[fixture.users[0].id]);
+    check(emptyAvatar.avatar_image===null&&emptyAvatar.avatar_hash===null,'恢复后的头像必须允许成对空值');
     await db.rollback();
   } finally {await db.end();}
 }
@@ -240,7 +276,7 @@ export async function runDrill() {
   const runId=randomUUID(),directory=join(root,'.runtime/restore-drills',runId);
   await secureRuntimeDirectory(dirname(directory));
   await mkdir(directory,{recursive:true,mode:0o700});check(await realpath(directory)===resolve(directory),'演练目录不能是符号链接');
-  const report={runId,startedAt:new Date().toISOString(),phase:'capture-source',completed:false,sourcePreserved:false,checks:[],browser:[]};
+  const report={runId,schemaVersion:13,startedAt:new Date().toISOString(),phase:'capture-source',completed:false,sourcePreserved:false,checks:[],browser:[]};
   const children=[],webServers=[];let adminDb,initial,daemon;
   try {
     initial=await fullSnapshot(source);
@@ -288,7 +324,7 @@ export async function runDrill() {
     const originB=await application(second,ports.b,'b');await bindApiToDatabase(second,new Api(originB),randomUUID());
     await verifyConstraints(second,fixture);
     const verified=await verifyRecovered(originB,fixture,process.env.BACKUP_DEMO_ADMIN_PASSWORD);report.checks=verified.checks;
-    report.checks.push('foreign-key-unique-capacity-end-time-and-registration-deadline-enforcement');
+    report.checks.push('foreign-key-unique-capacity-end-time-registration-deadline-and-avatar-pair-enforcement');
     webServers.push(await startWeb(ports.web,ports.b));
     report.phase='verify-browser';
     report.browser=await verifyBrowser(`http://127.0.0.1:${ports.web}`,fixture,verified.admin,directory);

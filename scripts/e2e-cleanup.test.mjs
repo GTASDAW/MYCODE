@@ -380,18 +380,21 @@ test('a fixture account referenced as canceller outside this run refuses all cle
   assert.deepEqual(connection.state.users, [user]);
 });
 
-test('V12 and complete registration-deadline, end-time, cover, favorite, category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
-  for (const absent of ['migration', 'registration-deadline-column', 'end-time-column', 'cover-columns', 'category-column', 'credential-column', 'notification-table', 'check-in-columns', 'audit-table', 'favorite-table']) {
+test('V13 and complete avatar, registration-deadline, end-time, cover, favorite, category, credential, notification, check-in and audit schemas are required before fixture writes or cleanup', async () => {
+  for (const absent of ['migration', 'registration-deadline-column', 'end-time-column', 'cover-columns', 'category-column', 'credential-column', 'avatar-columns', 'avatar-constraint', 'avatar-checksum', 'notification-table', 'check-in-columns', 'audit-table', 'favorite-table']) {
     const queries = [];
     const connection = { async execute(sql) {
       queries.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ databaseName: 'activity_platform_test', serverUuid: 'verified-server' }]];
-      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', ...(absent === 'migration' ? [] : ['12'])].map(version => ({ version }))]];
+      if (sql.includes('flyway_schema_history')) return [[...['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', ...(absent === 'migration' ? [] : ['13'])].map(version => ({ version }))]];
       if (sql.includes('registration_deadline') && absent === 'registration-deadline-column') throw new Error('Registration deadline schema absent');
       if (sql.includes('ends_at') && absent === 'end-time-column') throw new Error('Activity end-time schema absent');
       if (sql.includes('cover_hash, cover_image') && absent === 'cover-columns') throw new Error('Cover schema absent');
       if (sql.includes('description, category,') && absent === 'category-column') throw new Error('Activity category schema absent');
       if (sql.includes('credential_version') && absent === 'credential-column') throw new Error('Credential version schema absent');
+      if (sql.includes('information_schema.COLUMNS')) return [absent === 'avatar-columns' ? [] : [{name:'avatar_hash',type:'char',nullable:'YES',charset:'ascii',length:64},{name:'avatar_image',type:'mediumblob',nullable:'YES'}]];
+      if (sql.includes('information_schema.TABLE_CONSTRAINTS')) return [absent === 'avatar-constraint' ? [] : [{enforced:'YES',clause:"((avatar_image IS NULL AND avatar_hash IS NULL) OR (avatar_image IS NOT NULL AND avatar_hash IS NOT NULL AND OCTET_LENGTH(avatar_image) BETWEEN 1 AND 2097152 AND REGEXP_LIKE(avatar_hash, '^[0-9a-f]{64}$', 'c'))) IS TRUE"}]];
+      if (sql.startsWith('SELECT COUNT(*) AS invalid')) return [[{invalid:absent === 'avatar-checksum' ? 1 : 0}]];
       if (sql.includes('FROM registrations') && absent === 'check-in-columns') throw new Error('Check-in schema absent');
       if (sql.includes('FROM notifications') && absent === 'notification-table') throw new Error('Notification schema absent');
       if (sql.includes('FROM activity_audit_logs') && absent === 'audit-table') throw new Error('Audit schema absent');
@@ -399,7 +402,7 @@ test('V12 and complete registration-deadline, end-time, cover, favorite, categor
       return [[]];
     } };
     await assert.rejects(verifyDatabase(connection, { host: '127.0.0.1', port: 3307, database: 'activity_platform_test' }),
-      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8\/V9\/V10\/V11\/V12/ : absent === 'registration-deadline-column' ? /Registration deadline schema absent/ : absent === 'end-time-column' ? /Activity end-time schema absent/ : absent === 'cover-columns' ? /Cover schema absent/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : absent === 'favorite-table' ? /Favorite schema absent/ : /Notification schema absent/);
+      absent === 'migration' ? /V1\/V2\/V3\/V4\/V5\/V6\/V7\/V8\/V9\/V10\/V11\/V12\/V13/ : absent === 'registration-deadline-column' ? /Registration deadline schema absent/ : absent === 'end-time-column' ? /Activity end-time schema absent/ : absent === 'cover-columns' ? /Cover schema absent/ : absent === 'category-column' ? /Activity category schema absent/ : absent === 'credential-column' ? /Credential version schema absent/ : absent.startsWith('avatar-') ? /V13|checksums are invalid/ : absent === 'check-in-columns' ? /Check-in schema absent/ : absent === 'audit-table' ? /Audit schema absent/ : absent === 'favorite-table' ? /Favorite schema absent/ : /Notification schema absent/);
     assert.equal(queries.filter(sql => /^(INSERT|UPDATE|DELETE)/.test(sql)).length, 0);
     if (absent === 'migration') assert.equal(queries.some(sql => sql.includes('FROM notifications')), false);
     else if (absent === 'registration-deadline-column') assert.ok(queries.some(sql => sql.includes('registration_deadline FROM activities LIMIT 0')));
@@ -407,7 +410,10 @@ test('V12 and complete registration-deadline, end-time, cover, favorite, categor
     else if (absent === 'cover-columns') assert.ok(queries.some(sql => sql.includes('cover_hash, cover_image FROM activities LIMIT 0')));
     else if (absent === 'category-column') assert.ok(queries.some(sql => sql.includes('description, category, registered_count')));
     else if (absent === 'notification-table') assert.ok(queries.some(sql => sql.includes('activity_title, cancellation_reason, created_at, read_at FROM notifications')));
-    else if (absent === 'credential-column') assert.ok(queries.some(sql => sql.includes('role, credential_version FROM users LIMIT 0')));
+    else if (absent === 'credential-column') assert.ok(queries.some(sql => sql.includes('role, credential_version, avatar_hash, avatar_image FROM users LIMIT 0')));
+    else if (absent === 'avatar-columns') assert.ok(queries.some(sql => sql.includes('information_schema.COLUMNS')));
+    else if (absent === 'avatar-constraint') assert.ok(queries.some(sql => sql.includes('information_schema.TABLE_CONSTRAINTS')));
+    else if (absent === 'avatar-checksum') assert.ok(queries.some(sql => sql.includes('BINARY SHA2(avatar_image,256)')));
     else if (absent === 'check-in-columns') assert.ok(queries.some(sql => sql.includes('status, checked_in_at, checked_in_by FROM registrations LIMIT 0')));
     else if (absent === 'favorite-table') assert.ok(queries.some(sql => sql.includes('created_at FROM activity_favorites LIMIT 0')));
     else assert.ok(queries.some(sql => sql.includes('occurred_at, changes_json FROM activity_audit_logs LIMIT 0')));

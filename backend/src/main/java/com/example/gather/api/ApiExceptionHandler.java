@@ -56,7 +56,7 @@ public class ApiExceptionHandler {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     ResponseEntity<ErrorView> uploadTooLarge(MaxUploadSizeExceededException exception, HttpServletRequest request) {
         mark(request, exception);
-        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ErrorView("UPLOAD_TOO_LARGE", "封面图片不能超过 2 MB。"));
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(new ErrorView("UPLOAD_TOO_LARGE", "图片不能超过 2 MB。"));
     }
 
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)

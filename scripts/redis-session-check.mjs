@@ -307,7 +307,7 @@ function recreateBackends(timeout) {
 
 async function databaseSnapshot(db) {
   const rows = {};
-  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites']) [rows[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites']) [rows[table]] = await db.query(table === 'users' ? 'SELECT *, SHA2(avatar_image,256) AS avatar_checksum FROM users ORDER BY id' : `SELECT * FROM ${table} ORDER BY id`);
   return JSON.stringify(rows);
 }
 

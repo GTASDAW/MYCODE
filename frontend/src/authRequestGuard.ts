@@ -40,6 +40,10 @@ export class AuthRequestGuard {
   private profileVersion = 0;
   private reads = 0;
   private writes = 0;
+  private avatarVersion = 0;
+  private avatarReads = 0;
+  private avatarWrites = 0;
+  private avatarListeners = new Set<() => void>();
   private authenticationListeners = new Set<() => void>();
 
   beginAuthentication(): number {
@@ -104,5 +108,46 @@ export class AuthRequestGuard {
 
   isCurrentProfileWrite(request: ProfileWrite, userId: number | undefined): boolean {
     return this.isSameAccount(request, userId) && request.sequence === this.writes;
+  }
+
+  captureAvatarVersion(): number {
+    return this.avatarVersion;
+  }
+
+  subscribeAvatarRevision(listener: () => void): () => void {
+    this.avatarListeners.add(listener);
+    return () => { this.avatarListeners.delete(listener); };
+  }
+
+  publishAvatarRevision(request: ProfileWrite, userId: number | undefined): void {
+    if (!this.isCurrentAvatarWrite(request, userId)) return;
+    this.avatarVersion++;
+    for (const listener of [...this.avatarListeners]) listener();
+  }
+
+  beginAvatarRead(userId: number): ProfileRead {
+    return { ...this.beginAccountRequest(userId), version: this.avatarVersion, sequence: ++this.avatarReads };
+  }
+
+  isCurrentAvatarRead(request: ProfileRead, userId: number | undefined): boolean {
+    return this.isSameAccount(request, userId) && request.version === this.avatarVersion &&
+      request.sequence === this.avatarReads;
+  }
+
+  beginAvatarWrite(userId: number): ProfileWrite {
+    this.avatarVersion++;
+    this.profileVersion++;
+    return { ...this.beginAccountRequest(userId), sequence: ++this.avatarWrites };
+  }
+
+  isCurrentAvatarWrite(request: ProfileWrite, userId: number | undefined): boolean {
+    return this.isSameAccount(request, userId) && request.sequence === this.avatarWrites;
+  }
+
+  finishAvatarWrite(request: ProfileWrite, userId: number | undefined): boolean {
+    if (!this.isCurrentAvatarWrite(request, userId)) return false;
+    this.avatarVersion++;
+    this.profileVersion++;
+    return true;
   }
 }

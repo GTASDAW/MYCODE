@@ -29,6 +29,7 @@ import type {
   FavoritePage,
   FavoriteQuery,
 } from "./types";
+import { safeAvatarUrl } from "./accountAvatar.ts";
 
 interface CsrfToken {
   token: string;
@@ -106,12 +107,13 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
   allowCsrfRetry = true,
-  responseType: "json" | "csv" = "json",
+  responseType: "json" | "csv" | "jpeg" = "json",
 ): Promise<T> {
   options.signal?.throwIfAborted();
   const method = options.method ?? "GET";
   const headers = new Headers(options.headers);
-  headers.set("Accept", responseType === "csv" ? "text/csv, application/json" : "application/json");
+  headers.set("Accept", responseType === "csv" ? "text/csv, application/json" :
+    responseType === "jpeg" ? "image/jpeg, application/json" : "application/json");
   if (method !== "GET" && method !== "HEAD") {
     const token = csrf ?? (await getCsrf(options.signal ?? undefined));
     headers.set(token.headerName, token.token);
@@ -138,14 +140,17 @@ async function request<T>(
 
   let body: unknown;
   const requestId = response.headers.get("X-Request-Id") ?? undefined;
-  if (response.ok && responseType === "csv") {
-    if (response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "text/csv")
-      throw new ApiError(response.status, "导出文件格式异常，请稍后重试。", "INVALID_RESPONSE", requestId);
+  if (response.ok && responseType !== "json") {
+    const image = responseType === "jpeg";
+    if (response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== (image ? "image/jpeg" : "text/csv"))
+      throw new ApiError(response.status, image ? "头像图片格式异常，请稍后重试。" : "导出文件格式异常，请稍后重试。", "INVALID_RESPONSE", requestId);
     try {
-      return await response.blob() as T;
+      const blob = await response.blob();
+      options.signal?.throwIfAborted();
+      return blob as T;
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
-      throw new ApiError(response.status, "导出文件读取失败，请稍后重试。", "INVALID_RESPONSE", requestId);
+      throw new ApiError(response.status, image ? "头像图片读取失败，请稍后重试。" : "导出文件读取失败，请稍后重试。", "INVALID_RESPONSE", requestId);
     }
   }
   if (response.status !== 204) {
@@ -283,6 +288,15 @@ async function refreshCsrf(signal?: AbortSignal, newSession = false): Promise<vo
 export const api = {
   refreshCsrf,
   me: (signal?: AbortSignal) => request<User>("/auth/me", { signal }),
+  avatar: (url: string, signal?: AbortSignal) => {
+    if (!safeAvatarUrl(url)) return Promise.reject(new ApiError(0, "头像地址无效。", "INVALID_AVATAR_URL"));
+    return request<Blob>(url.slice(4), { signal, cache: "no-store" }, true, "jpeg");
+  },
+  uploadAvatar: (file: File, signal?: AbortSignal) => {
+    const body = new FormData(); body.append("file", file);
+    return request<User>("/me/avatar", { method: "POST", body, signal });
+  },
+  removeAvatar: (signal?: AbortSignal) => request<User>("/me/avatar", { method: "DELETE", signal }),
   registerUser: (user: NewUser, signal?: AbortSignal) =>
     request<User>("/auth/register", {
       method: "POST",

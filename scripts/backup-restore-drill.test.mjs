@@ -45,3 +45,15 @@ test('rehearsal HTTP failures expose only the status rather than a response body
     await assert.rejects(api.call('/api/health'),error=>error.message.includes('503')&&!error.message.includes(secret));
   } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
+
+test('rehearsal avatar reader requires no-store and nosniff while preserving all JPEG bytes',async()=>{
+  const bytes=Buffer.from([255,216,0,128,255,217]);let cache='no-store',nosniff='nosniff';
+  const server=createServer((_,response)=>response.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':cache,'X-Content-Type-Options':nosniff}).end(bytes));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const api=new RestoreDrillApi(`http://127.0.0.1:${server.address().port}`);
+    assert.deepEqual(await api.call('/api/me/avatar?v='+'f'.repeat(64)),bytes);
+    cache='no-cache';await assert.rejects(api.call('/api/me/avatar'),/MIME/);
+    cache='no-store';nosniff='';await assert.rejects(api.call('/api/me/avatar'),/MIME/);
+  } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+});

@@ -6,24 +6,31 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { ReactNode } from "react";
 import { api, ApiError, errorMessage } from "./api";
 import { AuthRequestGuard } from "./authRequestGuard";
 import type { AccountRequest } from "./authRequestGuard";
 import type { User } from "./types";
+import { safeAvatarUrl } from "./accountAvatar";
+import { useAccountAvatar } from "./useAccountAvatar";
+import { confirmLogoutSession } from "./authRecovery";
 
 interface AuthContextValue {
   user: User | null;
+  userGeneration: number;
   loading: boolean;
   error: string | null;
   notice: string | null;
   reload: () => Promise<void>;
   login: (username: string, password: string, signal?: AbortSignal) => Promise<void>;
-  logout: () => Promise<void>;
+  logout: (signal?: AbortSignal) => Promise<void>;
   expire: () => void;
   readProfile: (signal: AbortSignal) => Promise<User>;
   updateProfile: (displayName: string, signal?: AbortSignal) => Promise<User>;
+  updateAvatar: (file: File | null, signal: AbortSignal) => Promise<User>;
+  avatarSource: string | null;
   captureAccountRequest: () => AccountRequest | null;
   isCurrentAccountRequest: (request: AccountRequest) => boolean;
   captureAuthenticationRequest: () => number;
@@ -48,9 +55,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const requests = useRef(new AuthRequestGuard());
   const currentUser = useRef<User | null>(null);
+  const [publishedGeneration, setPublishedGeneration] = useState(0);
+  const publishedUserGeneration = useRef(0);
   const publishUser = useCallback((current: User | null) => {
-    currentUser.current = current;
-    setUser(current);
+    const safe = current ? { ...current, avatarUrl: safeAvatarUrl(current.avatarUrl) } : null;
+    currentUser.current = safe;
+    publishedUserGeneration.current = requests.current.captureAuthentication();
+    setUser(safe);
+    setPublishedGeneration(requests.current.captureAuthentication());
   }, []);
 
   const reload = useCallback(async () => {
@@ -98,18 +110,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw err;
     }
   };
-  const logout = async () => {
+  const logout = async (signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     const currentGeneration = requests.current.beginAuthentication();
-    await api.logout();
-    if (!requests.current.isCurrentAuthentication(currentGeneration))
-      throw new ApiError(
-        0,
-        "账号状态已改变，请重新检查登录状态。",
-        "AUTH_STATE_CHANGED",
-      );
-    publishUser(null);
-    setError(null);
-    setNotice(null);
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    const unsubscribe = requests.current.subscribeAuthentication(abort);
+    const isCurrent = () => !controller.signal.aborted && requests.current.isCurrentAuthentication(currentGeneration);
+    const cancelled = () => new DOMException("Logout authentication changed", "AbortError");
+    try {
+      try {
+        await api.logout(controller.signal);
+      } catch {
+        if (!isCurrent()) throw cancelled();
+        let confirmed: Awaited<ReturnType<typeof confirmLogoutSession>>;
+        try {
+          confirmed = await confirmLogoutSession({ signal: controller.signal, isCurrent,
+            readSession: api.me, refreshCsrf: recoverySignal => api.refreshCsrf(recoverySignal, true) });
+        } catch {
+          if (!isCurrent()) throw cancelled();
+          const message = "退出结果未确认，请重新登录确认。";
+          publishUser(null); setError(message); setNotice(message);
+          throw new ApiError(0, message, "LOGOUT_UNCONFIRMED");
+        }
+        if (!isCurrent()) throw cancelled();
+        publishUser(confirmed.user);
+        setNotice(null);
+        setError(confirmed.csrfReady ? null : "安全凭证暂不可用，请重新加载页面后重试。");
+        if (confirmed.user) throw new ApiError(0, confirmed.csrfReady
+          ? "退出未完成，当前仍处于登录状态，请重试。"
+          : "退出未完成，当前仍处于登录状态。安全凭证暂不可用，请重新加载页面后重试。", "LOGOUT_NOT_COMPLETED");
+        return;
+      }
+      if (!isCurrent()) throw cancelled();
+      publishUser(null);
+      setError(null);
+      setNotice(null);
+    } finally {
+      unsubscribe();
+      signal?.removeEventListener("abort", abort);
+    }
   };
   const expire = useCallback(() => {
     requests.current.beginAuthentication();
@@ -189,7 +230,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const readProfile = useCallback(async (signal: AbortSignal) => {
     const userId = currentUser.current?.id;
-    if (userId === undefined)
+    if (userId === undefined || !requests.current.isCurrentAuthentication(publishedUserGeneration.current))
       throw new DOMException("Authentication changed", "AbortError");
     const ticket = requests.current.beginProfileRead(userId);
     try {
@@ -220,12 +261,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [expire, publishUser]);
 
+  const updateAvatar = useCallback(async (file: File | null, signal: AbortSignal) => {
+    signal.throwIfAborted();
+    const userId = currentUser.current?.id;
+    if (userId === undefined || !requests.current.isCurrentAuthentication(publishedUserGeneration.current))
+      throw new DOMException("Authentication changed", "AbortError");
+    const ticket = requests.current.beginAvatarWrite(userId);
+    const current = () => !signal.aborted && requests.current.isCurrentAvatarWrite(ticket, currentUser.current?.id);
+    try {
+      const updated = file ? await api.uploadAvatar(file, signal) : await api.removeAvatar(signal);
+      if (!current() || !requests.current.finishAvatarWrite(ticket, currentUser.current?.id))
+        throw new DOMException("Avatar request cancelled", "AbortError");
+      if (updated.id !== userId) {
+        expire();
+        throw new DOMException("Authentication changed", "AbortError");
+      }
+      const merged = { ...currentUser.current!, avatarUrl: safeAvatarUrl(updated.avatarUrl) };
+      publishUser(merged);
+      return merged;
+    } catch (error) {
+      if (!current()) throw new DOMException("Avatar request cancelled", "AbortError");
+      if (error instanceof ApiError && error.status === 401) expire();
+      throw error;
+    } finally {
+      // Even a rejected/abandoned upload invalidated the preceding image read.
+      // Publish that revision so the shared image hook fetches the real avatar again.
+      requests.current.publishAvatarRevision(ticket, currentUser.current?.id);
+    }
+  }, [expire, publishUser]);
+
+  const readAvatar = useCallback(async (url: string, signal: AbortSignal) => {
+    const userId = currentUser.current?.id;
+    if (userId === undefined || !requests.current.isCurrentAuthentication(publishedUserGeneration.current))
+      throw new DOMException("Authentication changed", "AbortError");
+    const ticket = requests.current.beginAvatarRead(userId);
+    const current = () => !signal.aborted && requests.current.isCurrentAvatarRead(ticket, currentUser.current?.id) &&
+      currentUser.current?.avatarUrl === url;
+    try {
+      const blob = await api.avatar(url, signal);
+      if (!current()) throw new DOMException("Avatar read cancelled", "AbortError");
+      return blob;
+    } catch (error) {
+      if (!current()) throw new DOMException("Avatar read cancelled", "AbortError");
+      if (error instanceof ApiError && error.status === 401) expire();
+      throw error;
+    }
+  }, [expire]);
+  const subscribeAvatarRevision = useCallback((listener: () => void) => requests.current.subscribeAvatarRevision(listener), []);
+  const captureAvatarVersion = useCallback(() => requests.current.captureAvatarVersion(), []);
+  const avatarRevision = useSyncExternalStore(subscribeAvatarRevision, captureAvatarVersion);
+  const avatarSource = useAccountAvatar({ user, generation: publishedGeneration,
+    revision: avatarRevision, read: readAvatar,
+    isCurrent: isCurrentAuthenticationRequest, subscribe: subscribeAuthentication });
+
   const updateProfile = useCallback(async (
     displayName: string,
     signal?: AbortSignal,
   ) => {
     const userId = currentUser.current?.id;
-    if (userId === undefined)
+    if (userId === undefined || !requests.current.isCurrentAuthentication(publishedUserGeneration.current))
       throw new DOMException("Authentication changed", "AbortError");
     const ticket = requests.current.beginProfileWrite(userId);
     try {
@@ -239,8 +333,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expire();
         throw new DOMException("Authentication changed", "AbortError");
       }
-      publishUser(current);
-      return current;
+      // Nickname and avatar writes can finish independently; only this field
+      // belongs to the nickname response.
+      const merged = { ...currentUser.current!, displayName: current.displayName };
+      publishUser(merged);
+      return merged;
     } catch (err) {
       if (
         signal?.aborted ||
@@ -256,6 +353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         user,
+        userGeneration: publishedGeneration,
         loading,
         error,
         notice,
@@ -265,6 +363,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expire,
         readProfile,
         updateProfile,
+        updateAvatar,
+        avatarSource,
         captureAccountRequest,
         isCurrentAccountRequest,
         captureAuthenticationRequest,

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   App as AntApp,
-  Avatar,
   Badge,
   Button,
   Drawer,
@@ -31,6 +30,7 @@ import { useNotifications } from "./notifications";
 import { errorMessage } from "./api";
 import { Logo } from "./components";
 import { PageContentBoundary } from "./PageContentBoundary";
+import { AccountAvatar } from "./PersonalAvatar";
 
 export function Layout() {
   const auth = useAuth();
@@ -42,6 +42,8 @@ export function Layout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  const mounted = useRef(false);
+  const logoutRequest = useRef<{ controller: AbortController; generation: number } | null>(null);
   const links = [
     {
       to: "/activities",
@@ -105,16 +107,42 @@ export function Layout() {
     setMobileOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      logoutRequest.current?.controller.abort();
+    };
+  }, []);
+  useEffect(() => {
+    if (logoutRequest.current?.generation === auth.userGeneration) return;
+    logoutRequest.current?.controller.abort();
+    logoutRequest.current = null;
+    setLoggingOut(false);
+  }, [auth.userGeneration]);
+
   async function logout() {
+    if (logoutRequest.current) return;
+    const controller = new AbortController();
     setLoggingOut(true);
+    const pending = auth.logout(controller.signal);
+    const request = { controller, generation: auth.captureAuthenticationRequest() };
+    logoutRequest.current = request;
+    const current = () => mounted.current && !controller.signal.aborted && logoutRequest.current === request &&
+      auth.isCurrentAuthenticationRequest(request.generation);
     try {
-      await auth.logout();
+      await pending;
+      if (!current()) return;
       message.success("已退出登录");
       navigate("/activities");
     } catch (error) {
-      message.error(errorMessage(error));
+      if (current() && !(error instanceof DOMException && error.name === "AbortError")) message.error(errorMessage(error));
     } finally {
-      setLoggingOut(false);
+      if (logoutRequest.current === request) {
+        const finish = current();
+        logoutRequest.current = null;
+        if (finish) setLoggingOut(false);
+      }
     }
   }
 
@@ -240,7 +268,7 @@ export function Layout() {
                 className="user-menu"
                 aria-label={`账号菜单，${auth.user.displayName}`}
               >
-                <Avatar size={28}>{auth.user.displayName.slice(0, 1)}</Avatar>
+                <AccountAvatar size={28} testId="menu-avatar" />
                 <span>{auth.user.displayName}</span>
                 <DownOutlined aria-hidden="true" />
               </button>

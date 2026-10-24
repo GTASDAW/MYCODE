@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import mysql from 'mysql2/promise';
+import { verifyAvatarSchema } from './avatar-schema.mjs';
 import { initializeRun, cleanupRun, deleteOwnedFixtures } from './e2e-cleanup.mjs';
 
 const baseUrl = new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1:18088');
@@ -164,7 +165,7 @@ async function waitHealthy() {
 }
 
 async function snapshot() {
-  const [users] = await db.query('SELECT * FROM users ORDER BY id');
+  const [users] = await db.query('SELECT *, SHA2(avatar_image,256) AS avatar_checksum FROM users ORDER BY id');
   const [activities] = await db.query('SELECT id, title, description, location, category, starts_at, ends_at, registration_deadline, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by, cover_hash, SHA2(cover_image,256) AS cover_checksum FROM activities ORDER BY id');
   const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
@@ -200,10 +201,11 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13']);
   assert(migrations.every(row => row.success === 1));
   await db.query('SELECT category, starts_at, ends_at, registration_deadline, cover_hash, cover_image FROM activities LIMIT 0');
-  check('fresh MySQL schema contains successful Flyway V1 through V12 and activity registration-deadline/end-time/category/cover columns');
+  await verifyAvatarSchema(db);
+  check('fresh MySQL schema contains successful Flyway V1 through V13, avatar pairs and activity registration-deadline/end-time/category/cover columns');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');

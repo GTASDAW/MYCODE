@@ -12,12 +12,17 @@ import java.util.List;
 public final class ApiModels {
     private ApiModels() {}
 
-    public record UserView(long id, String username, String displayName, String role) implements Serializable {
+    public record UserView(long id, String username, String displayName, String role, String avatarUrl) implements Serializable {
         @Serial
         private static final long serialVersionUID = 1L;
 
+        public UserView(long id, String username, String displayName, String role) {
+            this(id, username, displayName, role, null);
+        }
+
         public static UserView from(UserRow user) {
-            return new UserView(user.id(), user.username(), user.displayName(), user.role());
+            return new UserView(user.id(), user.username(), user.displayName(), user.role(),
+                user.avatarHash() == null ? null : "/api/me/avatar?v=" + user.avatarHash());
         }
     }
 

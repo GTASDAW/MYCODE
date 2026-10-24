@@ -120,7 +120,7 @@ class ActivityCoverIntegrationTest {
     @BeforeEach void gate() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(12);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(13);
         jdbc.queryForList("SELECT id,category,cover_hash,cover_image,ends_at,registration_deadline FROM activities LIMIT 0");
     }
     @AfterEach void cleanup() {
@@ -322,7 +322,7 @@ class ActivityCoverIntegrationTest {
         body.write(new byte[ActivityCoverImages.MAX_BYTES + 1]); body.write("\r\n--cover-boundary--\r\n".getBytes(StandardCharsets.US_ASCII));
         var response = client.send(HttpRequest.newBuilder(URI.create(base + path(id))).header("Content-Type", "multipart/form-data; boundary=cover-boundary")
             .header(token.get("headerName").asString(), token.get("token").asString()).POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).isEqualTo(413); assertThat(json.readTree(response.body()).get("message").asString()).isEqualTo("封面图片不能超过 2 MB。");
+        assertThat(response.statusCode()).isEqualTo(413); assertThat(json.readTree(response.body()).get("message").asString()).isEqualTo("图片不能超过 2 MB。");
         assertThat(activities.get(id, null).coverUrl()).isNull(); assertThat(edits(id)).isZero();
     }
     static void await(CountDownLatch latch) {

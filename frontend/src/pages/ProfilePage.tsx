@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import { Alert, App as AntApp, Avatar, Button, Card, Descriptions, Form, Input, Tag } from "antd";
-import { UserOutlined } from "@ant-design/icons";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Alert, App as AntApp, Button, Card, Descriptions, Form, Input, Tag } from "antd";
 import { useAuth } from "../auth";
 import { errorMessage } from "../api";
 import { displayNameError } from "../accountValidation";
 import { ErrorState, LoadingState, PageHeading } from "../components";
 import { useResource } from "../useResource";
 import { PasswordChangeCard } from "./PasswordChangeCard";
+import { AccountAvatar } from "../PersonalAvatar";
+import { AvatarEditor } from "./AvatarEditor";
 
 export function ProfilePage() {
-  const { user, readProfile, updateProfile } = useAuth();
-  const resource = useResource((signal) => readProfile(signal), [user?.id, readProfile]);
+  const auth = useAuth();
+  const { user, readProfile, updateProfile } = auth;
+  const resource = useResource((signal) => readProfile(signal), [user?.id, auth.userGeneration, readProfile]);
   const { message } = AntApp.useApp();
   const [form] = Form.useForm<{ displayName: string }>();
   const [busy, setBusy] = useState(false);
@@ -18,49 +20,62 @@ export function ProfilePage() {
   const mounted = useRef(false);
   const submission = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
+    const reset = () => {
+      submission.current?.abort();
+      submission.current = null;
+      form.resetFields();
+      setBusy(false); setError(null);
+    };
+    const unsubscribe = auth.subscribeAuthentication(reset);
     return () => {
       mounted.current = false;
+      unsubscribe();
       submission.current?.abort();
     };
-  }, []);
+  }, [form, auth.subscribeAuthentication]);
 
   useEffect(() => {
-    if (!resource.loading && !resource.error && user)
-      form.setFieldsValue({ displayName: user.displayName });
-  }, [form, user?.displayName, resource.loading, resource.error]);
+    if (resource.data) form.setFieldsValue({ displayName: resource.data.displayName });
+  }, [form, resource.data]);
 
   async function submit(values: { displayName: string }) {
     if (submission.current) return;
+    const ticket = auth.captureAccountRequest();
+    if (!ticket) return;
     const controller = new AbortController();
     submission.current = controller;
+    const current = () => mounted.current && !controller.signal.aborted &&
+      submission.current === controller && auth.isCurrentAccountRequest(ticket);
     setBusy(true);
     setError(null);
     try {
-      const current = await updateProfile(values.displayName.trim(), controller.signal);
-      if (!mounted.current || controller.signal.aborted) return;
-      form.setFieldsValue({ displayName: current.displayName });
+      const updated = await updateProfile(values.displayName.trim(), controller.signal);
+      if (!current()) return;
+      form.setFieldsValue({ displayName: updated.displayName });
       message.success("昵称已更新");
     } catch (err) {
-      if (mounted.current && !controller.signal.aborted)
+      if (current() && !(err instanceof DOMException && err.name === "AbortError"))
         setError(errorMessage(err));
     } finally {
-      submission.current = null;
-      if (mounted.current) setBusy(false);
+      if (current()) {
+        submission.current = null;
+        setBusy(false);
+      }
     }
   }
 
   return (
     <div className="page-container">
-      <PageHeading title="个人中心" section="我的账号" description="查看账号资料，设置大家看到的昵称。" />
+      <PageHeading title="个人中心" section="我的账号" description="查看账号资料，设置昵称与个人头像。" />
       {resource.loading ? <LoadingState /> : resource.error ? (
         <ErrorState error={resource.error} retry={resource.retry} />
       ) : user && (
         <div className="profile-layout">
           <Card title="账号资料" className="profile-card">
             <div className="profile-identity">
-              <Avatar size={64} icon={<UserOutlined aria-hidden="true" />} />
+              <AccountAvatar size={64} testId="profile-avatar" />
               <div><h2>{user.displayName}</h2><Tag color={user.role === "ADMIN" ? "blue" : "default"}>{user.role === "ADMIN" ? "活动组织者" : "活动参与者"}</Tag></div>
             </div>
             <Descriptions column={1} items={[
@@ -84,6 +99,7 @@ export function ProfilePage() {
               <Button type="primary" htmlType="submit" loading={busy} aria-label="保存昵称" aria-busy={busy}>保存昵称</Button>
             </Form>
           </Card>
+          <AvatarEditor />
           <PasswordChangeCard />
         </div>
       )}

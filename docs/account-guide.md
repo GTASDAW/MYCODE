@@ -8,12 +8,15 @@
 
 | 接口 | 请求 | 成功响应与权限 |
 | --- | --- | --- |
-| `POST /api/auth/register` | JSON `{username,password,displayName}` | 201，返回 `{id,username,displayName,role}`；允许匿名，不自动登录 |
+| `POST /api/auth/register` | JSON `{username,password,displayName}` | 201，返回 `{id,username,displayName,role,avatarUrl}`；允许匿名，不自动登录 |
 | `PATCH /api/me/profile` | JSON `{displayName}` | 200，返回当前用户资料；须登录 |
 | `POST /api/me/password` | JSON `{currentPassword,newPassword}` | 200 `{success:true}`；须登录和 CSRF，成功后重新登录 |
 | `GET /api/auth/me` | 无请求体 | 200，从数据库读取当前用户最新资料；须登录 |
 | `POST /api/auth/login` | 表单 `{username,password}` | 200，建立登录并返回用户资料；登录后刷新 CSRF |
 | `POST /api/auth/logout` | 无请求体 | 200，使本次 Session 失效；退出后刷新 CSRF |
+| `GET /api/me/avatar` | 无请求体 | 200 本人 JPEG、no-store/nosniff，未设置 404；须登录 |
+| `POST /api/me/avatar` | multipart `file` | 200，返回最新用户资料；须登录及 CSRF |
+| `DELETE /api/me/avatar` | 无请求体 | 200，返回最新用户资料，重复成功；须登录及 CSRF |
 
 密码及密码哈希从不出现在上述用户响应中。注册角色由服务端固定为 `USER`；请求附带的 `id`、`userId`、`role` 等字段不会授予权限。修改昵称只使用 `@AuthenticationPrincipal AppUserDetails` 的可信 ID，客户端传入其他用户 ID、用户名、角色或密码不会修改这些字段。
 
@@ -32,6 +35,20 @@ Java `String.length()` 和前端字符串 `length` 都按 UTF-16 代码单元计
 `SecurityConfiguration` 复用 BCrypt 强度 12，`AccountService` 校验后调用 `PasswordEncoder.encode`，数据库只保存带随机盐的哈希。登录用户名也按首尾空白和大小写规范化，但不套用新的注册长度规则，保持既有较长测试账号能够登录。
 
 `users` 已有 `uq_users_username`，原表的用户名和昵称字段足以容纳当前规则，无须修改已执行迁移或新增表。注册直接尝试插入并捕获 `DuplicateKeyException`，因此两个请求把不同大小写、首尾空白规范化成同一用户名时，仍只有一个成功。前端校验和“先查有没有”都不能代替数据库唯一约束。
+
+## 本人头像
+
+个人中心独立的头像卡片支持预览、上传、更换、取消选择和移除，菜单与资料卡共用当前头像。仅接受 PNG/JPEG、最大 2 MiB、宽高最多 4096 且总像素最多 1600 万；服务端核对扩展名、MIME 与真实格式，在写事务前解码，中心裁切为正方形、白底重编码 256×256 JPEG。图片元数据不保留，损坏、伪造或超限失败不替换旧头像。
+
+V13 给 `users` 增加可空 `avatar_image`、`avatar_hash`，约束要求同空或同非空、字节范围及小写摘要；旧用户不回填图片。保存时同次更新图片及 SHA-256，常规用户和认证查询只取摘要。接口只从可信 Session 取本人 ID，不接受他人 ID、外部图片 URL 或角色。GET 不提供公开用户图片接口，不使用 304，返回 `Cache-Control: no-store`；`avatarUrl` 为 null 或 `/api/me/avatar?v={64位摘要}`。该相对地址表示当前登录用户的头像，不能当作他人的公开分享链接。
+
+头像修改不更新凭据版本、重写 Session 或影响报名、收藏、通知及审计。独立会话下一次读取当前资料取得最新摘要，没有后台轮询。前端先经统一 API 认证读取 JPEG，再生成及时回收的 Blob URL，供菜单与个人中心共享；读取或图片解码失败显示默认头像，刷新可重新读取。
+
+头像与昵称各自核对认证代次、账号、读写序列和取消信号，响应只合并各自字段；头像保存不覆盖未提交的昵称草稿。离页、换账号或同账号重登清除选择、预览和过期读取，旧成功、错误、401 与 finally 均不能影响新操作。用户响应只增加可空头像 URL，不返回图片正文、哈希密码或凭据版本。
+
+退出请求失败时不自动重放 POST，而是在当前认证作用域内读取 `/api/auth/me` 并刷新 CSRF，确认仍登录后恢复资料和头像读取并提示手动重试；确认已退出则转匿名，无法确认则清理本地身份并提示重新登录确认。旧恢复结果不能影响更新后的登录。头像上传被拒绝后，也会重新读取真实头像，不复用已经失效的图片响应。
+
+代码入口：[接口](../backend/src/main/java/com/example/gather/api/AvatarController.java)、[图片处理](../backend/src/main/java/com/example/gather/service/AvatarImages.java)、[事务](../backend/src/main/java/com/example/gather/service/AvatarService.java)、[图片 SQL](../backend/src/main/java/com/example/gather/mapper/AvatarMapper.java)；前端从 [AvatarEditor](../frontend/src/pages/AvatarEditor.tsx)、[共享图片读取](../frontend/src/useAccountAvatar.ts) 和 [AuthProvider](../frontend/src/auth.tsx) 阅读。实际执行范围见 [验证记录](verification.md)。
 
 ## 昵称与会话身份分开处理
 

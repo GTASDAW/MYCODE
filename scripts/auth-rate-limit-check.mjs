@@ -154,7 +154,7 @@ async function healthy(settings) {
 
 async function snapshot(db) {
   const tables = {};
-  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites']) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites']) [tables[table]] = await db.query(table === 'users' ? 'SELECT *, SHA2(avatar_image,256) AS avatar_checksum FROM users ORDER BY id' : `SELECT * FROM ${table} ORDER BY id`);
   return JSON.stringify(tables); // In-memory comparison only; never log database contents.
 }
 
@@ -258,7 +258,7 @@ export async function runRateLimitChecks() {
       assert(activity?.id === probe.id && activity.title === probe.title && activity.description === probe.description && activity.registrationDeadline === null,
         'A rate-limit API endpoint differs from the UUID SQL proof; authentication writes refused.');
     }
-    passed('owned Docker containers, exact ports, profile, MySQL V12 and UUID API/database identity verified before authentication writes');
+    passed('owned Docker containers, exact ports, profile, MySQL V13 avatar pairs and UUID API/database identity verified before authentication writes');
     // These new users belong to the existing exact cleanup manifest. Prepare
     // them before strict registration limits; demo/admin credentials stay fixed.
     const passwordAccounts = Array.from({ length: 3 }, () => trackAccount());

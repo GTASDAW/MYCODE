@@ -8,6 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
 import { verifyAuditRegistrationOwnership } from './e2e-cleanup.mjs';
+import { verifyAvatarSchema } from './avatar-schema.mjs';
 
 const RUN_PROJECT = 'gather-perf-ci';
 const RUN_DATABASE = 'activity_platform_perf';
@@ -273,7 +274,7 @@ async function parallelMap(items, concurrency, work) {
 async function snapshotDatabase(db, phase) {
   const tables = {};
   const names = phase === undefined ? ['users', 'activities', 'registrations', 'notifications', 'activity_audit_logs', 'activity_favorites'] : ['users', 'activities', 'registrations'];
-  for (const table of names) [tables[table]] = await db.query(`SELECT * FROM ${table} ORDER BY id`);
+  for (const table of names) [tables[table]] = await db.query(phase === undefined && table === 'users' ? 'SELECT *, SHA2(avatar_image,256) AS avatar_checksum FROM users ORDER BY id' : `SELECT * FROM ${table} ORDER BY id`);
   // Kept only in memory: user password hashes must never enter an artifact.
   return JSON.stringify(tables);
 }
@@ -282,13 +283,14 @@ export async function verifyPerformanceDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT credential_version FROM users LIMIT 0');
     await db.query('SELECT category, cancelled_at, cancellation_reason, cancelled_by FROM activities LIMIT 0');
     await db.query('SELECT starts_at, ends_at, registration_deadline FROM activities LIMIT 0');
     await db.query('SELECT cover_hash, cover_image FROM activities LIMIT 0');
+    await verifyAvatarSchema(db);
     await db.query('SELECT user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
     await db.query('SELECT checked_in_at, checked_in_by FROM registrations LIMIT 0');
     await db.query('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
