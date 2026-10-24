@@ -325,19 +325,59 @@ test('切换账号和同账号重登隔离旧成功失败，保留新身份的bu
   } finally { await releaseAll(page); }
 });
 
-test('退出网络失败后旧复制结果不反馈，仍能以当前代次重新复制', async ({ page, request, context }, info) => {
+for (const fault of ['confirmation-unavailable', 'response-lost'] as const) test(
+  `退出网络失败后旧复制结果不反馈，仍能以当前代次重新复制（${fault === 'confirmation-unavailable' ? 'Session确认失败需重登' : '真实退出已提交并确认匿名'}）`, async ({ page, request }, info) => {
   await admin(request); const activity = await create(request, info), owner = await account(request);
   await page.goto('/login'); await loginForm(page, owner); await detail(page, activity, '', true); await clipboard(page);
-  const networkError = page.getByText('暂时无法连接服务，请检查网络后重试。', { exact: true });
+  const unknownNotice = page.getByText('退出结果未确认，请重新登录确认。', { exact: true });
+  const logoutPattern = '**/api/auth/logout', sessionPattern = '**/api/auth/me';
+  let recovering = false, posts = 0, confirmations = 0, committed = 0, anonymous = 0, primary: unknown;
+  const jobs: Array<Promise<{ error?: unknown }>> = [];
+  await page.route(logoutPattern, route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    posts++; recovering = true;
+    const job = (async () => {
+      if (fault === 'response-lost') {
+        // The real server commits logout; only its browser-facing response is lost.
+        const response = await route.fetch(); expect(response.status()).toBe(200); committed++;
+      }
+      await route.abort('failed');
+    })();
+    jobs.push(job.then(() => ({}), error => ({ error }))); return job;
+  });
+  await page.route(sessionPattern, route => {
+    if (!recovering || route.request().method() !== 'GET') return route.continue();
+    confirmations++;
+    const job = (async () => {
+      if (fault === 'confirmation-unavailable') { await route.abort('failed'); return; }
+      const response = await route.fetch(); expect(response.status()).toBe(401); anonymous++;
+      await route.fulfill({ response });
+    })();
+    jobs.push(job.then(() => ({}), error => ({ error }))); return job;
+  });
   try {
+    let round = 0;
     for (const outcome of ['success', 'failure'] as const) for (const phase of ['busy', 'fallback'] as const) {
-      await expect(networkError).toHaveCount(0); await page.waitForLoadState('networkidle');
+      await expect(unknownNotice).toHaveCount(0); await page.waitForLoadState('networkidle');
       const old = (await calls(page)).length; await shareButton(page).click(); await expect(shareButton(page)).toBeDisabled();
-      try {
-        await context.setOffline(true); await page.getByRole('button', { name: /账号菜单/ }).click();
-        // This genuine failed logout has no 200 response; keep the pending clipboard in the same SPA document.
-        await page.getByRole('menuitem', { name: /退出登录/ }).press('Enter'); await expect(networkError).toBeVisible();
-      } finally { await context.setOffline(false); }
+      await page.getByRole('button', { name: /账号菜单/ }).click();
+      await page.getByRole('menuitem', { name: /退出登录/ }).press('Enter');
+      if (fault === 'confirmation-unavailable') await expect(unknownNotice).toBeVisible();
+      else {
+        await expect(page.getByRole('heading', { name: '发现活动', exact: true })).toBeVisible();
+        await expect(unknownNotice).toHaveCount(0);
+      }
+      await expect(page.getByRole('button', { name: '登录 / 体验', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: `账号菜单，${owner.displayName}`, exact: true })).toHaveCount(0);
+      await expect(shareDialog(page)).toHaveCount(0); await expect(success(page)).toHaveCount(0);
+      recovering = false; round++; await settle(page);
+      expect(posts).toBe(round); expect(confirmations).toBe(round);
+      expect(committed).toBe(fault === 'response-lost' ? round : 0); expect(anonymous).toBe(fault === 'response-lost' ? round : 0);
+      const confirmedSession = await page.request.get('/api/auth/me');
+      expect(confirmedSession.status()).toBe(fault === 'response-lost' ? 401 : 200);
+      if (fault === 'confirmation-unavailable') expect(await confirmedSession.json()).toMatchObject({ id: owner.id });
+      // Explicitly log in again in the same document; no automatic logout replay.
+      await loginInApp(page, owner); await detail(page, activity, '', true);
       await expect(page.getByRole('button', { name: `账号菜单，${owner.displayName}`, exact: true })).toBeVisible();
       await expect(page.getByRole('heading', { name: activity.title, exact: true })).toBeVisible();
       await expect(shareButton(page)).toBeEnabled(); await expect(shareDialog(page)).toHaveCount(0);
@@ -350,9 +390,20 @@ test('退出网络失败后旧复制结果不反馈，仍能以当前代次重�
         await release(page, old + 1, 'failure');
       }
       await fallback(page, activity); await expect(shareDialog(page)).toHaveCount(1); await closeFallback(page);
+      expect(posts).toBe(round); expect(confirmations).toBe(round);
     }
     const me = await page.request.get('/api/auth/me'); expect(me.status()).toBe(200); expect(await me.json()).toMatchObject({ id: owner.id, role: 'USER' });
-  } finally { await context.setOffline(false); await releaseAll(page); }
+  } catch (error) { primary = error; }
+  finally {
+    recovering = false;
+    const errors: unknown[] = primary === undefined ? [] : [primary];
+    for (const cleanup of [async () => {
+      const results = await Promise.all(jobs); for (const result of results) if (result.error !== undefined) errors.push(result.error);
+    }, () => page.unroute(logoutPattern), () => page.unroute(sessionPattern), () => releaseAll(page)])
+      try { await cleanup(); } catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Logout fault verification and cleanup failed; original failures are preserved.');
+  }
 });
 
 test('真实断网加载失败和真实404不展示分享入口，恢复后可再次分享', async ({ page, request, context }, info) => {
