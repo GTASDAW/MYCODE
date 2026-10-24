@@ -1,5 +1,11 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'amap-config.ps1')
+if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    # Reproduce the unavailable Security module without depending on the host's
+    # PSModulePath. Permission protection and validation must still work.
+    function Get-Acl { throw 'The Security module is unavailable in this test.' }
+    function Set-Acl { throw 'The Security module is unavailable in this test.' }
+}
 $mapTestRoot = Join-Path (Split-Path -Parent $PSScriptRoot) ('.runtime/activity-map/config-test-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $mapTestRoot -Force | Out-Null
 $mapTestCount = 0

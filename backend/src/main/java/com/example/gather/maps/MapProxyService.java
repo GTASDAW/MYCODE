@@ -26,7 +26,8 @@ public final class MapProxyService {
         "/v4/map/styles", "https://webapi.amap.com/v4/map/styles");
     private static final Set<String> PARAMETERS = Set.of("keywords", "city", "citylimit", "types", "offset", "page",
         "extensions", "location", "radius", "poitype", "roadlevel", "batch", "callback", "output", "datatype",
-        "platform", "appname", "logversion", "sdkversion", "s", "csid", "children", "_", "id", "styleid", "ispublic", "key");
+        "platform", "appname", "logversion", "sdkversion", "s", "csid", "children", "language", "type_", "antiCrab",
+        "_", "id", "styleid", "ispublic", "key");
     private static final Pattern CALLBACK = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*){0,5}");
     private final MapConfiguration configuration;
     private final AmapTransport transport;
@@ -45,17 +46,22 @@ public final class MapProxyService {
         var query = new StringBuilder();
         for (var entry : parameters.entrySet()) {
             String name = entry.getKey();
-            if (!PARAMETERS.contains(name) || entry.getValue().size() != 1) throw invalid();
-            String value = entry.getValue().getFirst();
-            if (value == null || value.length() > 2048 || value.chars().anyMatch(Character::isISOControl)) throw invalid();
-            if (name.equals("key")) continue; // Always replace a caller's key with the locally configured JS key.
-            if (name.equals("callback") && (value.length() > 128 || !CALLBACK.matcher(value).matches())) throw invalid();
-            if (name.equals("output") && !value.equalsIgnoreCase("JSON")) throw invalid();
-            append(query, name, value);
-            if (query.length() > 8192) throw invalid();
+            var values = entry.getValue();
+            if (!PARAMETERS.contains(name) || values.isEmpty() || values.size() > (name.equals("s") || name.equals("key") ? 2 : 1)) throw invalid();
+            // JSAPI can repeat matching SDK markers or keys; preserve markers and replace every caller key below.
+            if (values.size() == 2 && !java.util.Objects.equals(values.getFirst(), values.getLast())) throw invalid();
+            for (String value : values) {
+                if (value == null || value.length() > 2048 || value.chars().anyMatch(Character::isISOControl)) throw invalid();
+                if (name.equals("key")) continue; // Always replace a caller's key with the locally configured JS key.
+                if (name.equals("callback") && (value.length() > 128 || !CALLBACK.matcher(value).matches())) throw invalid();
+                if (name.equals("output") && !value.equalsIgnoreCase("JSON")) throw invalid();
+                append(query, name, value);
+                if (query.length() > 8192) throw invalid();
+            }
         }
         append(query, "key", configuration.jsKey());
         append(query, "jscode", configuration.securityCode());
+        if (query.length() > 8192) throw invalid();
         if (!inFlight.tryAcquire()) throw unavailable();
         try {
             var response = transport.get(URI.create(base + "?" + query));

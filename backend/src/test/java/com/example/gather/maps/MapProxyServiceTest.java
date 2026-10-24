@@ -72,6 +72,78 @@ class MapProxyServiceTest {
         assertThat(calls).hasValue(0);
     }
 
+    @Test void livePlaceSearchParameterShapePreservesMatchingSdkMarkersAndReplacesTheCallerKey() {
+        var observed = new AtomicReference<URI>();
+        var proxy = service(enabled, uri -> { observed.set(uri); return new AmapTransport.Response(200,
+            "text/javascript", bytes("AMap._cb_place({\"status\":\"1\",\"pois\":[]});")); });
+        var parameters = query("platform", "JS");
+        parameters.add("s", "rsv3"); parameters.add("logversion", "2.0"); parameters.add("key", "caller-key");
+        parameters.add("sdkversion", "2.0"); parameters.add("appname", "http://localhost:5173");
+        parameters.add("csid", "sdk-request"); parameters.add("page", "1"); parameters.add("offset", "10");
+        parameters.add("extensions", "base"); parameters.add("language", "zh_cn"); parameters.add("s", "rsv3");
+        parameters.add("children", "0"); parameters.add("type_", "search"); parameters.add("antiCrab", "true");
+        parameters.add("keywords", "北京 会场"); parameters.add("callback", "AMap._cb_place");
+        assertThat(proxy.get("/v3/place/text", parameters, 400).contentType()).isEqualTo("application/javascript;charset=UTF-8");
+        assertThat(observed.get().getRawQuery()).contains("platform=JS", "s=rsv3&s=rsv3", "language=zh_cn", "type_=search",
+            "antiCrab=true", "callback=AMap._cb_place", "key=" + KEY, "jscode=" + SECRET).doesNotContain("caller-key");
+    }
+
+    @Test void liveGeocoderParameterShapePreservesMarkersAndForwardsOnlyOneLocalKey() {
+        var observed = new AtomicReference<URI>();
+        var proxy = service(enabled, uri -> { observed.set(uri); return new AmapTransport.Response(200,
+            "text/javascript", bytes("AMap._cb_geocoder({\"status\":\"1\",\"regeocode\":{}});")); });
+        var parameters = query("platform", "JS");
+        parameters.add("s", "rsv3"); parameters.add("logversion", "2.0"); parameters.add("key", "caller-key");
+        parameters.add("sdkversion", "2.0"); parameters.add("appname", "http://localhost:5173");
+        parameters.add("csid", "sdk-request"); parameters.add("key", "caller-key"); parameters.add("s", "rsv3");
+        parameters.add("language", "zh_cn"); parameters.add("location", "116.397428,39.909230");
+        parameters.add("callback", "AMap._cb_geocoder");
+        assertThat(proxy.get("/v3/geocode/regeo", parameters, 400).contentType()).isEqualTo("application/javascript;charset=UTF-8");
+        assertThat(observed.get().getRawPath()).isEqualTo("/v3/geocode/regeo");
+        assertThat(observed.get().getRawQuery()).contains("s=rsv3&s=rsv3", "language=zh_cn", "jscode=" + SECRET)
+            .doesNotContain("caller-key");
+        assertThat(observed.get().getRawQuery().split("&")).filteredOn(value -> value.startsWith("key="))
+            .containsExactly("key=" + KEY);
+    }
+
+    @Test void sdkCompatibilityDoesNotAllowOtherDuplicatesOrUnboundedValues() {
+        var calls = new AtomicInteger();
+        var proxy = service(enabled, uri -> { calls.incrementAndGet(); return response("{}"); });
+        for (String name : List.of("s", "key")) {
+            var conflicting = query(name, "first"); conflicting.add(name, "other");
+            var tripled = query(name, "same"); tripled.add(name, "same"); tripled.add(name, "same");
+            for (var input : List.of(conflicting, tripled))
+                assertFailure(() -> proxy.get("/v3/place/text", input, 10), HttpStatus.BAD_REQUEST);
+        }
+        for (String name : List.of("keywords", "callback", "language", "type_", "antiCrab")) {
+            var duplicate = query(name, "same"); duplicate.add(name, "same");
+            assertFailure(() -> proxy.get("/v3/place/text", duplicate, 10), HttpStatus.BAD_REQUEST);
+        }
+        for (String name : List.of("language", "type_", "antiCrab", "s", "key")) {
+            for (String value : List.of("x".repeat(2049), "line\nbreak")) {
+                var invalid = query(name, value); if (name.equals("s") || name.equals("key")) invalid.add(name, value);
+                assertFailure(() -> proxy.get("/v3/place/text", invalid, 10), HttpStatus.BAD_REQUEST);
+            }
+            var missing = query(name, null); if (name.equals("s") || name.equals("key")) missing.add(name, null);
+            assertFailure(() -> proxy.get("/v3/place/text", missing, 10), HttpStatus.BAD_REQUEST);
+        }
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test void encodedQueryLimitIncludesEverySdkMarkerAndTheServerCredentials() {
+        var observed = new AtomicReference<URI>(); var calls = new AtomicInteger();
+        var proxy = service(enabled, uri -> { calls.incrementAndGet(); observed.set(uri); return response("{}"); });
+        var boundary = query("keywords", "x".repeat(2048)); boundary.add("city", "x".repeat(2048));
+        boundary.add("types", "x".repeat(2047)); boundary.add("s", "x".repeat(972)); boundary.add("s", "x".repeat(972));
+        assertThat(proxy.get("/v3/place/text", boundary, 8192).contentType()).isEqualTo("application/json;charset=UTF-8");
+        assertThat(observed.get().getRawQuery()).hasSize(8192);
+        boundary.set("types", "x".repeat(2048));
+        assertFailure(() -> proxy.get("/v3/place/text", boundary, 8192), HttpStatus.BAD_REQUEST);
+        var encodedOverflow = query("keywords", "会".repeat(1000));
+        assertFailure(() -> proxy.get("/v3/place/text", encodedOverflow, 1000), HttpStatus.BAD_REQUEST);
+        assertThat(calls).hasValue(1);
+    }
+
     @Test void providerJsonpIsReturnedOnlyWithTheValidatedRequestedCallbackAndValidJsonPayload() {
         var proxy = service(enabled, uri -> new AmapTransport.Response(200, "text/javascript;charset=UTF-8", bytes("AMap._cb_1({\"tips\":[]});")));
         assertThat(proxy.get("/v3/assistant/inputtips", query("callback", "AMap._cb_1"), 20).contentType())

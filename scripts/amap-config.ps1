@@ -11,7 +11,10 @@ function Protect-GatherMapConfig {
     foreach ($sid in @($self, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, [Security.AccessControl.FileSystemRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow))
     }
-    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    # Windows PowerShell can inherit PowerShell 7's module search path. Its
+    # Security module may then fail to autoload; Desktop has native ACL APIs.
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { [IO.File]::SetAccessControl($item.FullName, $acl) }
+    else { Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop }
 }
 
 function Get-GatherMapConfig {
@@ -21,7 +24,8 @@ function Get-GatherMapConfig {
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 4096) {
         throw 'Map configuration must be a small regular file.'
     }
-    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $acl = if ($PSVersionTable.PSEdition -eq 'Desktop') { [IO.File]::GetAccessControl($item.FullName) }
+        else { Get-Acl -LiteralPath $Path -ErrorAction Stop }
     $allowed = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, 'S-1-5-18', 'S-1-5-32-544')
     if (-not $acl.AreAccessRulesProtected) { throw 'Map configuration requires private file permissions.' }
     foreach ($entry in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {

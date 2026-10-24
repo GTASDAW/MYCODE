@@ -37,4 +37,4 @@ SDK 加载订阅去重，失败只接受手动重试；弹窗轮次、活动/复
 
 源码阅读：[接口与持久化](../backend/src/main/java/com/example/gather/service/ActivityService.java)、[受限代理](../backend/src/main/java/com/example/gather/maps/MapProxyService.java)、[地点表单](../frontend/src/pages/ActivityLocationField.tsx)、[SDK 适配](../frontend/src/amapAdapter.ts)。实际测试与未验证项见[验证记录](verification.md)。
 
-本轮没有真实高德凭据：未配置流程、提供商契约替身与真实 MySQL 业务验证分别记录；替身不证明高德生产服务、实际场地搜索、网络权限或地图渲染已联调成功。填好凭据后仍需完成第 4 步的真实联调。
+未配置流程、提供商契约替身与真实 MySQL 业务验证分别记录，替身不代替提供商联调。2026-10-24 在用户本机私有凭据就绪后，已完成真实 JS API 2.0 的桌面/手机视口底图、地点搜索、确认回填与点击逆地址验证；未发布或修改活动。具体范围及修复见 [真实联调记录](verification.md#高德真实凭据联调与启动兼容修复2026-10-24)。其他账号、域名、网络及真实手机仍需按各自环境验证。
