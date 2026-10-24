@@ -52,6 +52,18 @@ Playwright保留workers=1：global setup明确拒绝其他值，所有worker共�
 
 本地可执行 `npm run test:e2e:smoke`、`npm run test:e2e:redis`，不加筛选的 `npm run test:e2e`继续执行全部业务。认证限流及生产加载保持独立配置，保留两模式检查。工具/浏览器安装整步实测约17–24秒，远小于浏览器主体；未单独测量下载/系统依赖时间，未新增浏览器缓存或宣称缓存收益。原npm/Maven/BuildKit缓存保持。
 
+### 依赖更新与增量安全审查
+
+`.github/dependabot.yml` 覆盖backend Maven、根目录和frontend两处npm、GitHub Actions、两个Dockerfile及根目录/`.github`的Compose配置。每周北京时间04:00分散到周一至周四检查，每个配置项最多一个普通版本更新PR（不是全仓总上限，安全更新另有GitHub限制）。npm/Maven/Actions的minor、patch分组，major独立PR；安全修复另组，不用忽略major的规则屏蔽安全修复。容器摘要/标签更新统一人工审核，并核对Dockerfile、Compose、工作流和本地脚本中的关联引用，不保证跨生态自动同步。依赖PR继续触发原完整CI，不减弱门禁，也不自动合并。
+
+GitHub仓库已启用Dependabot alerts、依赖图及自动安全修复PR；版本更新由配置驱动。没有安装本机服务、升级业务依赖或启用Renovate、CodeQL、Trivy、额外MCP/Skills。
+
+独立 `Dependency review` 工作流使用固定SHA的 `actions/dependency-review-action` v5.0.0，在面向main的PR检查base/head依赖增量；高危或严重漏洞使检查失败，范围包含runtime、development和unknown。只有contents读取权限，不写PR评论；尚未定义许可证策略，因此不做许可证阻断。它不运行Maven/npm构建、不启动数据库，不替代已有业务CI或整仓漏洞扫描。覆盖取决于GitHub依赖图；本轮未额外引入Maven传递依赖/BOM的自动submission，不宣称已覆盖全部传递依赖。
+
+手动验证在Actions选择 `Dependency review`，输入本仓库两个完整40位commit SHA作为 `base_ref/head_ref`；输入先校验为真实commit，缺失或非法值失败，不静默替换为当前SHA。相同SHA的空增量只验证接通，不证明历史依赖无漏洞。普通Push不额外运行这个工作流。
+
+2026-10-24再次核对main仍未保护，仓库自动合并为关闭；本轮未修改分支规则。检查会报告风险，但尚非GitHub强制合并门禁，直接Push main也不经过PR检查。发布仍须按前述准确SHA完整CI规定执行。
+
 ### 优化前的真实耗时与预期
 
 [参考运行39533454095](https://github.com/GTASDAW/MYCODE/actions/runs/39533454095) 七项成功；每个job实际起止为下表，不包含其依赖等待：

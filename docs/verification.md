@@ -828,3 +828,16 @@ c09da5a的首次 [分层CI 39554167525](https://github.com/GTASDAW/MYCODE/action
 | 数据与环境 | 写前核回环、MySQL8.4.11/UUID/V12及两库六业务表加Flyway摘要；真实测试只写准确声明的账号/活动及其报名。两轮浏览器分别精准清理155/39活动、180/42报名、6/2审计、32/4账号，通知/收藏均0；最终两库全字段类型化摘要和迁移checksum与基线一致。核路径、参数、PID、启动时刻和端口后关闭本轮服务，恢复原停止状态，其他项目未动 |
 
 日志、截图、构建及数据基线只留忽略目录。变更仍按既有高风险路径触发完整CI，不修改分层或发布门禁；本机未运行Docker/Redis全量，不等待远端完整CI，也不提前宣称远端通过。
+
+## Dependabot与依赖增量审查（2026-10-24）
+
+新增Dependabot配置及独立Dependency review工作流，未安装本机软件、更新业务依赖或改业务/数据库。五个更新生态按周分散检查、每配置项限制一条常规PR；npm/Maven/Actions常规minor/patch及安全更新分别分组，major仍可单独提PR，所有更新人工合并。固定SHA的dependency-review-action v5.0.0只读检查PR增量中的高危/严重漏洞，覆盖三种scope，不写评论、不做未定义策略的许可证阻断。准确配置和手动入口见 [交付指南](delivery-guide.md#依赖更新与增量安全审查)。
+
+| 验证 | 实际结果 |
+| --- | --- |
+| 本机静态 | 现有actionlint1.7.12检查新workflow通过；复用缓存SnakeYAML2.6解析两份YAML，重复键拒绝、五生态/目录/周计划/每项PR限制/固定SHA/只读权限/阻断参数校验通过。未安装额外解析工具 |
+| 比较输入 | 从真实YAML提取Bash步骤执行：现有真实commit通过；手动输入非法字符串或不存在commit失败，未静默回退到PR环境值。原CI范围策略7/7通过，快慢分层与结果门禁未改 |
+| 仓库设置 | GitHub API确认公开仓库且账号有管理权限；原alerts未启用、security updates关闭、依赖图compare403。启用alerts与security fixes均204，随后security updates为enabled、compare200；auto merge仍false、main仍未保护，分支规则未改 |
+| 覆盖边界 | 无真实新增依赖PR及漏洞阻断演练；许可证策略、Maven完整传递依赖/BOM自动submission、CodeQL/Trivy/额外MCP/Skills均未启用。依赖图接通不代表历史依赖无漏洞，PR检查也不覆盖直接Push main或构成强制合并门禁 |
+
+只改两份GitHub配置及相关交付/验证说明，无数据库或浏览器测试；本次配置变更仍命中既有完整CI，不等待其全部结束。仅新增独立轻量审查，不重建镜像、不调整既有测试门禁或自动合并设置。

@@ -1,0 +1,67 @@
+name: Dependency review
+
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base commit SHA in this repository (40 hexadecimal characters)
+        required: true
+        type: string
+      head_ref:
+        description: Head commit SHA in this repository (40 hexadecimal characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dependency-review:
+    name: Review dependency changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select and validate comparison commits
+        id: refs
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+          MANUAL_BASE_REF: ${{ inputs.base_ref }}
+          MANUAL_HEAD_REF: ${{ inputs.head_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            BASE_REF="$MANUAL_BASE_REF"
+            HEAD_REF="$MANUAL_HEAD_REF"
+          fi
+          if [[ ! "$BASE_REF" =~ ^[0-9a-fA-F]{40}$ || ! "$HEAD_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Both comparison inputs must be full commit SHAs." >&2
+            exit 1
+          fi
+          git cat-file -e "${BASE_REF}^{commit}"
+          git cat-file -e "${HEAD_REF}^{commit}"
+          printf 'base=%s\nhead=%s\n' "$BASE_REF" "$HEAD_REF" >> "$GITHUB_OUTPUT"
+      - name: Review introduced vulnerabilities
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ steps.refs.outputs.base }}
+          head-ref: ${{ steps.refs.outputs.head }}
+          fail-on-severity: high
+          fail-on-scopes: runtime, development, unknown
+          license-check: false
+          vulnerability-check: true
+          warn-only: false
+          comment-summary-in-pr: never
+          show-openssf-scorecard: false

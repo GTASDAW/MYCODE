@@ -1,0 +1,84 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: maven
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      maven-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      maven-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+    schedule:
+      interval: weekly
+      day: thursday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      docker-images:
+        applies-to: version-updates
+        patterns: ["*"]
+
+  - package-ecosystem: docker-compose
+    directories:
+      - /
+      - /.github
+    schedule:
+      interval: weekly
+      day: thursday
+      time: "04:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 1
+    groups:
+      compose-images:
+        applies-to: version-updates
+        patterns: ["*"]
