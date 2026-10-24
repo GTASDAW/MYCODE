@@ -23,7 +23,7 @@
     "check:performance": "node scripts/performance-check.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
-    "mysql2": "3.24.5"
+    "@playwright/test": "1.64.1",
+    "mysql2": "3.24.6"
   }
 }
