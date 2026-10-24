@@ -13,7 +13,7 @@ import java.util.List;
 public interface ActivityMapper {
     String VIEW_COLUMNS = "a.id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + WaitingQueueSql.COUNT + WaitingQueueSql.POSITION
-        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
+        + "r.status AS registration_status, a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash, a.location_longitude, a.location_latitude";
 
     @Select("SELECT " + VIEW_COLUMNS + " FROM activities a LEFT JOIN registrations r ON r.activity_id=a.id AND r.user_id=#{userId} ORDER BY a.starts_at, a.id")
     List<ActivityRow> findAll(@Param("userId") Long userId);
@@ -44,19 +44,20 @@ public interface ActivityMapper {
     @Select("SELECT starts_at, registration_deadline, capacity, registered_count, cancelled_at FROM activities WHERE id=#{id} FOR UPDATE")
     ActivityLockRow lockById(long id);
 
-    @Select("SELECT title, description, location, category FROM activities WHERE id=#{id}")
+    @Select("SELECT title, description, location, category, location_longitude, location_latitude FROM activities WHERE id=#{id}")
     ActivityAuditText auditText(long id);
 
-    @Insert("INSERT INTO activities(title, description, location, starts_at, ends_at, registration_deadline, capacity, created_by, category) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{endsAt}, #{registrationDeadline}, #{capacity}, #{createdBy}, #{category})")
+    @Insert("INSERT INTO activities(title, description, location, starts_at, ends_at, registration_deadline, capacity, created_by, category, location_longitude, location_latitude) VALUES(#{title}, #{description}, #{location}, #{startsAt}, #{endsAt}, #{registrationDeadline}, #{capacity}, #{createdBy}, #{category}, #{locationLongitude}, #{locationLatitude})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(NewActivity activity);
 
     @Update("UPDATE activities SET registered_count=registered_count+#{delta} WHERE id=#{id}")
     int changeRegisteredCount(@Param("id") long id, @Param("delta") int delta);
 
-    @Update("UPDATE activities SET title=#{title}, description=#{description}, location=#{location}, category=#{category} WHERE id=#{id}")
+    @Update("UPDATE activities SET title=#{title}, description=#{description}, location=#{location}, category=#{category}, location_longitude=#{longitude}, location_latitude=#{latitude} WHERE id=#{id}")
     int edit(@Param("id") long id, @Param("title") String title, @Param("description") String description,
-             @Param("location") String location, @Param("category") String category);
+             @Param("location") String location, @Param("category") String category,
+             @Param("longitude") java.math.BigDecimal longitude, @Param("latitude") java.math.BigDecimal latitude);
 
     @Update("UPDATE activities SET registered_count=0, cancelled_at=#{cancelledAt}, cancellation_reason=#{reason}, cancelled_by=#{adminId} WHERE id=#{id}")
     int cancel(@Param("id") long id, @Param("cancelledAt") java.time.LocalDateTime cancelledAt,

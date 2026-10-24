@@ -6,9 +6,10 @@ import java.time.LocalDateTime;
 public record MyRegistrationRow(long registrationId, String status, LocalDateTime checkedInAt,
                                 long activityId, String title, String description, String location,
                                 LocalDateTime startsAt, LocalDateTime endsAt, LocalDateTime registrationDeadline, int capacity, int registeredCount, int waitingCount, Long waitingPosition,
-                                LocalDateTime cancelledAt, String cancellationReason, String category, String coverHash) {
+                                LocalDateTime cancelledAt, String cancellationReason, String category, String coverHash,
+                                java.math.BigDecimal locationLongitude, java.math.BigDecimal locationLatitude) {
     public ActivityRow activity() {
         return new ActivityRow(activityId, title, description, location, startsAt, endsAt, registrationDeadline, capacity,
-            registeredCount, waitingCount, waitingPosition, status, cancelledAt, cancellationReason, category, coverHash);
+            registeredCount, waitingCount, waitingPosition, status, cancelledAt, cancellationReason, category, coverHash, locationLongitude, locationLatitude);
     }
 }

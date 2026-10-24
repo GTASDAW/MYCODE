@@ -42,6 +42,7 @@ import { ShareActivityButton } from "./ShareActivityButton";
 import { ActivityCover } from "../ActivityCoverImage";
 import { ActivityCopyLink } from "./ActivityCopyLink";
 import { WaitingPositionNotice } from "../components/WaitingPositionNotice";
+import { ActivityLocationView } from "./ActivityLocationView";
 export function ActivityDetailRoute() {
   const { id } = useParams();
   const auth = useAuth();
@@ -219,7 +220,7 @@ function ActivityDetailPage() {
               {
                 key: "location",
                 label: "活动地点",
-                children: activity.location,
+                children: <ActivityLocationView key={`${activity.id}:${activity.location}:${JSON.stringify(activity.locationPoint)}`} activity={activity} />,
               },
               {
                 key: "capacity",

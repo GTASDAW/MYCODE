@@ -13,6 +13,8 @@ import { activityCategoryOptions } from "../activityCategory";
 import type { ActivityCategory } from "../types";
 import { useAdminRead } from "./useAdminRead";
 import { ActivityCoverEditor } from "./ActivityCoverEditor";
+import { ActivityLocationField } from "./ActivityLocationField";
+import { copyLocationPoint } from "../activityMap";
 
 export function EditActivityRoute() {
   const { id } = useParams();
@@ -31,7 +33,8 @@ function EditActivityPage() {
   const activity = resource.data;
   useActivityClock([activity ?? undefined]);
   useEffect(() => {
-    if (activity) form.setFieldsValue({ title: activity.title, description: activity.description, location: activity.location, category: activity.category });
+    if (activity) form.setFieldsValue({ title: activity.title, description: activity.description, location: activity.location,
+      locationPoint: copyLocationPoint(activity.locationPoint), category: activity.category });
   }, [activity, form]);
 
   async function submit(values: ActivityDetails) {
@@ -44,6 +47,7 @@ function EditActivityPage() {
           title: values.title.trim(),
           description: values.description.trim(),
           location: values.location.trim(),
+          locationPoint: copyLocationPoint(values.locationPoint),
           category: values.category,
         }, signal);
       },
@@ -81,12 +85,7 @@ function EditActivityPage() {
             ]}>
               <Input.TextArea rows={6} maxLength={10000} showCount />
             </Form.Item>
-            <Form.Item name="location" label="活动地点" rules={[
-              { required: true, whitespace: true, message: "请输入活动地点" },
-              { max: 200, message: "地点最多 200 个字符" },
-            ]}>
-              <Input maxLength={200} />
-            </Form.Item>
+            <ActivityLocationField disabled={mutation.busy || !canManageActivity(activity)} />
             <Form.Item name="category" label="活动分类" rules={[{ required: true, message: "请选择活动分类" }]}>
               <Select<ActivityCategory> aria-label="活动分类" options={activityCategoryOptions} />
             </Form.Item>

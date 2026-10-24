@@ -1,6 +1,7 @@
 package com.example.gather.service;
 
 import com.example.gather.api.ApiException;
+import com.example.gather.api.LocationPoint;
 import com.example.gather.api.ApiModels.*;
 import com.example.gather.domain.ActivityRow;
 import com.example.gather.domain.ActivityLockRow;
@@ -18,6 +19,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Set;
+import java.util.Objects;
 
 @Service
 public class ActivityService {
@@ -104,7 +106,9 @@ public class ActivityService {
         NewActivity row = new NewActivity(request.title().strip(), request.description().strip(), request.location().strip(),
             LocalDateTime.ofInstant(startsAt, ZoneOffset.UTC), request.capacity(), creatorId, category,
             endsAt == null ? null : LocalDateTime.ofInstant(endsAt, ZoneOffset.UTC),
-            deadline == null ? null : LocalDateTime.ofInstant(deadline, ZoneOffset.UTC));
+            deadline == null ? null : LocalDateTime.ofInstant(deadline, ZoneOffset.UTC),
+            request.locationPoint() == null ? null : request.locationPoint().longitude(),
+            request.locationPoint() == null ? null : request.locationPoint().latitude());
         activities.insert(row);
         audit.created(row, creatorId, now);
         return get(row.id, creatorId);
@@ -121,10 +125,15 @@ public class ActivityService {
         String location = editText(request.location(), 200, "地点");
         var before = activities.auditText(id);
         String category = request.category() == null ? before.category() : ActivityCategories.value(request.category());
+        LocationPoint point = request.locationPointSpecified() ? request.locationPoint()
+            : before.location().equals(location) ? LocationPoint.from(before.locationLongitude(), before.locationLatitude()) : null;
+        var longitude = point == null ? null : point.longitude();
+        var latitude = point == null ? null : point.latitude();
         if (!before.title().equals(title) || !before.description().equals(description) || !before.location().equals(location)
-            || !before.category().equals(category)) {
-            activities.edit(id, title, description, location, category);
-            audit.edited(id, adminId, before, title, description, location, category, now);
+            || !before.category().equals(category) || !Objects.equals(before.locationLongitude(), longitude)
+            || !Objects.equals(before.locationLatitude(), latitude)) {
+            activities.edit(id, title, description, location, category, longitude, latitude);
+            audit.edited(id, adminId, before, title, description, location, category, longitude, latitude, now);
         }
         return get(id, adminId);
     }

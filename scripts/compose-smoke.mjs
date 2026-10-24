@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import mysql from 'mysql2/promise';
 import { verifyAvatarSchema } from './avatar-schema.mjs';
+import { verifyLocationPointSchema } from './location-point-schema.mjs';
 import { initializeRun, cleanupRun, deleteOwnedFixtures } from './e2e-cleanup.mjs';
 
 const baseUrl = new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1:18088');
@@ -201,11 +202,12 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14']);
   assert(migrations.every(row => row.success === 1));
   await db.query('SELECT category, starts_at, ends_at, registration_deadline, cover_hash, cover_image FROM activities LIMIT 0');
   await verifyAvatarSchema(db);
-  check('fresh MySQL schema contains successful Flyway V1 through V13, avatar pairs and activity registration-deadline/end-time/category/cover columns');
+  await verifyLocationPointSchema(db);
+  check('fresh MySQL schema contains successful Flyway V1 through V14, avatar pairs, location point pairs/ranges and activity registration-deadline/end-time/category/cover columns');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');

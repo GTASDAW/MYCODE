@@ -28,6 +28,7 @@ import type {
   FavoriteState,
   FavoritePage,
   FavoriteQuery,
+  MapsConfig,
 } from "./types";
 import { safeAvatarUrl } from "./accountAvatar.ts";
 
@@ -286,6 +287,7 @@ async function refreshCsrf(signal?: AbortSignal, newSession = false): Promise<vo
 }
 
 export const api = {
+  mapsConfig: (signal?: AbortSignal) => request<MapsConfig>("/maps/config", { signal, cache: "no-store" }),
   refreshCsrf,
   me: (signal?: AbortSignal) => request<User>("/auth/me", { signal }),
   avatar: (url: string, signal?: AbortSignal) => {
@@ -478,6 +480,7 @@ export const api = {
         title: details.title,
         description: details.description,
         location: details.location,
+        locationPoint: details.locationPoint,
         category: details.category,
       }),
       signal,

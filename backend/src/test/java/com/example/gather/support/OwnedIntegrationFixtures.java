@@ -8,6 +8,9 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Locale;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 /** Exact in-process fixture IDs only; all reference checks precede transactional deletion. */
 public final class OwnedIntegrationFixtures {
@@ -25,8 +28,8 @@ public final class OwnedIntegrationFixtures {
         var transaction = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         transaction.executeWithoutResult(status -> {
             if (!"activity_platform_test".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))
-                || !"13".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
-                throw new IllegalStateException("Fixture cleanup requires the dedicated V13 test database");
+                || !"14".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
+                throw new IllegalStateException("Fixture cleanup requires the dedicated V14 test database");
             }
             jdbc.queryForList("SELECT id, credential_version, avatar_image, avatar_hash FROM users LIMIT 0");
             if (!Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -40,7 +43,8 @@ public final class OwnedIntegrationFixtures {
             noReferences(jdbc, "SELECT COUNT(*) FROM users WHERE (avatar_image IS NULL) <> (avatar_hash IS NULL) "
                 + "OR (avatar_image IS NOT NULL AND (NOT REGEXP_LIKE(avatar_hash, '^[0-9a-f]{64}$', 'c') "
                 + "OR BINARY avatar_hash <> BINARY SHA2(avatar_image,256)))", List.of(), "Invalid existing avatar pairs or checksums");
-            jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
+            jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline, location_longitude, location_latitude FROM activities LIMIT 0");
+            verifyLocationPointSchema(jdbc);
             jdbc.queryForList("SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0");
             if (!activities.isEmpty()) {
                 jdbc.queryForList("SELECT id FROM activities WHERE id IN (" + marks(activities) + ") FOR UPDATE", activities.toArray());
@@ -89,6 +93,69 @@ public final class OwnedIntegrationFixtures {
             }
             if (!users.isEmpty()) jdbc.update("DELETE FROM users WHERE id IN (" + marks(users) + ")", users.toArray());
         });
+    }
+
+    public static void verifyLocationPointSchema(JdbcTemplate jdbc) {
+        if (!Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS "
+            + "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='activities' AND IS_NULLABLE='YES' AND DATA_TYPE='decimal' AND NUMERIC_SCALE=7 "
+            + "AND ((COLUMN_NAME='location_longitude' AND NUMERIC_PRECISION=10 AND COLUMN_TYPE='decimal(10,7)') "
+            + "OR (COLUMN_NAME='location_latitude' AND NUMERIC_PRECISION=9 AND COLUMN_TYPE='decimal(9,7)'))", Long.class)))
+            throw new IllegalStateException("Fixture cleanup requires the V14 nullable location decimal column types");
+        var checks = jdbc.queryForList("SELECT c.CHECK_CLAUSE AS clause, t.ENFORCED AS enforced FROM information_schema.TABLE_CONSTRAINTS t "
+            + "JOIN information_schema.CHECK_CONSTRAINTS c ON c.CONSTRAINT_SCHEMA=t.CONSTRAINT_SCHEMA AND c.CONSTRAINT_NAME=t.CONSTRAINT_NAME "
+            + "WHERE t.TABLE_SCHEMA=DATABASE() AND t.TABLE_NAME='activities' AND t.CONSTRAINT_TYPE='CHECK' AND t.CONSTRAINT_NAME='chk_activity_location_point'");
+        String expected = "((location_longitude IS NULL AND location_latitude IS NULL) OR (location_longitude IS NOT NULL AND location_latitude IS NOT NULL "
+            + "AND location_longitude BETWEEN -180 AND 180 AND location_latitude BETWEEN -90 AND 90)) IS TRUE";
+        if (checks.size() != 1 || !"YES".equals(checks.getFirst().get("enforced"))
+            || !Objects.equals(LocationCheck.parse(expected), LocationCheck.parse(String.valueOf(checks.getFirst().get("clause")))))
+            throw new IllegalStateException("Fixture cleanup requires the enforced V14 location pair/range constraint with IS TRUE");
+        noReferences(jdbc, "SELECT COUNT(*) FROM activities WHERE (location_longitude IS NULL) <> (location_latitude IS NULL) "
+            + "OR (location_longitude IS NOT NULL AND (location_longitude NOT BETWEEN -180 AND 180 OR location_latitude NOT BETWEEN -90 AND 90))",
+            List.of(), "Invalid existing location point pairs or ranges");
+    }
+
+    /** Preserve boolean grouping; dropping every parenthesis could accept a weakened CHECK. */
+    private static final class LocationCheck {
+        private final List<String> tokens;
+        private int position;
+        private LocationCheck(String clause) {
+            tokens = Pattern.compile("[a-z_][a-z_0-9]*|\\d+(?:\\.\\d+)?|[()+-]|\\S")
+                .matcher(clause.replace("`", "").toLowerCase(Locale.ROOT)).results().map(match -> match.group()).toList();
+        }
+        static String parse(String clause) {
+            try { var parser = new LocationCheck(clause); String value = parser.expression(); return parser.position == parser.tokens.size() ? value : null; }
+            catch (IllegalArgumentException | IndexOutOfBoundsException error) { return null; }
+        }
+        private boolean next(String token) { return position < tokens.size() && token.equals(tokens.get(position)); }
+        private void take(String token) { if (!next(token)) throw new IllegalArgumentException(); position++; }
+        private String expression() { return combine("or", () -> combine("and", this::atom)); }
+        private String combine(String operator, Supplier<String> parse) {
+            var values = new ArrayList<String>(); values.add(parse.get());
+            while (next(operator)) { position++; values.add(parse.get()); }
+            if (values.size() == 1) return values.getFirst();
+            String prefix = operator + "[";
+            return prefix + String.join(",", values.stream().map(value -> value.startsWith(prefix) ? value.substring(prefix.length(), value.length() - 1) : value).toList()) + "]";
+        }
+        private String atom() {
+            String value;
+            if (next("(")) { position++; value = expression(); take(")"); }
+            else {
+                String column = tokens.get(position++);
+                if (!List.of("location_longitude", "location_latitude").contains(column)) throw new IllegalArgumentException();
+                if (next("between")) { position++; String minimum = bound(); take("and"); value = "between[" + column + "," + minimum + "," + bound() + "]"; }
+                else { take("is"); boolean absent = !next("not"); if (!absent) position++; take("null"); value = (absent ? "null[" : "notnull[") + column + "]"; }
+            }
+            if (next("is")) { position++; take("true"); value = "true[" + value + "]"; }
+            return value;
+        }
+        private String bound() {
+            int sign = 1;
+            if (next("-")) { sign = -1; position++; } else if (next("+")) position++;
+            java.math.BigDecimal value;
+            if (next("(")) { position++; value = new java.math.BigDecimal(bound()); take(")"); }
+            else { String token = tokens.get(position++); if (!token.matches("\\d+(?:\\.\\d+)?")) throw new IllegalArgumentException(); value = new java.math.BigDecimal(token); }
+            return value.multiply(java.math.BigDecimal.valueOf(sign)).stripTrailingZeros().toPlainString();
+        }
     }
 
     private static void noReferences(JdbcTemplate jdbc, String sql, List<Long> parameters, String reason) {

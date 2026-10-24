@@ -1475,3 +1475,12 @@ main:focus {
     scroll-behavior: auto !important;
   }
 }
+/* Map content remains optional; text-only locations work without a provider key. */
+.activity-location-tools { margin-top: -12px; margin-bottom: 24px; }
+.activity-location-links { margin-top: 8px; }
+.activity-map-loading { padding: 24px 0; text-align: center; }
+.activity-map-panel { display: flex; flex-direction: column; gap: 12px; }
+.activity-map-canvas { width: 100%; height: min(45vh, 360px); min-height: 240px; }
+.activity-map-place { height: auto; white-space: normal; text-align: left; padding: 0; }
+.activity-map-candidate label { display: block; margin-bottom: 8px; }
+.activity-map-actions { margin-top: 8px; }

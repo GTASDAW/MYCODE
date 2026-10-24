@@ -8,6 +8,7 @@ export const auditActionLabels: Record<AuditLogAction, string> = {
 
 export const auditFieldLabels: Record<AuditLogField, string> = {
   title: "活动标题", description: "活动介绍", location: "活动地点",
+  locationLongitude: "地图经度（GCJ-02）", locationLatitude: "地图纬度（GCJ-02）",
   category: "活动分类",
   coverHash: "活动封面内容编号",
   startsAt: "开始时间（北京时间）", endsAt: "结束时间（北京时间）",

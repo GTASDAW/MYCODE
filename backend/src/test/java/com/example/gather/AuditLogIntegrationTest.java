@@ -147,7 +147,7 @@ class AuditLogIntegrationTest {
     void prepareVerifiedFixtures() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("13");
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("14");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
         actor = createUser("ADMIN", "审计管理员");
@@ -214,7 +214,8 @@ class AuditLogIntegrationTest {
             new AuditChange("startsAt", null, start.toString()), new AuditChange("endsAt", null, null),
             new AuditChange("registrationDeadline", null, null),
             new AuditChange("capacity", null, "3"),
-            new AuditChange("category", null, "UNCATEGORIZED"));
+            new AuditChange("category", null, "UNCATEGORIZED"),
+            new AuditChange("locationLongitude", null, null), new AuditChange("locationLatitude", null, null));
         assertThat(jdbc.queryForObject("SELECT changes_json FROM activity_audit_logs WHERE id=?", String.class, detail.id()))
             .doesNotContain("password", "not-an-audit-field", "actorUserId");
         assertThat(output.getAll()).doesNotContain(description, "not-an-audit-field", title.strip());

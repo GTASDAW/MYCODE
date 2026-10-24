@@ -12,11 +12,16 @@ export interface NewUser {
   displayName: string;
 }
 
+/** GCJ-02 coordinates supplied by the map provider; never inferred from address text. */
+export interface LocationPoint { longitude: number; latitude: number }
+export interface MapsConfig { enabled: boolean; jsKey: string | null; serviceHost: string }
+
 export interface Activity {
   id: number;
   title: string;
   description: string;
   location: string;
+  locationPoint: LocationPoint | null;
   category: ActivityCategory;
   coverUrl: string | null;
   startsAt: string;
@@ -96,6 +101,7 @@ export interface NewActivity {
   title: string;
   description: string;
   location: string;
+  locationPoint?: LocationPoint | null;
   startsAt: string;
   endsAt?: string | null;
   registrationDeadline?: string | null;
@@ -107,6 +113,7 @@ export interface ActivityDetails {
   title: string;
   description: string;
   location: string;
+  locationPoint?: LocationPoint | null;
   category?: ActivityCategory | null;
 }
 
@@ -186,7 +193,7 @@ export interface AdminAuditLog {
   occurredAt: string;
 }
 
-export type AuditLogField = "title" | "description" | "location" | "category" | "coverHash" | "startsAt" | "endsAt" | "registrationDeadline" | "capacity" |
+export type AuditLogField = "title" | "description" | "location" | "locationLongitude" | "locationLatitude" | "category" | "coverHash" | "startsAt" | "endsAt" | "registrationDeadline" | "capacity" |
   "cancelledAt" | "cancellationReason" | "checkedInAt";
 
 export interface AdminAuditLogDetail extends AdminAuditLog {

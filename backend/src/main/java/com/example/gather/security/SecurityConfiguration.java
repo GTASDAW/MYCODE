@@ -45,7 +45,8 @@ public class SecurityConfiguration {
             .addFilterAfter(new PasswordChangeRateLimitFilter(rateLimits, rateLimitStore, json), AuthorizationFilter.class)
             .requestCache(cache -> cache.requestCache(new NullRequestCache()))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/search", "/api/activities/*", "/api/activities/*/cover", "/api/auth/csrf", "/api/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/activities", "/api/activities/search", "/api/activities/*", "/api/activities/*/cover", "/api/auth/csrf", "/api/health",
+                    "/api/maps/config", "/api/_AMapService/**").permitAll()
                 .requestMatchers("/api/auth/login").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")

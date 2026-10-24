@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
 import { verifyAuditRegistrationOwnership } from './e2e-cleanup.mjs';
 import { verifyAvatarSchema } from './avatar-schema.mjs';
+import { verifyLocationPointSchema } from './location-point-schema.mjs';
 
 const RUN_PROJECT = 'gather-perf-ci';
 const RUN_DATABASE = 'activity_platform_perf';
@@ -283,7 +284,7 @@ export async function verifyPerformanceDatabase(db, settings) {
   const [[identity]] = await db.query('SELECT DATABASE() AS name, @@server_uuid AS serverUuid, VERSION() AS version');
   assert(identity.name === RUN_DATABASE && /^8\.4\./.test(identity.version) && identity.serverUuid, 'Expected isolated MySQL 8.4 database identity is missing.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history ORDER BY installed_rank');
-  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'] : ['1', '2'];
+  const requiredMigrations = settings.phase === undefined ? ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'] : ['1', '2'];
   assert(requiredMigrations.every(version => migrations.some(row => row.version === version && row.success === 1)), 'Required Gather Flyway migrations must be applied.');
   if (settings.phase === undefined) {
     await db.query('SELECT credential_version FROM users LIMIT 0');
@@ -291,6 +292,7 @@ export async function verifyPerformanceDatabase(db, settings) {
     await db.query('SELECT starts_at, ends_at, registration_deadline FROM activities LIMIT 0');
     await db.query('SELECT cover_hash, cover_image FROM activities LIMIT 0');
     await verifyAvatarSchema(db);
+    await verifyLocationPointSchema(db);
     await db.query('SELECT user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
     await db.query('SELECT checked_in_at, checked_in_by FROM registrations LIMIT 0');
     await db.query('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
@@ -320,7 +322,7 @@ export async function verifyPerformanceDatabase(db, settings) {
   const client = new ApiClient(settings.base);
   const api = await client.json('/api/activities');
   const [activities] = await db.query(settings.phase === undefined
-    ? 'SELECT id, title, description, location, category, capacity, registered_count, starts_at, ends_at, registration_deadline FROM activities ORDER BY id'
+    ? 'SELECT id, title, description, location, category, capacity, registered_count, starts_at, ends_at, registration_deadline, location_longitude, location_latitude FROM activities ORDER BY id'
     : 'SELECT id, title, description, location, capacity, registered_count, starts_at FROM activities ORDER BY id');
   assert(Array.isArray(api) && api.length === activities.length, 'Public API seed data does not match the isolated database.');
   for (const row of activities) {
@@ -328,6 +330,8 @@ export async function verifyPerformanceDatabase(db, settings) {
     assert(view && view.title === row.title && view.description === row.description && view.location === row.location
       && view.capacity === row.capacity && view.registeredCount === row.registered_count
       && (settings.phase !== undefined || (view.category === row.category
+        && (row.location_longitude === null ? view.locationPoint === null : view.locationPoint
+          && Number(view.locationPoint.longitude) === Number(row.location_longitude) && Number(view.locationPoint.latitude) === Number(row.location_latitude))
         && (row.ends_at === null ? view.endsAt === null : new Date(view.endsAt).getTime() === new Date(`${row.ends_at.replace(' ', 'T')}Z`).getTime())
         && (row.registration_deadline === null ? view.registrationDeadline === null : new Date(view.registrationDeadline).getTime() === new Date(`${row.registration_deadline.replace(' ', 'T')}Z`).getTime())))
       && new Date(view.startsAt).getTime() === new Date(`${row.starts_at.replace(' ', 'T')}Z`).getTime(),

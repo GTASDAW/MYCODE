@@ -19,6 +19,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.Objects;
+import java.math.BigDecimal;
 
 @Service
 public class AuditLogService {
@@ -61,17 +63,30 @@ public class AuditLogService {
             new AuditChange("endsAt", null, activity.endsAt == null ? null : activity.endsAt.toInstant(ZoneOffset.UTC).toString()),
             new AuditChange("registrationDeadline", null, activity.registrationDeadline == null ? null : activity.registrationDeadline.toInstant(ZoneOffset.UTC).toString()),
             new AuditChange("capacity", null, Integer.toString(activity.capacity)),
-            new AuditChange("category", null, activity.category)), utc(now));
+            new AuditChange("category", null, activity.category),
+            new AuditChange("locationLongitude", null, coordinate(activity.locationLongitude)),
+            new AuditChange("locationLatitude", null, coordinate(activity.locationLatitude))), utc(now));
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void edited(long activityId, long actorId, ActivityAuditText before,
                         String title, String description, String location, String category, Instant now) {
+        edited(activityId, actorId, before, title, description, location, category, before.locationLongitude(), before.locationLatitude(), now);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void edited(long activityId, long actorId, ActivityAuditText before,
+                        String title, String description, String location, String category,
+                        BigDecimal longitude, BigDecimal latitude, Instant now) {
         List<AuditChange> changes = new ArrayList<>();
         if (!before.title().equals(title)) changes.add(new AuditChange("title", before.title(), title));
         if (!before.description().equals(description)) changes.add(new AuditChange("description", before.description(), description));
         if (!before.location().equals(location)) changes.add(new AuditChange("location", before.location(), location));
         if (!before.category().equals(category)) changes.add(new AuditChange("category", before.category(), category));
+        if (!Objects.equals(before.locationLongitude(), longitude))
+            changes.add(new AuditChange("locationLongitude", coordinate(before.locationLongitude()), coordinate(longitude)));
+        if (!Objects.equals(before.locationLatitude(), latitude))
+            changes.add(new AuditChange("locationLatitude", coordinate(before.locationLatitude()), coordinate(latitude)));
         if (!changes.isEmpty()) append("EDIT", activityId, actorId, null, changes, utc(now));
     }
 
@@ -107,4 +122,6 @@ public class AuditLogService {
     private static LocalDateTime utc(Instant now) {
         return LocalDateTime.ofInstant(now.truncatedTo(ChronoUnit.MICROS), ZoneOffset.UTC);
     }
+
+    private static String coordinate(BigDecimal value) { return value == null ? null : value.toPlainString(); }
 }

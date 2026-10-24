@@ -125,10 +125,10 @@ class MyRegistrationKeywordIntegrationTest {
     private final Map<Long, String> userFixtures = new LinkedHashMap<>();
 
     @BeforeEach
-    void verifyDedicatedV13BeforeWritingFixtures() {
+    void verifyDedicatedV14BeforeWritingFixtures() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class))
-            .isEqualTo("13");
+            .isEqualTo("14");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, checked_in_at, checked_in_by FROM registrations LIMIT 0");

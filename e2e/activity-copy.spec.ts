@@ -43,7 +43,7 @@ async function loginForm(page: Page, username = 'admin') {
 async function login(page: Page, username = 'admin') { await page.goto('/login'); await loginForm(page, username); }
 async function logout(page: Page) {
   await page.getByRole('button', { name: /账号菜单/ }).click();
-  await page.getByRole('menuitem', { name: /退出登录/ }).click();
+  await page.getByRole('menuitem', { name: /退出登录/ }).press('Enter');
   await expect(page.getByRole('button', { name: '登录 / 体验', exact: true })).toBeVisible();
 }
 async function finish(primary: unknown, operations: Array<() => Promise<unknown>>) {
@@ -200,7 +200,9 @@ async function assertCreated(request: APIRequestContext, id: number, value: Awai
     const [audit] = await db.execute<any[]>('SELECT action,changes_json FROM activity_audit_logs WHERE activity_id=? ORDER BY id', [id]);
     expect(audit).toHaveLength(1); expect(audit[0].action).toBe('CREATE');
     const changes = typeof audit[0].changes_json === 'string' ? JSON.parse(audit[0].changes_json) : audit[0].changes_json;
-    expect(changes.map((change: { field: string }) => change.field)).toEqual(['title', 'description', 'location', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'category']);
+    expect(changes.map((change: { field: string }) => change.field)).toEqual(['title', 'description', 'location', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'category', 'locationLongitude', 'locationLatitude']);
+    expect(changes.filter((change: { field: string }) => change.field === 'locationLongitude' || change.field === 'locationLatitude')
+      .map((change: { after: unknown }) => change.after)).toEqual([null, null]);
     expect(changes.every((change: { before: unknown }) => change.before === null)).toBe(true);
   } finally { await db.end(); }
 }
@@ -242,6 +244,38 @@ test('复制含封面报名候补取消签到通知收藏的来源只新建正�
     pending.release(); await pending.delivered(); await expect(page.getByRole('heading', { name: value.fixture.title, exact: true })).toBeVisible();
     expect(await sourceDigest(rich.value, rich.users)).toEqual(before);
     await picture(page, info, 'copy-created-independent');
+  } catch (error) { primary = error; }
+  finally { await finish(primary, [...(pending ? [pending.cleanup] : []), () => logoutApi(page.request), () => logoutApi(request)]); }
+});
+
+test('真实创建已提交但检查失败时终止拦截请求，不在清理路由时重复创建', async ({ page, request }, info) => {
+  let primary: unknown, pending: Held | undefined;
+  try {
+    const original = await source(request, info); await login(page); await page.goto(copyPath(original.id)); await form(page, original);
+    const value = await draft(page, info);
+    const sentinel = new Error('Declared inspection failure after the real commit');
+    pending = await hold(page, '/api/admin/activities', 'POST', 201, { inspect: async response => {
+      const created = await response.json(); recordFixtureId(value.fixture.key, created.id); throw sentinel;
+    } });
+    await publish(page).click();
+    let inspected: unknown;
+    try { await pending.ready; } catch (error) { inspected = error; }
+    expect(inspected).toBe(sentinel);
+    pending.release();
+    let cleanupError: unknown;
+    try { await pending.cleanup(); } catch (error) { cleanupError = error; }
+    const causes = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(causes) : [error];
+    expect(causes(cleanupError)).toHaveLength(1);
+    expect(causes(cleanupError)[0]).toBe(sentinel);
+    expect(pending.count()).toBe(1); pending = undefined;
+    await expect(page.getByText('暂时无法连接服务，请检查网络后重试。', { exact: true })).toBeVisible();
+    const db = await database();
+    try {
+      const [created] = await db.execute<any[]>('SELECT id FROM activities WHERE CAST(title AS BINARY)=CAST(? AS BINARY) AND CAST(description AS BINARY)=CAST(? AS BINARY)', [value.fixture.title, value.fixture.description]);
+      expect(created).toHaveLength(1);
+      const [[audit]] = await db.execute<any[]>('SELECT COUNT(*) AS total FROM activity_audit_logs WHERE activity_id=? AND action=\'CREATE\'', [created[0].id]);
+      expect(Number(audit.total)).toBe(1);
+    } finally { await db.end(); }
   } catch (error) { primary = error; }
   finally { await finish(primary, [...(pending ? [pending.cleanup] : []), () => logoutApi(page.request), () => logoutApi(request)]); }
 });
@@ -313,9 +347,20 @@ async function hold(page: Page, path: string, method: string, status: number,
         ready(); await gate;
         try { if (options.failure) await route.abort('failed'); else await route.fulfill({ response }); }
         catch (error) { if (!target.failure()) throw error; }
-      } catch (error) { reject(error); throw error; }
+      } catch (error) {
+        reject(error);
+        // route.fetch may already have committed a POST. Settle its original
+        // interception even if inspection failed, so unroute cannot send it again.
+        try { await route.abort('failed'); }
+        catch (abortError) { throw new AggregateError([error, abortError], 'Held copy response and route termination failed.'); }
+        throw error;
+      }
     })();
-    jobs.push(job.then(() => ({}), error => ({ error }))); return job;
+    const observed = job.then(() => ({}), error => ({ error }));
+    jobs.push(observed);
+    // ready/delivered/cleanup retain every failure. The routing dispatcher must
+    // settle normally after abort, including an intentionally failed inspector.
+    return observed.then(() => undefined);
   });
   const delivered = async () => {
     const settled = await Promise.all(jobs); const errors = settled.flatMap(result => result.error === undefined ? [] : [result.error]);

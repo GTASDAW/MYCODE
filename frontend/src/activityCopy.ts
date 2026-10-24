@@ -1,4 +1,5 @@
-import type { Activity, ActivityCategory, NewActivity } from "./types";
+import type { Activity, ActivityCategory, LocationPoint, NewActivity } from "./types";
+import { copyLocationPoint } from "./activityMap.ts";
 import { isActivityCategory } from "./activityCategory.ts";
 import { beijingInputToIso } from "./date.ts";
 
@@ -35,6 +36,7 @@ export interface ActivityCreateFormValues {
   title: string;
   description: string;
   location: string;
+  locationPoint?: LocationPoint | null;
   startsAt: string;
   endsAt?: string;
   registrationDeadline?: string;
@@ -47,6 +49,7 @@ export function activityCopyDraft(activity: Activity): Partial<ActivityCreateFor
     title: activity.title,
     description: activity.description,
     location: activity.location,
+    locationPoint: copyLocationPoint(activity.locationPoint),
     category: isActivityCategory(activity.category) ? activity.category : "UNCATEGORIZED",
     capacity: activity.capacity,
     startsAt: undefined,
@@ -60,6 +63,7 @@ export function activityCreateRequest(values: ActivityCreateFormValues): NewActi
     title: values.title.trim(),
     description: values.description.trim(),
     location: values.location.trim(),
+    locationPoint: copyLocationPoint(values.locationPoint),
     category: values.category,
     capacity: values.capacity,
     startsAt: beijingInputToIso(values.startsAt),

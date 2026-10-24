@@ -82,7 +82,8 @@ class CredentialVersionFilterTest {
 
     @Test
     void publicEncodedActivityRoutesDowngradeButStaleCsrfNeverCreatesSessionOrCookie() throws Exception {
-        for (String path : new String[] {"/api/activities", "/api/activities/search", "/api/activities/42", "/api/activities/%73earch"}) {
+        for (String path : new String[] {"/api/activities", "/api/activities/search", "/api/activities/42", "/api/activities/%73earch",
+            "/api/maps/config", "/api/_AMapService/v3/place/text", "/api/_AMapService/v3/assistant/inputtips", "/api/_AMapService/v3/geocode/regeo"}) {
             authenticate(4L); when(versions.findByUserId(42)).thenReturn(5L);
             var request = request(path); var response = new MockHttpServletResponse();
             filter.doFilter(request, response, (value, result) -> assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull());

@@ -116,10 +116,10 @@ class AvatarIntegrationTest {
     final Map<Long, String> fixtureActivities = new LinkedHashMap<>();
     final List<FavoriteKey> favoriteKeys = new ArrayList<>();
 
-    @BeforeEach void verifyDedicatedV13BeforeWritingFixtures() {
+    @BeforeEach void verifyDedicatedV14BeforeWritingFixtures() {
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(13);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(14);
         jdbc.queryForList("SELECT id,credential_version,avatar_hash,avatar_image FROM users LIMIT 0");
         queries.queries.clear(); queries.failAfterWrite.set(false);
     }

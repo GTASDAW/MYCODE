@@ -122,10 +122,25 @@ if (Test-Port 8080) { Assert-PortOwner -Port 8080 -Executable $javaExe -Argument
 if (Test-Port 5173) { Assert-PortOwner -Port 5173 -Executable $nodeExe -Argument 'script' -ExpectedPath $vitePath | Out-Null }
 New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
 
-$envNames = @('JAVA_HOME', 'PATH', 'DB_URL', 'DB_USERNAME', 'DB_PASSWORD', 'PORT')
+$envNames = @('JAVA_HOME', 'PATH', 'DB_URL', 'DB_USERNAME', 'DB_PASSWORD', 'PORT', 'AMAP_JS_KEY', 'AMAP_JS_SECURITY_CODE')
 $savedEnvironment = @{}
 foreach ($name in $envNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 try {
+    # Explicit environment wins as a pair; never mix keys from two applications.
+    if ([string]::IsNullOrWhiteSpace($env:AMAP_JS_KEY) -and [string]::IsNullOrWhiteSpace($env:AMAP_JS_SECURITY_CODE)) {
+        . (Join-Path $PSScriptRoot 'amap-config.ps1')
+        try {
+            $mapConfiguration = Get-GatherMapConfig -Path (Join-Path $runtimeDir 'amap.json')
+            if ($mapConfiguration) {
+                $env:AMAP_JS_KEY = $mapConfiguration.jsKey
+                $env:AMAP_JS_SECURITY_CODE = $mapConfiguration.securityJsCode
+            }
+        } catch {
+            $env:AMAP_JS_KEY = ''
+            $env:AMAP_JS_SECURITY_CODE = ''
+            Write-Warning 'Local map configuration is invalid or not private. Map features remain disabled; check .runtime/amap.json.'
+        }
+    }
     $env:JAVA_HOME = $javaInstall.FullName
     $env:PATH = (Join-Path $javaInstall.FullName 'bin') + ';' + $env:PATH
     $env:DB_URL = 'jdbc:mysql://127.0.0.1:3307/activity_platform?characterEncoding=UTF-8&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true'

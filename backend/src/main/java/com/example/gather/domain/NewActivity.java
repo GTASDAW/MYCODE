@@ -14,6 +14,8 @@ public class NewActivity {
     public final int capacity;
     public final long createdBy;
     public final String category;
+    public final java.math.BigDecimal locationLongitude;
+    public final java.math.BigDecimal locationLatitude;
 
     public NewActivity(String title, String description, String location, LocalDateTime startsAt,
                        int capacity, long createdBy) {
@@ -32,6 +34,12 @@ public class NewActivity {
 
     public NewActivity(String title, String description, String location, LocalDateTime startsAt,
                        int capacity, long createdBy, String category, LocalDateTime endsAt, LocalDateTime registrationDeadline) {
+        this(title, description, location, startsAt, capacity, createdBy, category, endsAt, registrationDeadline, null, null);
+    }
+
+    public NewActivity(String title, String description, String location, LocalDateTime startsAt,
+                       int capacity, long createdBy, String category, LocalDateTime endsAt, LocalDateTime registrationDeadline,
+                       java.math.BigDecimal locationLongitude, java.math.BigDecimal locationLatitude) {
         this.title = title;
         this.description = description;
         this.location = location;
@@ -41,5 +49,7 @@ public class NewActivity {
         this.capacity = capacity;
         this.createdBy = createdBy;
         this.category = category;
+        this.locationLongitude = locationLongitude;
+        this.locationLatitude = locationLatitude;
     }
 }

@@ -11,7 +11,7 @@ public interface RegistrationMapper {
     String MY_VIEW_COLUMNS = "r.id AS registration_id, r.status, r.checked_in_at, "
         + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + WaitingQueueSql.COUNT + WaitingQueueSql.POSITION
-        + "a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash";
+        + "a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash, a.location_longitude, a.location_latitude";
     String MY_SEARCH_MATCH = "(#{status}='ALL' OR r.status=#{status}) "
         + "AND (#{keyword}='' OR LOCATE(#{keyword}, a.title)>0 OR LOCATE(#{keyword}, a.location)>0)";
 

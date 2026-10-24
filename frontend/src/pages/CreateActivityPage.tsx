@@ -22,6 +22,7 @@ import { useAdminRead } from "./useAdminRead";
 import { activityCopyDraft, activityCreateRequest, ordinaryActivityCreatePath,
   parseActivityCopySource, readActivityCopySource } from "../activityCopy";
 import type { ActivityCreateFormValues } from "../activityCopy";
+import { ActivityLocationField } from "./ActivityLocationField";
 
 export function CreateActivityPage() {
   const { pathname, search } = useLocation();
@@ -120,16 +121,7 @@ function ActivityCreateForm({ initialValues, scope, returnPath, isCurrent }: {
               placeholder="介绍活动内容、适合谁参与，以及需要准备什么"
             />
           </Form.Item>
-          <Form.Item
-            name="location"
-            label="活动地点"
-            rules={[
-              { required: true, whitespace: true, message: "请输入活动地点" },
-              { max: 200, message: "地点最多 200 个字符" },
-            ]}
-          >
-            <Input maxLength={200} placeholder="填写场地名称和详细地址" />
-          </Form.Item>
+          <ActivityLocationField disabled={mutation.busy} />
           <Form.Item name="category" label="活动分类" rules={[{ required: true, message: "请选择活动分类" }]}>
             <Select<ActivityCategory> aria-label="活动分类" options={activityCategoryOptions} />
           </Form.Item>

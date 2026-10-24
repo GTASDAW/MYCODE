@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import mysql from 'mysql2/promise';
 import { verifyAvatarSchema } from './avatar-schema.mjs';
+import { verifyLocationPointSchema } from './location-point-schema.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const backupRoot = join(repositoryRoot, '.runtime', 'backups');
@@ -113,7 +114,7 @@ function connectionOptions(config) {
   return {
     host: config.host, port: config.port, database: config.database, user: config.user, password: config.password,
     connectTimeout: 10000, multipleStatements: false, charset: 'utf8mb4', timezone: 'Z',
-    dateStrings: true, supportBigNumbers: true, bigNumberStrings: true, jsonStrings: true,
+    dateStrings: true, supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, jsonStrings: true,
   };
 }
 
@@ -162,14 +163,16 @@ export async function snapshotDatabase(connection) {
     }
     try { await verifyAvatarSchema(connection); }
     catch { refuse('SCHEMA_REFUSED', 'The V13 avatar columns, enforced image/hash constraint and byte checksums are required.'); }
-    const result = { schemaVersion: 13, tables: {}, migrations: [] };
+    try { await verifyLocationPointSchema(connection); }
+    catch { refuse('SCHEMA_REFUSED', 'The V14 location point decimal columns, enforced pair/range constraint and valid data are required.'); }
+    const result = { schemaVersion: 14, tables: {}, migrations: [] };
     for (const name of tables) {
       const [[definition]] = await connection.execute(`SHOW CREATE TABLE \`${name}\``);
       const ddl = definition?.['Create Table'];
       if (typeof ddl !== 'string' || !ddl) refuse('SCHEMA_REFUSED', 'A table definition is unavailable.');
       const [rows, fields] = await connection.execute(`SELECT * FROM \`${name}\` ORDER BY \`${name === 'flyway_schema_history' ? 'installed_rank' : 'id'}\``);
-      if (name === 'activities' && !['ends_at', 'registration_deadline'].every(column => fields?.some(field => field.name === column))) {
-        refuse('SCHEMA_REFUSED', 'The V13 activity end-time and registration-deadline columns are required.');
+      if (name === 'activities' && !['ends_at', 'registration_deadline', 'location_longitude', 'location_latitude'].every(column => fields?.some(field => field.name === column))) {
+        refuse('SCHEMA_REFUSED', 'All V14 activity end-time, registration-deadline and exact location point fields must be read.');
       }
       if (name === 'users' && !['avatar_image', 'avatar_hash'].every(column => fields?.some(field => field.name === column))) {
         refuse('SCHEMA_REFUSED', 'All V13 avatar fields must be read for the complete user baseline.');
@@ -179,8 +182,8 @@ export async function snapshotDatabase(connection) {
         refuse('PRESET_ACCOUNTS_REFUSED', 'The expected admin and demo account roles are missing.');
       }
       if (name === 'flyway_schema_history') {
-        if (rows.length !== 13 || rows.some((row, index) => String(row.version) !== String(index + 1) || Number(row.success) !== 1 || !Number.isInteger(row.checksum))) {
-          refuse('MIGRATIONS_REFUSED', 'Exactly the successful Flyway V1 through V13 migrations and checksums are required.');
+        if (rows.length !== 14 || rows.some((row, index) => String(row.version) !== String(index + 1) || Number(row.success) !== 1 || !Number.isInteger(row.checksum))) {
+          refuse('MIGRATIONS_REFUSED', 'Exactly the successful Flyway V1 through V14 migrations and checksums are required.');
         }
         result.migrations = rows.map(row => ({ version: String(row.version), checksum: row.checksum }));
       }
@@ -278,11 +281,11 @@ function validateManifest(manifest, runId) {
       || (!sourceNames.has(manifest.source.database) && !restoreName.test(manifest.source.database))
       || !uuid.test(manifest.source.serverUuid) || !/^8\.4\./.test(manifest.source.mysqlVersion)
       || !manifest.dump || !Number.isSafeInteger(manifest.dump.bytes) || manifest.dump.bytes < 1 || !sha256.test(manifest.dump.sha256)
-      || !manifest.snapshot || manifest.snapshot.schemaVersion !== 13 || !manifest.snapshot.tables || Object.keys(manifest.snapshot.tables).length !== tables.length
+      || !manifest.snapshot || manifest.snapshot.schemaVersion !== 14 || !manifest.snapshot.tables || Object.keys(manifest.snapshot.tables).length !== tables.length
       || tables.some(name => {
         const table = manifest.snapshot.tables[name];
         return !table || !Number.isSafeInteger(table.rows) || table.rows < 0 || !sha256.test(table.contentSha256) || !sha256.test(table.schemaSha256);
-      }) || !Array.isArray(manifest.snapshot.migrations) || manifest.snapshot.migrations.length !== 13
+      }) || !Array.isArray(manifest.snapshot.migrations) || manifest.snapshot.migrations.length !== 14
       || manifest.snapshot.migrations.some((migration, index) => migration.version !== String(index + 1) || !Number.isInteger(migration.checksum))) {
     refuse('PACKAGE_INVALID', 'The backup manifest is invalid or incomplete.');
   }
