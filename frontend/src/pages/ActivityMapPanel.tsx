@@ -111,7 +111,7 @@ export default function ActivityMapPanel(props: ActivityMapDialogProps) {
     {!props.readonly && ready && <Input.Search aria-label="搜索地图地点" value={keyword} maxLength={200}
       onChange={event => {
         operations.current?.begin(); setPending(false); setSearched(false); setPlaces([]); setOperationError(null); setKeyword(event.target.value);
-      }} onSearch={() => void search()} enterButton="搜索地点" loading={pending}
+      }} onSearch={() => void search()} enterButton={<Button type="primary" aria-label="搜索地点">搜索地点</Button>} loading={pending}
       placeholder="输入场地名称或地址，点击搜索" />}
     <div ref={container} className="activity-map-canvas" role="region" aria-label="高德地图"
       style={{ display: unconfigured || loadError ? "none" : "block", visibility: ready ? "visible" : "hidden" }} />

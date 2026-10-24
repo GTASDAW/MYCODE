@@ -315,7 +315,7 @@ function ActivityDetailPage() {
               正在确认登录状态
             </Button>
           ) : registrationClosed && (!auth.user || !registered && !waiting) ? (
-            <Button block disabled>报名已截止</Button>
+            <Button block disabled aria-label="报名已截止">报名已截止</Button>
           ) : !auth.user ? (
             <Link to="/login" state={{ from: detailPath }}>
               <Button block type="primary">
