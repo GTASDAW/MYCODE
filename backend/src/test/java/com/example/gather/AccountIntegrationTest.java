@@ -81,6 +81,7 @@ class AccountIntegrationTest {
 
     @BeforeEach
     void verifyDedicatedDatabase() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
     }

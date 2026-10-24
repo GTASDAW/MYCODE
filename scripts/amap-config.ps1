@@ -35,15 +35,31 @@ function Get-GatherMapConfig {
     }
     try { $config = [IO.File]::ReadAllText($item.FullName) | ConvertFrom-Json -ErrorAction Stop }
     catch { throw 'Map configuration is not valid JSON.' }
-    if (-not $config -or @($config.PSObject.Properties.Name).Count -ne 2 -or
-        @($config.PSObject.Properties.Name | Where-Object { $_ -notin @('jsKey', 'securityJsCode') }).Count -ne 0) {
-        throw 'Map configuration requires jsKey and securityJsCode only.'
+    $names = @($config.PSObject.Properties.Name)
+    if (-not $config -or 'jsKey' -notin $names -or 'securityJsCode' -notin $names -or
+        @($names | Where-Object { $_ -notin @('jsKey', 'securityJsCode', 'webServiceKey') }).Count -ne 0) {
+        throw 'Map configuration requires jsKey, securityJsCode and optional webServiceKey only.'
     }
-    foreach ($name in @('jsKey', 'securityJsCode')) {
+    foreach ($name in $names) {
         $value = $config.$name
         if ($value -isnot [string] -or ($value -ne '' -and $value -notmatch '^[A-Za-z0-9_-]{1,128}$')) {
             throw 'Map configuration contains an invalid value.'
         }
     }
-    return @{ jsKey = $config.jsKey; securityJsCode = $config.securityJsCode }
+    return @{ jsKey = $config.jsKey; securityJsCode = $config.securityJsCode; webServiceKey = $(if ('webServiceKey' -in $names) { $config.webServiceKey } else { '' }) }
+}
+
+function Initialize-GatherMapConfig {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $created = -not (Test-Path -LiteralPath $Path)
+    if ($created) { New-Item -ItemType File -Path $Path | Out-Null }
+    Protect-GatherMapConfig -Path $Path
+    $config = if ($created) { @{ jsKey = ''; securityJsCode = ''; webServiceKey = '' } }
+        else { Get-GatherMapConfig -Path $Path }
+    # Add only the optional field to legacy files; preserve both existing JS credentials.
+    if ($created -or 'webServiceKey' -notin @(([IO.File]::ReadAllText($Path) | ConvertFrom-Json).PSObject.Properties.Name)) {
+        $json = [ordered]@{ jsKey = $config.jsKey; securityJsCode = $config.securityJsCode; webServiceKey = $config.webServiceKey } | ConvertTo-Json
+        [IO.File]::WriteAllText($Path, $json + "`n", [Text.UTF8Encoding]::new($false))
+    }
+    Get-GatherMapConfig -Path $Path | Out-Null
 }

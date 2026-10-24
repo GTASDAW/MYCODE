@@ -17,6 +17,7 @@ interface Registration {
   id: number; userId: number; username: string; displayName: string; status: RegistrationStatus;
   createdAt: string; updatedAt: string; checkedInAt: string | null;
   checkedInBy: number | null; checkedInByDisplayName: string | null;
+  checkInMethod: 'ADMIN' | 'SELF_LOCATION' | null; checkInVersion: number;
 }
 interface Roster {
   activity: { id: number; title: string; startsAt: string; registeredCount: number; waitingCount: number; cancelled: boolean };
@@ -231,7 +232,7 @@ async function fixtures(request: APIRequestContext, info: TestInfo, statuses: Re
 async function confirm(page: Page, id: number, registrationId: number) {
   await page.getByRole('button', { name: `确认报名 ${registrationId} 签到`, exact: true }).click();
   const modal = page.getByRole('dialog', { name: '确认签到', exact: true });
-  await expect(modal).toContainText('成功后不可撤销');
+  await expect(modal).toContainText('需要更正时须填写原因并保留审计记录');
   const completed = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === `/api/admin/activities/${id}/registrations/${registrationId}/check-in`);
   await modal.getByRole('button', { name: '确认签到', exact: true }).click();
@@ -269,9 +270,9 @@ function parseCsv(bytes: Buffer) {
     }
     rows.push(cells);
   }
-  expect(rows.every(row => row.length === 10)).toBeTruthy();
+  expect(rows.every(row => row.length === 11)).toBeTruthy();
   expect(rows[0]).toEqual(['报名记录ID', '用户名', '昵称', '报名状态', '签到状态', '首次报名时间（北京时间）',
-    '报名更新时间（北京时间）', '签到时间（北京时间）', '签到管理员ID', '签到管理员昵称']);
+    '报名更新时间（北京时间）', '签到时间（北京时间）', '签到管理员ID', '签到管理员昵称', '签到方式']);
   return rows;
 }
 
@@ -443,6 +444,7 @@ test('CSV下载导出筛选全集而非当前页，中文、公式前缀、引�
       expect(row[7]).toBe(beijing(item.checkedInAt));
       expect(row[8]).toBe(item.checkedInBy ? `\t${item.checkedInBy}` : '');
       expect(row[9]).toBe(item.checkedInByDisplayName ? `\t${item.checkedInByDisplayName}` : '');
+      expect(row[10]).toBe(item.checkInMethod === 'ADMIN' ? '管理员签到' : item.checkInMethod === 'SELF_LOCATION' ? '定位签到' : '');
     }
     expect(csv.find(row => row[0] === `\t${first.id}`)![2]).toBe(`\t=q,"${fixture.accounts[0].key}`);
     expect(csv.find(row => row[1] === `\t${fixture.accounts[1].username}`)![2]).toBe(`\tq,\n${fixture.accounts[1].key}`);
@@ -483,7 +485,7 @@ test('名单、签到和下载网络失败可重试，失败不写入签到也�
     await page.getByRole('button', { name: `确认报名 ${row.id} 签到`, exact: true }).click();
     const modal = page.getByRole('dialog', { name: '确认签到', exact: true });
     await modal.getByRole('button', { name: '确认签到', exact: true }).click();
-    await expect(modal.getByText(networkError, { exact: true })).toBeVisible();
+    await expect(modal.getByText('签到结果未确认，请刷新名单核对后再决定是否重试。', { exact: true })).toBeVisible();
     expect((await roster(request, fixture.id)).items[0].checkedInAt).toBeNull();
     failCheckIn = false;
     const checked = page.waitForResponse(response => response.request().method() === 'POST'

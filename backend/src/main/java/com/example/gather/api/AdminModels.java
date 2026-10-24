@@ -17,12 +17,12 @@ public final class AdminModels {
 
     public record RosterView(long id, long userId, String username, String displayName, String status,
                              Instant createdAt, Instant updatedAt, Instant checkedInAt, Long checkedInBy,
-                             String checkedInByDisplayName) {
+                             String checkedInByDisplayName, String checkInMethod, long checkInVersion) {
         public static RosterView from(RosterRow row) {
             return new RosterView(row.id(), row.userId(), row.username(), row.displayName(), row.status(),
                 row.createdAt().toInstant(ZoneOffset.UTC), row.updatedAt().toInstant(ZoneOffset.UTC),
                 row.checkedInAt() == null ? null : row.checkedInAt().toInstant(ZoneOffset.UTC),
-                row.checkedInBy(), row.checkedInByDisplayName());
+                row.checkedInBy(), row.checkedInByDisplayName(), row.checkInMethod(), row.checkInVersion());
         }
     }
 

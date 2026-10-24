@@ -1,15 +1,16 @@
 # 我的报名：本人签到、分页与联表读取
 
-“我的报名”将有效报名、候补和取消历史放在同一个真实查询中，提供活动关键词搜索、状态筛选、分页、手动刷新及本人签到结果。管理员也可以参加活动，因此普通用户和管理员都只查看自己的记录；后台报名名单仍负责管理整场参与者与签到写操作。
+“我的报名”将有效报名、候补和取消历史放在同一个真实查询中，提供活动关键词搜索、状态筛选、分页、手动刷新及本人到场定位签到。管理员也可以参加活动，因此普通用户和管理员都只操作自己的报名；后台名单负责整场参与者与管理员确认、更正。
 
-签到字段沿用 V5 的 `checked_in_at`，当前保持 V12；关键词搜索没有新增迁移、索引、依赖、轮询或缓存。报名、递补、取消、签到和通知写事务保持原有行为，网站继续在本机演示。
+V15 在原签到时间之外新增方式与版本，关键词和候补查询不增加索引、依赖、轮询或缓存。报名、递补、取消和通知事务保持，网站继续在本机演示。
 
 ## 两个读取合同
 
 | 接口 | 返回与兼容性 |
 | --- | --- |
 | `GET /api/me/registrations` | 保留原完整数组，每项仍为 `{id,status,activity}`；不添加签到时间或操作人字段，内部改为一次联表读取 |
-| `GET /api/me/registrations/search` | 返回 `{items,total,page,pageSize,summary}`，每项为 `{id,status,activity,checkedInAt}`，页面使用此接口 |
+| `GET /api/me/registrations/search` | 返回 `{items,total,page,pageSize,summary,locationCheckInEnabled}`，每项为 `{id,status,activity,checkedInAt,checkInMethod,checkInVersion}`，页面使用此接口 |
+| `POST /api/me/registrations/{registrationId}/check-in` | 本人定位签到，必填WGS84经纬度、accuracyMeters、expectedVersion；返回本人记录，需CSRF |
 
 新接口默认 `page=1&pageSize=10&status=ALL`，页码至少 1，每页 1–100 条，状态只接受 `ALL|ACTIVE|WAITING|CANCELLED`。这些参数省略时使用默认值，显式空值、非整数、越界数量或未知状态返回 400 `VALIDATION_ERROR`。匿名返回 401，客户端传入 `userId` 不能改变可信登录身份。
 
@@ -25,7 +26,7 @@
 
 页面仅在本人WAITING且活动未取消时显示“候补第 N 位，前面还有 N−1 人”。接口缺字段、null或非正安全整数显示“候补顺位暂不可用”，不从候补总数或当前页推算。现有边界计时器更新开始/截止提示；服务端closed优先于落后的浏览器时钟。详情提供“刷新活动信息”，我的报名沿用“刷新报名”，均手动重读；不增加接口轮询。报名/取消在途时详情禁用刷新，点击回调另核提交所有权，防止刷新版本覆盖成功响应。
 
-`WaitingQueueSql`在原ActivityMapper/RegistrationMapper SELECT内复用本人队列计数投影；收藏与管理活动沿共享活动列读取，个人旧数组仍一次、新分页仍聚合加联表两次业务SELECT，不为每行追加Mapper请求。排名与候补人数来自同条SELECT/同一事务快照；两次分页读取之间真实队列变化只在下次查询体现。数据库内部子查询工作随数据变化，不由固定请求次数推断恒定成本。本轮无新字段、索引、迁移或依赖，保持V12，也不改变热锁投影、人数、通知及审计写规则。
+`WaitingQueueSql`在原ActivityMapper/RegistrationMapper SELECT内复用本人队列计数投影；收藏与管理活动沿共享活动列读取，个人旧数组仍一次、新分页仍聚合加联表两次业务SELECT，不为每行追加Mapper请求。排名与候补人数来自同条SELECT/同一事务快照；两次分页读取之间真实队列变化只在下次查询体现。数据库内部子查询工作随数据变化，不由固定请求次数推断恒定成本。V15的签到方式/版本直接复用本次联表，配置状态只为布尔，不改变读取次数、热锁投影、人数或通知。
 
 新接口的筛选只影响 `items` 和 `total`，`summary` 始终覆盖本人全部历史：
 
@@ -36,7 +37,9 @@
 | `cancelledRegistrations` | 全部 `CANCELLED` 历史，包含整场活动取消后的记录 |
 | `checkedInRegistrations` | `ACTIVE` 中签到时间非空的记录，是有效报名的子集 |
 
-签到信息只读，仅返回本人 `checkedInAt`，不返回管理员 ID 或昵称。`ACTIVE` 显示“已签到”及北京时间，或“未签到”；候补和已取消显示“不适用”。本人未签到不代表可由本人执行签到，签到仍须管理员在活动开始后确认。越界页返回请求页码、真实总数与统计、空 `items`，不由服务端静默改页码。
+本人返回可空 `checkedInAt`、`checkInMethod`（`ADMIN|SELF_LOCATION|null`）和 `checkInVersion`，不返回管理员ID、昵称或更正原因。`ACTIVE` 显示当前签到结果、方式及北京时间；候补和已取消显示“不适用”。四项统计只认当前ACTIVE及非空签到时间，撤销后统计随下次读取更新。越界页返回请求页码、真实总数与统计、空 `items`，不由服务端静默改页码。
+
+`locationCheckInEnabled` 仅表示后端独立Web服务Key配置就绪，不保证提供商可用。活动未取消、本人ACTIVE未签、有GCJ-02坐标和结束时间且 `startsAt <= now < endsAt` 时可主动点击定位；原生WGS84点由服务器在活动事务外转换，精度须 `0 < accuracyMeters <= 100` 米，转换后距离须独立满足不超过300米。提交带当前版本，锁后再次核验；409版本冲突或未知提交结果先刷新核对。缺Key不调用转换、失败不签到，管理员仍可正常确认或纠错。完整接口、隐私、手机HTTPS限制见 [签到指南](checkin-export-guide.md#本人到场定位签到)。
 
 ## 快照与查询证据
 
@@ -84,5 +87,6 @@ V8 的活动分类通过 `MY_VIEW_COLUMNS → MyRegistrationRow.activity()` 同�
 3. 从 `frontend/src/authRequestGuard.ts` 和 `tests/myregistrations.test.mjs` 查看真实迟到成功、同账号重登后的旧 401，以及已取消请求不能开始或发布结果的断言。
 4. 从 `MyRegistrationSearchIntegrationTest` 查看真实 MySQL 的权限、旧字段、稳定分页、全量统计、UTC 时间、参数/越界、单次时钟、取消/签到夹在两次读取间、数据 SELECT 次数与实际执行计划；`MyRegistrationKeywordIntegrationTest` 补充关键词字面匹配、UTF-16长度、统计不过滤及并发编辑/取消快照，原业务并发与回滚测试继续保留。
 5. 从 `e2e/myregistrations.spec.ts` 与 `e2e/myregistrations-keyword.spec.ts` 查看桌面/手机的真实记录、分页、状态/关键词、URL/登录/详情返回、本人签到、越界、失败重试与迟到身份回归；默认容器与共享 Redis 脚本另核对各实例本人数据和旧数组。测试自己的开始活动独立初始化，不改已有样例时间，按 manifest 精确清理。
+6. 从 `pages/useLocationCheckIn.ts → nativeLocation.ts → LocationCheckInController → LocationCheckInService/LocationCheckInWriter` 查看主动定位、认证/路由/取消保护及事务边界；`GeoCheckInIntegrationTest` 的转换使用明确契约替身，不代表真实高德或真实手机GPS。
 
 各轮后端、前端、浏览器、构建、容器和 Redis 环境的实际运行与失败修复统一以 [验证记录](verification.md) 为准，不以检查代码存在代替通过，也不以固定SELECT次数推断查询成本恒定或性能提升。

@@ -18,7 +18,7 @@
 | 当前时刻 ≥ 非空结束 | 已结束 |
 | 已开始且结束为空 | 已开始；结束时间显示“未提供” |
 
-接口与存储使用 UTC，表单和页面使用北京时间，表单不随浏览器所在时区改变解释。页面用一个可清理的时间边界计时器更新状态，不轮询接口；本地时间决定展示，写入权限仍由服务端核时。签到只检查已经开始、未取消及 ACTIVE 报名，结束后仍允许管理员补录。
+接口与存储使用 UTC，表单和页面使用北京时间，表单不随浏览器所在时区改变解释。页面用一个可清理的时间边界计时器更新状态，不轮询接口；本地时间决定展示，写入权限仍由服务端核时。管理员确认、补签或撤销要求已开始、未取消及ACTIVE，结束后仍可纠错；本人定位签到还要求坐标和结束时间非空、`startsAt <= now < endsAt`、精度及300米距离均合格，见 [签到指南](checkin-export-guide.md)。
 
 字段路径：CreateActivityPage / beijingInputToIso → api.createActivity → CreateActivityRequest.endsAt → ActivityService.create → NewActivity / ActivityMapper.insert → V11 ends_at → ActivityRow / ActivityView → activityPhase / 页面；日历沿 CalendarDownloadButton 的最新详情读取到 buildActivityCalendar。创建审计由 AuditLogService.created 同事务保存。
 

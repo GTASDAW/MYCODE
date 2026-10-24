@@ -109,6 +109,12 @@ class MonitoringIntegrationTest {
     @Autowired DataSource dataSource;
     private final List<Long> activityIds = new ArrayList<>();
 
+    @org.junit.jupiter.api.BeforeEach
+    void verifyCheckInSchemaBeforeFixtureWrites() {
+        assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
+    }
+
     @AfterEach
     void cleanup() {
         MDC.remove("requestId");

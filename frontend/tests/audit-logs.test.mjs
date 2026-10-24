@@ -5,10 +5,10 @@ import { activityAuditLogPath, auditLogListPath, defaultAuditLogQuery, parseAudi
 import { auditActionLabels, auditChangeText, auditFieldLabels, formatAuditDateTime } from '../src/auditLogPresentation.ts';
 import { AuthRequestGuard, readAccountResource } from '../src/authRequestGuard.ts';
 
-test('audit URLs preserve all four actions, supported pagination and safe activity IDs while canonicalizing defaults', () => {
+test('audit URLs preserve all actions, supported pagination and safe activity IDs while canonicalizing defaults', () => {
   assert.deepEqual(parseAuditLogQuery(''), defaultAuditLogQuery);
   assert.equal(serializeAuditLogQuery(defaultAuditLogQuery), '');
-  for (const action of ['ALL', 'CREATE', 'EDIT', 'CANCEL', 'CHECK_IN']) {
+  for (const action of ['ALL', 'CREATE', 'EDIT', 'CANCEL', 'CHECK_IN', 'CHECK_IN_REVOKE']) {
     const query = { action, page: 3, pageSize: 20, activityId: 42 };
     assert.deepEqual(parseAuditLogQuery(serializeAuditLogQuery(query)), query);
   }
@@ -51,12 +51,17 @@ test('audit changes retain literal long multiline text and distinguish an absent
   assert.equal(auditChangeText('description', text), text);
   assert.equal(auditChangeText('title', ''), '');
   assert.equal(auditChangeText('title', null), '未设置');
-  assert.deepEqual(Object.keys(auditActionLabels), ['CREATE', 'EDIT', 'CANCEL', 'CHECK_IN']);
-  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'locationLongitude', 'locationLatitude', 'category', 'coverHash', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt']);
+  assert.deepEqual(Object.keys(auditActionLabels), ['CREATE', 'EDIT', 'CANCEL', 'CHECK_IN', 'CHECK_IN_REVOKE']);
+  assert.deepEqual(Object.keys(auditFieldLabels), ['title', 'description', 'location', 'locationLongitude', 'locationLatitude', 'category', 'coverHash', 'startsAt', 'endsAt', 'registrationDeadline', 'capacity', 'cancelledAt', 'cancellationReason', 'checkedInAt', 'checkInMethod', 'checkedInBy', 'checkInReason']);
   assert.equal(auditChangeText('endsAt', '2030-01-01T08:02:03.123456Z'), formatAuditDateTime('2030-01-01T08:02:03.123456Z'));
   assert.equal(auditChangeText('registrationDeadline', '2030-01-01T08:02:03.123456Z'), formatAuditDateTime('2030-01-01T08:02:03.123456Z'));
   assert.equal(auditChangeText('coverHash', null), '未设置');
   assert.equal(auditChangeText('coverHash', 'a'.repeat(64)), 'a'.repeat(64));
+  assert.equal(auditChangeText('checkInMethod', 'SELF_LOCATION'), '本人定位');
+  assert.equal(auditChangeText('checkInMethod', 'ADMIN'), '管理员确认');
+  assert.equal(auditChangeText('checkInMethod', null), '未设置');
+  assert.equal(auditChangeText('checkInReason', '<b>现场核对</b>'), '<b>现场核对</b>');
+  assert.equal(auditActionLabels.CHECK_IN_REVOKE, '撤销签到');
 });
 
 function deferred() {

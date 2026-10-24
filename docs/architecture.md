@@ -1,6 +1,6 @@
 # 活动报名平台：架构与请求流程
 
-这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，活动开始后管理员确认到场并导出名单。系统在并发请求下维护正确人数、递补队列、取消历史、站内通知、首次签到和管理员操作记录。
+这个项目展示一个完整的全栈流程：管理员发布、编辑或取消活动，用户查看名额、报名或进入候补，活动开始后用户主动定位签到、管理员确认或更正到场并导出名单。系统在并发请求下维护人数、递补队列、取消历史、通知和签到审计。
 
 ## 技术分工
 
@@ -43,9 +43,9 @@ flowchart LR
 - **用户**：保存唯一登录名、密码哈希、展示名、角色和 V7 凭据版本。自主注册只创建普通用户；服务端从登录身份取得用户 ID，报名、昵称与密码修改请求不能自行指定操作人。
 - **收藏**：V9 `activity_favorites` 保存本人和活动的唯一组合及 UTC 微秒时间，外键保护关联，按本人收藏时间/ID 倒序分页。重复插入保留首次信息，取消物理删除本人的收藏，不删除活动历史。收藏不加入活动报名锁或审计流程。
 - **活动**：保存标题、介绍、地点、开始时间、可空结束时间、总名额和当前有效报名人数，V8 增加固定单选分类，旧活动为未分类。V10 在同一活动行保存成对的封面 JPEG 与 hash，列表只读 hash，报名热锁不读图片。候补人数由报名记录按活动实时统计。开始、结束时间与名额创建后固定；V3 增加取消时间、原因和可信操作人，取消后人数为 0。
-- **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5 增加成对的可空签到时间、操作人；非空时必须为 `ACTIVE`，操作人关联用户且外键限制删除。
+- **报名记录**：关联用户与活动，记录有效报名、候补中或已取消状态。`(activity_id, user_id)` 设置唯一约束；取消后保留记录，重新报名时更新同一条记录。V5保存签到时间和管理员外键；V15新增精确方式及非负版本，严格三态分别为全空、ACTIVE的ADMIN已签且管理员非空、ACTIVE的SELF_LOCATION已签且管理员为空。历史已签仅回填ADMIN，所有历史版本0，原时间/管理员/更新时间保持。
 - **站内通知**：V4 保存收件人、活动、事件类型、当时标题、公开取消原因、UTC 创建与首次已读时间。只在实际递补或首次活动取消时写入，同业务事务提交；外键保留历史，真正再次递补可产生新记录。
-- **管理员操作记录**：V6 保存发布、真实编辑、首次取消和首次签到的动作、活动与名称快照、可信操作人、可空签到目标、UTC 微秒时间和完整字段变化。与业务同事务追加，不回填旧历史；活动、操作人、报名分别为限制删除的独立外键，签到同活动归属由业务查询检查。
+- **管理员操作记录**：V6保存业务动作与名称快照、可信操作人、可空报名目标、UTC微秒时间和完整变化；V15扩展CHECK_IN_REVOKE，定位签到actor取本人，真实签到或撤销同事务追加，旧审计不改。与业务同事务追加，不回填旧历史；活动、操作人、报名分别为限制删除的独立外键，签到同活动归属由业务查询检查。
 
 需要始终满足：活动的当前人数等于该活动的 `ACTIVE` 报名记录数，并且在 `0` 到总名额之间；`WAITING` 记录不占用名额。唯一约束保证同一个用户不会有两条报名记录；事务和行锁保证并发操作下人数正确，候补记录按排队顺序递补。
 
@@ -69,7 +69,8 @@ flowchart LR
 | `GET /api/admin/audit-logs/{id}` | 操作快照与完整字段前后值 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
 | `GET /api/admin/activities/{id}/registrations` | 两类状态筛选分页与整场签到统计 | 管理员 |
-| `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 活动开始后为有效报名者保存首次签到 | 管理员，需 CSRF |
+| `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认；空体兼容，可选expectedVersion | 管理员，需 CSRF |
+| `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填checkedIn/reason/expectedVersion的补签或撤销 | 管理员，需 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 全筛选范围 CSV，最多 20,000 条 | 管理员 |
 | `POST /api/admin/activities` | 创建活动 | 管理员 |
 | `PATCH /api/admin/activities/{id}` | 修改未开始活动的标题、介绍、地点和分类 | 管理员，需 CSRF |
@@ -79,7 +80,8 @@ flowchart LR
 | `POST /api/activities/{id}/registration` | 报名、重新报名或进入候补；满员时返回 `WAITING` 状态 | 已登录用户 |
 | `DELETE /api/activities/{id}/registration` | 取消有效报名或退出候补 | 已登录用户 |
 | `GET /api/me/registrations` | 原完整数组，保留字段与更新时间/ID 降序 | 已登录用户，仅本人 |
-| `GET /api/me/registrations/search` | 本人筛选分页、全量统计与只读签到时间 | 已登录用户，普通用户与管理员均仅本人 |
+| `GET /api/me/registrations/search` | 本人分页、全量统计、签到时间/方式/版本及定位配置就绪布尔 | 已登录用户，普通用户与管理员均仅本人 |
+| `POST /api/me/registrations/{registrationId}/check-in` | 本人WGS84定位、accuracyMeters与expectedVersion，返回本人记录 | 已登录且本人，需CSRF |
 | `GET /api/me/notifications` | 本人状态、类型组合筛选分页与全量未读数 | 已登录用户 |
 | `GET /api/me/notifications/unread-count` | 本人全部未读数 | 已登录用户 |
 | `POST /api/me/notifications/{id}/read` | 标记本人通知已读，保留首次时间 | 已登录用户，需 CSRF |
@@ -117,7 +119,7 @@ V9 收藏通过 `/api/me/favorites` 读取本人分页，通过 `/{activityId}` 
 
 ## 个人报名读取
 
-`GET /api/me/registrations/search` 默认 `page=1&pageSize=10&status=ALL`，状态为 `ALL|ACTIVE|WAITING|CANCELLED`，每页 1–100 条。可选 `keyword` 默认空，最多200个UTF-16代码单元、不trim，按活动标题或地点作绑定参数字面包含匹配，与状态共同筛选items/total；四项summary仍本人全量。返回 `{items,total,page,pageSize,summary}`；行是 `{id,status,activity,checkedInAt}`，`id` 是报名 ID，`activity.id` 是活动 ID。只暴露本人的可空 UTC 签到时间，不包含管理员 ID 或昵称；用户不能自行签到。
+`GET /api/me/registrations/search` 默认 `page=1&pageSize=10&status=ALL`，状态为 `ALL|ACTIVE|WAITING|CANCELLED`，每页 1–100 条。可选 `keyword` 默认空，最多200个UTF-16代码单元、不trim，按活动标题或地点作绑定参数字面包含匹配，与状态共同筛选items/total；四项summary仍本人全量。返回 `{items,total,page,pageSize,summary,locationCheckInEnabled}`；行是 `{id,status,activity,checkedInAt,checkInMethod,checkInVersion}`，报名ID与内嵌活动ID分别保留。仅返回本人结果，不含管理员身份或更正原因；定位配置状态是布尔，不泄露Web服务Key。
 
 筛选只影响 `items` 和 `total`。`summary` 的 `activeRegistrations`、`waitingRegistrations`、`cancelledRegistrations`、`checkedInRegistrations` 覆盖本人全部记录，已签到仅计 `ACTIVE` 中非空签到时间；排序为报名 `updated_at DESC, id DESC`。身份来自可信 Session，传入 `userId` 不改变归属。越界返回请求页码、真实总数/统计和空列表，由页面校正。
 
@@ -162,9 +164,9 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 
 概览的 `totalActivities` 是所有活动数，包含已取消活动；`cancelledActivities` 单独统计取消活动。`upcomingActivities` 和 `startedActivities` 对应上述排除取消的开始时间条件，提前截止仍计入未开始；`fullActivities` 只统计未取消、尚未开始且未到报名截止的满员活动；`activeRegistrations` 包含所有活动的 `ACTIVE` 报名记录，`waitingRegistrations` 包含所有活动的 `WAITING` 候补记录；`availableSeats` 只汇总未取消、尚未开始且未到报名截止活动的剩余名额。每个请求固定一个 UTC 微秒当前时间，SQL 和返回状态共享这一时间，避免临界时间出现两个口径。
 
-`GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，`status=ALL|ACTIVE|WAITING|CANCELLED` 与 `checkInStatus=ALL|CHECKED_IN|NOT_CHECKED_IN` 默认均为 `ALL`、按 AND 组合，返回 `{activity,items,total,page,pageSize,summary}`。签到筛选只匹配 `ACTIVE`，因此候补或已取消与已签到/未签到组合时为空。名单行保留原字段，增加可空 UTC `checkedInAt`、`checkedInBy` 与管理员当前数据库昵称 `checkedInByDisplayName`；按 `updated_at DESC, id DESC` 排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
+`GET /api/admin/activities/{id}/registrations` 接受同样的分页参数，`status=ALL|ACTIVE|WAITING|CANCELLED` 与 `checkInStatus=ALL|CHECKED_IN|NOT_CHECKED_IN` 默认均为 `ALL`、按 AND 组合，返回 `{activity,items,total,page,pageSize,summary}`。签到筛选只匹配 `ACTIVE`，因此候补或已取消与已签到/未签到组合时为空。名单行含可空UTC `checkedInAt`、管理员 `checkedInBy/checkedInByDisplayName`、`checkInMethod/checkInVersion`；定位签到管理员字段为空，按 `updated_at DESC, id DESC` 排列。不存在的活动返回 404。`activity` 同时返回当前 `waitingCount`。
 
-`summary` 的 `activeRegistrations`、`checkedInRegistrations`、`notCheckedInRegistrations` 统计整场活动全部 `ACTIVE`，不受筛选和分页影响。活动、三项统计、筛选总数与名单共用只读 `REPEATABLE_READ` 快照；签到仅修改两个审计字段，不改变排序使用的报名更新时间。
+`summary` 的 `activeRegistrations`、`checkedInRegistrations`、`notCheckedInRegistrations` 统计整场活动全部 `ACTIVE`，不受筛选和分页影响。活动、三项统计、筛选总数与名单共用只读 `REPEATABLE_READ` 快照；签到或撤销仅更新当前签到字段与版本，不改变报名更新时间、状态、人数、候补或通知。
 
 管理列表的总数和当前页查询在只读 `REPEATABLE_READ` 事务的同一快照内执行；概览用一条 SQL 取得八项统计，并单独统计报名表，避免关联多条报名记录后重复累计活动和名额。这些查询不改变报名业务的 `READ_COMMITTED` 事务与行锁设计。
 
@@ -196,19 +198,27 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 
 ## 管理员签到与 CSV
 
-`AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务。先锁活动主键，普通读取该活动内的报名，再核对取消状态、取得锁后的 UTC 微秒时间与 `ACTIVE` 资格。活动开始时即开放签到，活动结束后仍可补录，不设置自动截止；重复请求保留首次时间和可信管理员 ID。报名表只改 V5 的两个签到字段，并在同事务追加首次 `CHECK_IN` 操作记录；不增减人数、不修改报名状态或更新时间、不递补或写通知，第一版不提供撤销。
+`AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务，锁活动主键后普通读报名并核对归属、未取消、已开始与ACTIVE。旧POST空体兼容，可选版本；新UI始终带版本。PATCH必填boxed checkedIn、1–500字单行原因和expectedVersion，结束后仍可补签/撤销。版本冲突409，目标状态未变不写入；真实变化版本+1并同事务追加CHECK_IN/CHECK_IN_REVOKE，撤销清当前时间/管理员/方式且保留历史。报名状态、人数、updated_at、候补及通知不变。
 
-名单与导出接受默认空、最多200字符的keyword，按账号或当前昵称的字面包含匹配，与两类状态按AND组合，COUNT与数据行共用SQL条件及只读RR快照；整场签到统计不受搜索影响，排序保持updated_at DESC,id DESC。名单条件存URL、输入草稿独立，刷新/历史/登录和同活动详情返回保留；读取、签到与导出作用域包含已提交关键词，不使用未提交草稿。保持V12，无新字段、索引或依赖。
+名单与导出接受默认空、最多200字符的keyword，按账号或当前昵称的字面包含匹配，与两类状态按AND组合，COUNT与数据行共用SQL条件及只读RR快照；整场签到统计不受搜索影响，排序保持updated_at DESC,id DESC。名单条件存URL、输入草稿独立，刷新/历史/登录和同活动详情返回保留；读取、签到与导出作用域包含已提交关键词，不使用未提交草稿。当前V15的方式/版本直接加入原投影，无新增索引或依赖。
 
-名单导出复用上述条件与原排序，在只读快照内先计数、再取全部匹配记录；超过 20,000 条返回 413 `EXPORT_TOO_LARGE`，不会截断。响应为 UTF-8 BOM、CRLF、双引号转义的 `text/csv;charset=UTF-8`，文件名 `activity-{id}-registrations.csv`，`Cache-Control: no-store`；空集合仅表头。时间转换为北京时间，自由文本及 ID 在引号内加 Tab，面向 Excel 人工查看而非无损原始数据导入。
+名单导出复用上述条件与原排序，在只读快照内先计数、再取全部匹配记录；超过 20,000 条返回 413 `EXPORT_TOO_LARGE`，不会截断。响应为 UTF-8 BOM、CRLF、双引号转义的 `text/csv;charset=UTF-8`，文件名 `activity-{id}-registrations.csv`，`Cache-Control: no-store`；空集合仅表头。原十列顺序保持，最后追加“签到方式”（管理员签到/定位签到/空）；定位签到管理员列为空。时间转换为北京时间，自由文本及ID在引号内加Tab，面向Excel人工查看。
 
-前端统一 `api.ts` 增加文件响应分支：非成功响应仍解析 JSON 与请求编号，成功文件仅接受 CSV MIME。页面读取、签到和下载复用认证代次与取消信号，进一步核对当前筛选、页码及刷新版本，旧响应不能下载文件、显示旧提示或使新会话退出；临时链接与对象 URL 最终清理。具体错误、输入边界和阅读路径见 [签到与导出指南](checkin-export-guide.md)。两个新接口使用固定日志/指标路由，名单和文件内容不进入请求日志。
+前端统一 `api.ts` 增加文件响应分支：非成功响应仍解析 JSON 与请求编号，成功文件仅接受 CSV MIME。页面读取、签到和下载复用认证代次与取消信号，进一步核对当前筛选、页码及刷新版本，旧响应不能下载文件、显示旧提示或使新会话退出；临时链接与对象 URL 最终清理。具体错误、输入边界和阅读路径见 [签到与导出指南](checkin-export-guide.md)。签到/导出使用固定日志和指标路由，名单、文件正文、GPS与Key不进入请求日志。
+
+## 本人定位签到
+
+`MyRegistrationsPage → useLocationCheckIn/nativeLocation → LocationCheckInController → LocationCheckInService` 只在用户点击时取一次原生WGS84位置。请求必填经纬度、`0 < accuracyMeters <= 100`米及expectedVersion，不读取客户端身份、半径、距离或时间；非本人/不存在同404。普通预读本人ACTIVE及版本后，`LocationCoordinateConverter`在任何活动写事务/行锁外以独立Web服务Key调用固定高德HTTPS单点gps转换，5秒含正文、2MiB上限、无重定向；缺Key或转换失败503且不写入。
+
+转换后经独立Spring事务`LocationCheckInWriter`先锁原活动主键，不扩热锁列；另读结束时间和GCJ-02活动点，重核归属、版本、取消/ACTIVE与锁后单次UTC微秒时刻。必须有结束时间和坐标且`startsAt <= now < endsAt`，Haversine距离独立满足`<=300`米，不增加精度余量。真实成功写SELF_LOCATION、空管理员、时间和版本+1，并以可信本人actor追加审计；撤销后的迟到旧版本不能重新签到。原始用户GPS不持久化、不进审计/日志/URL；服务端转换需向提供商发送该单点。
+
+公开MapConfig不返回Web服务Key；本人分页只给配置就绪布尔，旧数组合同及分页两次业务SELECT/RR/单时钟不变。原生回调、CSRF、POST及页面更新核认证代次、路由、顺序与取消信号，离页或重登清理所有权，未知结果先刷新核对。真实手机还需可信HTTPS及权限，模拟坐标/视口不能当作设备或真实转换证据；申请和环境边界见 [地点指南](activity-location-guide.md#设备定位与手机限制)。
 
 ## 管理员操作记录
 
-`ActivityService.create/edit/cancel` 和 `CheckInService.checkIn` 在原写事务调用 `AuditLogService`，追加使用 `MANDATORY`，失败使业务与记录一起回滚。每个新活动一条 `CREATE`；无变化编辑、重复取消和重复签到不追加，旧历史不回填。名称从事务内数据库取得并保存快照，白名单变化为完整 `string|null` 前后值，不保存请求体、密码或 Cookie。发布开始时间先规范为微秒，再验证落库值仍在未来。
+`ActivityService.create/edit/cancel`、`CheckInService.checkIn/correct` 和 `LocationCheckInWriter.checkIn` 在原写事务调用 `AuditLogService`，追加使用 `MANDATORY`，失败使业务与记录一起回滚。每个新活动一条 `CREATE`；无变化编辑、重复取消和重复签到不追加，旧历史不回填。名称从事务内数据库取得并保存快照，白名单变化为完整 `string|null` 前后值，不保存请求体、密码或 Cookie。发布开始时间先规范为微秒，再验证落库值仍在未来。
 
-两个 GET 只允许 ADMIN。列表只查元数据，总数与分页共用只读 `REPEATABLE_READ` 快照，按操作时间与 ID 降序；详情才读取变化 JSON。页面将筛选分页写入 URL、按需打开只读抽屉，并以认证代次、请求作用域和取消信号保护成功与错误。记录没有更新或删除 API。V6 约束、独立外键边界、精确清理及源码验证路径见 [管理员操作记录指南](audit-log-guide.md)。
+两个 GET 只允许 ADMIN。列表只查元数据，总数与分页共用只读 `REPEATABLE_READ` 快照，按操作时间与 ID 降序；详情才读取变化 JSON。页面将筛选分页写入 URL、按需打开只读抽屉，并以认证代次、请求作用域和取消信号保护成功与错误。记录没有更新或删除 API。V6/V15约束、独立外键边界、精确清理及源码验证路径见 [管理员操作记录指南](audit-log-guide.md)。
 
 ## 活动签到分析
 
@@ -226,7 +236,7 @@ V13 只在用户行增加成对的 `avatar_image` 与 `avatar_hash`，旧值为�
 
 V14 在活动行增加可空成对 DECIMAL 经纬度，固定 GCJ-02、七位 HALF_UP；旧活动保持空值。原创建、编辑接口和所有活动联表投影增加可空 `locationPoint`，不加逐条查询、索引或报名热锁列。编辑在原活动锁之后读取旧坐标，地点或坐标的真实变化与 EDIT 审计共用事务；旧请求仅改文字时清除已失配坐标，显式 null 清点，无变化不补审计。
 
-地图界面在发布、编辑及详情中按需打开，确认前保持独立草稿。SDK 仅有适配器中的提供商必要桥接，没有新的认证客户端或业务全局；旧路由、身份、弹窗轮次与操作回调均校验当前所有权。公开配置不返回安全码，Java 代理只连接固定高德 HTTPS 路径，并限制参数、并发、超时和正文。未配凭据仍支持文字地点，代码/配置与真实联调边界见 [地点指南](activity-location-guide.md)。本阶段没有定位签到或用户位置采集。
+地图界面在发布、编辑及详情中按需打开，确认前保持独立草稿。SDK 仅有适配器中的提供商必要桥接，没有新的认证客户端或业务全局；旧路由、身份、弹窗轮次与操作回调均校验当前所有权。公开配置不返回安全码，Java 代理只连接固定高德 HTTPS 路径，并限制参数、并发、超时和正文。未配凭据仍支持文字地点，代码/配置与真实联调边界见 [地点指南](activity-location-guide.md)。定位签到的Web服务Key独立于JS凭据，缺失只禁用定位，不禁用已配置的JS地图。
 
 ## 活动封面
 
@@ -258,11 +268,11 @@ Session Cookie 是浏览器与服务端之间的身份凭据。浏览器只保�
 
 ## 备份恢复验证路径
 
-这是本地运维脚本流程，独立于上面的业务 API。当前门禁为 V14，备份包含六张业务表和 Flyway 历史，封面和头像分别保存在活动行与用户行中，完整图片、报名截止与结束时间的空值/微秒一并验收。
+这是本地运维脚本流程，独立于上面的业务 API。当前门禁为V15，备份包含六张业务表和Flyway历史及签到方式/版本、撤销审计，封面和头像分别保存在活动行与用户行中，完整图片、报名截止与结束时间的空值/微秒一并验收。
 
 ```mermaid
 flowchart LR
-    S[原库：已核 UUID / V14] -->|无写入和 DDL 窗口，只读导出| P[SQL / manifest / 结构与全字段摘要]
+    S[原库：已核 UUID / V15] -->|无写入和 DDL 窗口，只读导出| P[SQL / manifest / 结构与全字段摘要]
     P -->|专属受限账号，只接受新空库| T[独立 MySQL / 不同服务器 UUID]
     T --> V[结构 / 迁移 / 行内容 / 图片 / 约束核验]
     V --> A[专属后端与真实浏览器验收]

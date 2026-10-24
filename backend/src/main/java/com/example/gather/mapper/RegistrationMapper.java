@@ -3,12 +3,13 @@ package com.example.gather.mapper;
 import com.example.gather.domain.RegistrationRow;
 import com.example.gather.domain.MyRegistrationRow;
 import com.example.gather.domain.MyRegistrationTotals;
+import com.example.gather.domain.RegistrationCheckInRow;
 import org.apache.ibatis.annotations.*;
 import java.util.List;
 
 @Mapper
 public interface RegistrationMapper {
-    String MY_VIEW_COLUMNS = "r.id AS registration_id, r.status, r.checked_in_at, "
+    String MY_VIEW_COLUMNS = "r.id AS registration_id, r.status, r.checked_in_at, r.check_in_method, r.check_in_version, "
         + "a.id AS activity_id, a.title, a.description, a.location, a.starts_at, a.ends_at, a.registration_deadline, a.capacity, a.registered_count, "
         + WaitingQueueSql.COUNT + WaitingQueueSql.POSITION
         + "a.cancelled_at, a.cancellation_reason, a.category, a.cover_hash, a.location_longitude, a.location_latitude";
@@ -19,6 +20,15 @@ public interface RegistrationMapper {
     // under REPEATABLE READ that would take gap locks shared by unrelated activities.
     @Select("SELECT id, activity_id, user_id, status FROM registrations WHERE activity_id=#{activityId} AND user_id=#{userId}")
     RegistrationRow findByActivityAndUser(@Param("activityId") long activityId, @Param("userId") long userId);
+
+    @Select("SELECT id, activity_id, user_id, status, checked_in_at, check_in_method, check_in_version FROM registrations WHERE id=#{id} AND user_id=#{userId}")
+    RegistrationCheckInRow findMineCheckIn(@Param("id") long id, @Param("userId") long userId);
+
+    @Select("SELECT " + MY_VIEW_COLUMNS + " FROM registrations r JOIN activities a ON a.id=r.activity_id WHERE r.id=#{id} AND r.user_id=#{userId}")
+    MyRegistrationRow findMineById(@Param("id") long id, @Param("userId") long userId);
+
+    @Update("UPDATE registrations SET checked_in_at=#{now}, checked_in_by=NULL, check_in_method='SELF_LOCATION', check_in_version=check_in_version+1 WHERE id=#{id} AND check_in_version=#{expectedVersion} AND checked_in_at IS NULL AND status='ACTIVE'")
+    int selfCheckIn(@Param("id") long id, @Param("now") java.time.LocalDateTime now, @Param("expectedVersion") long expectedVersion);
 
     @Insert("INSERT INTO registrations(activity_id, user_id, status) VALUES(#{activityId}, #{userId}, 'ACTIVE')")
     int insert(@Param("activityId") long activityId, @Param("userId") long userId);

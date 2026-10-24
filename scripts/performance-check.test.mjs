@@ -1,3 +1,4 @@
+import { checkInSchemaFixture, checkInSchemaRead } from './test-support/registration-check-in-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { performanceSettings, performanceOutput, verifyApplicationArtifact, collectQueryEvidence, LOCK_QUERY_SQL, latencyStatistics, summarizeRequests,
@@ -373,13 +374,13 @@ test('historical V2 comparison cleanup retains its contract and never queries th
   assert(!db.calls.some(sql => sql.includes('activity_favorites')));
 });
 
-test('current performance preparation refuses missing V14, location point, avatar, registration-deadline, end-time, cover or category before seed reads or application writes', async () => {
+test('current performance preparation refuses missing V15, location point, avatar, registration-deadline, end-time, cover or category before seed reads or application writes', async () => {
   for (const missing of ['migration', 'category', 'registration-deadline', 'end-time', 'cover', 'avatar', 'location-point']) {
     const calls = [];
     const db = { async query(sql) {
       calls.push(sql);
       if (sql.startsWith('SELECT DATABASE')) return [[{ name: 'activity_platform_perf', serverUuid: 'isolated-server', version: '8.4.7' }]];
-      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', ...(missing === 'migration' ? [] : ['14'])]
+      if (sql.includes('flyway_schema_history')) return [['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', ...(missing === 'migration' ? [] : ['15'])]
         .map(version => ({ version, success: 1 }))];
       if (sql.includes('category') && missing === 'category') throw new Error('Category schema absent');
       if (sql.includes('registration_deadline') && missing === 'registration-deadline') throw new Error('Registration deadline schema absent');

@@ -827,6 +827,15 @@ main:focus {
 .registration-row-actions .ant-tag {
   margin: 0;
 }
+
+.location-checkin-action {
+  max-width: 240px;
+}
+
+.location-checkin-action .metadata {
+  margin: 8px 0 0;
+  white-space: normal;
+}
 .overview-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1425,6 +1434,7 @@ main:focus {
   }
   .registration-row-actions {
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     width: 100%;
     padding-top: 12px;
@@ -1432,6 +1442,11 @@ main:focus {
   }
   .registration-row-actions > a {
     margin-left: auto;
+  }
+  .registration-row-actions .location-checkin-action {
+    order: 1;
+    width: 100%;
+    max-width: none;
   }
   .login-page {
     padding-top: 22px;

@@ -27,13 +27,34 @@ if ($null -ne (Get-GatherMapConfig -Path (Join-Path $mapTestRoot 'absent.json'))
 $mapTestCount++
 $empty = Write-ConfigFixture 'empty.json' '{"jsKey":"","securityJsCode":""}'
 $config = Get-GatherMapConfig -Path $empty
-if ($config.jsKey -ne '' -or $config.securityJsCode -ne '') { throw 'Empty configuration changed.' }
+if ($config.jsKey -ne '' -or $config.securityJsCode -ne '' -or $config.webServiceKey -ne '') { throw 'Empty configuration changed.' }
 $mapTestCount++
 $valid = Write-ConfigFixture 'valid.json' '{"jsKey":"public-test-key","securityJsCode":"private-test-code"}'
 $config = Get-GatherMapConfig -Path $valid
-if ($config.jsKey -ne 'public-test-key' -or $config.securityJsCode -ne 'private-test-code') { throw 'Configuration values changed.' }
+if ($config.jsKey -ne 'public-test-key' -or $config.securityJsCode -ne 'private-test-code' -or $config.webServiceKey -ne '') { throw 'Configuration values changed.' }
 $mapTestCount++
-foreach ($text in @('{broken', '{}', '{"jsKey":"x","securityJsCode":"y","extra":1}', '{"jsKey":1,"securityJsCode":"y"}', '{"jsKey":"x","securityJsCode":null}', '{"jsKey":"x","securityJsCode":"unsafe&code"}')) {
+$triple = Write-ConfigFixture 'triple.json' '{"jsKey":"x","securityJsCode":"y","webServiceKey":"server-test-key"}'
+$config = Get-GatherMapConfig -Path $triple
+if ($config.webServiceKey -ne 'server-test-key' -or $config.jsKey -ne 'x' -or $config.securityJsCode -ne 'y') { throw 'Web Service configuration changed.' }
+$mapTestCount++
+$blank = Write-ConfigFixture 'blank-web.json' '{"jsKey":"x","securityJsCode":"y","webServiceKey":""}'
+if ((Get-GatherMapConfig -Path $blank).webServiceKey -ne '') { throw 'Optional Web Service key must stay disabled.' }
+$mapTestCount++
+Initialize-GatherMapConfig -Path $valid
+$config = Get-GatherMapConfig -Path $valid
+if ($config.jsKey -ne 'public-test-key' -or $config.securityJsCode -ne 'private-test-code' -or $config.webServiceKey -ne '' -or
+    'webServiceKey' -notin @(([IO.File]::ReadAllText($valid) | ConvertFrom-Json).PSObject.Properties.Name)) { throw 'Legacy upgrade did not preserve the JS pair.' }
+$mapTestCount++
+$tripleText = [IO.File]::ReadAllText($triple)
+Initialize-GatherMapConfig -Path $triple
+if ([IO.File]::ReadAllText($triple) -cne $tripleText) { throw 'Existing three-field configuration was rewritten.' }
+$mapTestCount++
+$fresh = Join-Path $mapTestRoot 'fresh.json'
+Initialize-GatherMapConfig -Path $fresh
+$config = Get-GatherMapConfig -Path $fresh
+if ($config.jsKey -ne '' -or $config.securityJsCode -ne '' -or $config.webServiceKey -ne '') { throw 'Fresh configuration must be blank.' }
+$mapTestCount++
+foreach ($text in @('{broken', '{}', '{"jsKey":"x","securityJsCode":"y","extra":1}', '{"jsKey":1,"securityJsCode":"y"}', '{"jsKey":"x","securityJsCode":null}', '{"jsKey":"x","securityJsCode":"unsafe&code"}', '{"jsKey":"x","securityJsCode":"y","webServiceKey":null}', '{"jsKey":"x","securityJsCode":"y","webServiceKey":1}', '{"jsKey":"x","securityJsCode":"y","webServiceKey":"unsafe&key"}', '{"jsKey":"x","securityJsCode":"y","webServiceKey":"z","extra":1}')) {
     $path = Write-ConfigFixture ('invalid-' + $mapTestCount + '.json') $text
     Assert-ConfigRejected -Path $path
     $mapTestCount++

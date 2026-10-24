@@ -4,7 +4,7 @@ export const defaultAuditLogQuery: AdminAuditLogQuery = {
   action: "ALL", activityId: null, page: 1, pageSize: 10,
 };
 
-const actions: AuditLogActionFilter[] = ["ALL", "CREATE", "EDIT", "CANCEL", "CHECK_IN"];
+const actions: AuditLogActionFilter[] = ["ALL", "CREATE", "EDIT", "CANCEL", "CHECK_IN", "CHECK_IN_REVOKE"];
 
 function positiveInteger(value: string | null, maximum: number): number | null {
   if (value === null || !/^\d+$/.test(value)) return null;

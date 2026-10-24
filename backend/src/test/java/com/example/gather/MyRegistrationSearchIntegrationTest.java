@@ -140,9 +140,10 @@ class MyRegistrationSearchIntegrationTest {
 
     @BeforeEach
     void verifyDedicatedCurrentSchemaBeforeFixtureWrites() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class))
-            .isEqualTo("14");
+            .isEqualTo("15");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, activity_id, actor_user_id, registration_id, changes_json FROM activity_audit_logs LIMIT 0");
@@ -285,8 +286,9 @@ class MyRegistrationSearchIntegrationTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.summary.checkedInRegistrations").value(2)).andReturn().getResponse().getContentAsString();
         var tree = json.readTree(response);
         for (var item : tree.get("items")) {
-            assertThat(item.size()).isEqualTo(4);
-            assertThat(item.has("id") && item.has("status") && item.has("activity") && item.has("checkedInAt")).isTrue();
+            assertThat(item.size()).isEqualTo(6);
+            assertThat(item.has("id") && item.has("status") && item.has("activity") && item.has("checkedInAt")
+                && item.has("checkInMethod") && item.has("checkInVersion")).isTrue();
         }
         assertThat(response).doesNotContain("checkedInBy", "checked_in_by", secret);
     }

@@ -96,9 +96,10 @@ class FavoriteIntegrationTest {
     final List<FavoriteKey> pairs=new ArrayList<>();
     final String prefix="Favorite "+UUID.randomUUID();
     @BeforeEach void gate() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()",String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()",String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1",Integer.class)).isEqualTo(14);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1",Integer.class)).isEqualTo(15);
     }
     @AfterEach void cleanup() {
         queries.captured.remove(); queries.afterCount.set(null); queries.failInsert.set(false);

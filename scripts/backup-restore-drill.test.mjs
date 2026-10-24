@@ -26,7 +26,7 @@ test('real HTTP rehearsal login sends the Session cookie created by its immediat
 });
 
 test('rehearsal application environment removes inherited connection/profile and JVM overrides',()=>{
-  const keys=['SPRING_APPLICATION_JSON','DB_URL','SERVER_PORT','JAVA_TOOL_OPTIONS','JDK_JAVA_OPTIONS','MYSQL_PWD'];
+  const keys=['SPRING_APPLICATION_JSON','DB_URL','SERVER_PORT','JAVA_TOOL_OPTIONS','JDK_JAVA_OPTIONS','MYSQL_PWD','AMAP_JS_KEY','AMAP_JS_SECURITY_CODE','AMAP_WEB_SERVICE_KEY'];
   const before=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
   try {
     for(const key of keys) process.env[key]='must-not-reach-restored-app';

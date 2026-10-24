@@ -546,6 +546,86 @@ test('check-in conflicts and ownership failures remain visible without write rep
   }
 });
 
+test('versioned confirmation and correction send only the selected row version and explicit correction fields', async () => {
+  const { api } = await freshApi();
+  const calls = [], controller = new AbortController();
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url.endsWith('/csrf') ? { token: 'valid', headerName: 'X-CSRF-TOKEN' } :
+      { id: 123, checkedInAt: null, checkInMethod: null, checkInVersion: 8 });
+  };
+  await api.checkInRegistration('25', 123, controller.signal, 6);
+  await api.correctRegistrationCheckIn('25', 123,
+    { checkedIn: false, reason: '现场记录误签', expectedVersion: 7, userId: 9, actorId: 8 }, controller.signal);
+  const writes = calls.filter(({ options }) => ['POST', 'PATCH'].includes(options.method));
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].options.method, 'POST');
+  assert.deepEqual(JSON.parse(writes[0].options.body), { expectedVersion: 6 });
+  assert.equal(writes[1].options.method, 'PATCH');
+  assert.deepEqual(JSON.parse(writes[1].options.body), { checkedIn: false, reason: '现场记录误签', expectedVersion: 7 });
+  for (const { url, options } of writes) {
+    assert.equal(url, '/api/admin/activities/25/registrations/123/check-in');
+    assert.equal(options.signal, controller.signal);
+    assert.equal(options.headers.get('Content-Type'), 'application/json');
+    assert.equal(options.headers.get('X-CSRF-TOKEN'), 'valid');
+  }
+});
+
+test('self location check-in sends native coordinates, accuracy and version without client identity or inferred distance', async () => {
+  const { api } = await freshApi();
+  const calls = [], controller = new AbortController();
+  const result = { id: 123, checkedInAt: '2030-01-01T00:00:00Z', checkInMethod: 'SELF_LOCATION', checkInVersion: 1 };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return response(200, url.endsWith('/csrf') ? { token: 'valid', headerName: 'X-CSRF-TOKEN' } : result);
+  };
+  assert.deepEqual(await api.locationCheckIn(123, { longitude: 116.397, latitude: 39.908,
+    accuracyMeters: 12.5, expectedVersion: 0, userId: 99, checkedInBy: 1, distanceMeters: 1, checkInMethod: 'ADMIN' }, controller.signal), result);
+  assert.equal(calls[1].url, '/api/me/registrations/123/check-in');
+  assert.equal(calls[1].options.method, 'POST');
+  assert.equal(calls[1].options.signal, controller.signal);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { longitude: 116.397, latitude: 39.908, accuracyMeters: 12.5, expectedVersion: 0 });
+});
+
+test('self and correction writes only replay explicit CSRF invalidation once and retain immutable bodies', async () => {
+  for (const kind of ['self', 'correct']) {
+    const { api } = await freshApi();
+    let attempts = 0, csrfCalls = 0;
+    const bodies = [];
+    globalThis.fetch = async (url, options) => {
+      if (url.endsWith('/csrf')) return response(200, { token: `token-${++csrfCalls}`, headerName: 'X-CSRF-TOKEN' });
+      bodies.push(options.body);
+      return ++attempts === 1 ? response(403, { code: 'CSRF_INVALID' }) : response(200, { checkInVersion: 2 });
+    };
+    if (kind === 'self') await api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 });
+    else await api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 1 });
+    assert.equal(attempts, 2);
+    assert.equal(csrfCalls, 2);
+    assert.equal(bodies[0], bodies[1]);
+  }
+});
+
+test('self and correction version, distance, permission and unavailable errors never replay or auto-refresh CSRF', async () => {
+  for (const kind of ['self', 'correct']) for (const [status, code] of [
+    [401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [409, 'CHECK_IN_VERSION_CONFLICT'], [409, 'LOCATION_OUT_OF_RANGE'],
+    [429, 'AUTH_RATE_LIMITED'], [503, 'LOCATION_CHECK_IN_UNAVAILABLE'],
+  ]) {
+    const { api } = await freshApi();
+    let writes = 0, csrfCalls = 0;
+    globalThis.fetch = async url => {
+      if (url.endsWith('/csrf')) { csrfCalls++; return response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' }); }
+      writes++;
+      return response(status, { code, message: '请核对签到状态' });
+    };
+    const pending = kind === 'self'
+      ? api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 })
+      : api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 1 });
+    await assert.rejects(pending, error => error.status === status && error.code === code);
+    assert.equal(writes, 1);
+    assert.equal(csrfCalls, 1);
+  }
+});
+
 test('cancelled CSV reads and check-in writes preserve AbortError without starting an obsolete request', async () => {
   const { api } = await freshApi();
   const controller = new AbortController();
@@ -554,6 +634,8 @@ test('cancelled CSV reads and check-in writes preserve AbortError without starti
   globalThis.fetch = async () => { calls++; return response(200, {}); };
   await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }, controller.signal), error => error.name === 'AbortError');
   await assert.rejects(api.checkInRegistration('25', 123, controller.signal), error => error.name === 'AbortError');
+  await assert.rejects(api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 0 }, controller.signal), error => error.name === 'AbortError');
+  await assert.rejects(api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 0 }, controller.signal), error => error.name === 'AbortError');
   assert.equal(calls, 0);
   globalThis.fetch = async () => ({
     ok: true, status: 200, headers: new Headers({ 'Content-Type': 'text/csv' }),

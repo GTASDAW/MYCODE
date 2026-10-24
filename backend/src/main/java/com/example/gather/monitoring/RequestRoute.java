@@ -14,6 +14,7 @@ final class RequestRoute {
         "/api/maps/config", "/api/_AMapService/v3/place/text", "/api/_AMapService/v3/assistant/inputtips",
         "/api/_AMapService/v3/geocode/regeo", "/api/_AMapService/v4/map/styles");
     private static final Set<String> VARIABLE_ROUTES = Set.of("/api/activities/{id}",
+        "/api/me/registrations/{registrationId}/check-in",
         "/api/activities/{id}/cover", "/api/admin/activities/{id}/cover",
         "/api/activities/{id}/registration", "/api/admin/activities/{id}/registrations",
         "/api/admin/activities/{id}/registrations/export", "/api/admin/activities/{id}/registrations/{registrationId}/check-in",
@@ -25,6 +26,7 @@ final class RequestRoute {
     private static final Pattern ROSTER = Pattern.compile("/api/admin/activities/[^/;]+/registrations/?");
     private static final Pattern ROSTER_EXPORT = Pattern.compile("/api/admin/activities/[^/;]+/registrations/export/?");
     private static final Pattern CHECK_IN = Pattern.compile("/api/admin/activities/[^/;]+/registrations/[^/;]+/check-in/?");
+    private static final Pattern SELF_CHECK_IN = Pattern.compile("/api/me/registrations/[^/;]+/check-in/?");
     private static final Pattern ADMIN_ACTIVITY = Pattern.compile("/api/admin/activities/[^/;]+/?");
     private static final Pattern ADMIN_CANCEL = Pattern.compile("/api/admin/activities/[^/;]+/cancel/?");
     private static final Pattern NOTIFICATION_READ = Pattern.compile("/api/me/notifications/[^/;]+/read/?");
@@ -63,6 +65,7 @@ final class RequestRoute {
         if (ROSTER.matcher(path).matches()) return "/api/admin/activities/{id}/registrations";
         if (ROSTER_EXPORT.matcher(path).matches()) return "/api/admin/activities/{id}/registrations/export";
         if (CHECK_IN.matcher(path).matches()) return "/api/admin/activities/{id}/registrations/{registrationId}/check-in";
+        if (SELF_CHECK_IN.matcher(path).matches()) return "/api/me/registrations/{registrationId}/check-in";
         if (ADMIN_CANCEL.matcher(path).matches()) return "/api/admin/activities/{id}/cancel";
         if (ADMIN_ACTIVITY.matcher(path).matches()) return "/api/admin/activities/{id}";
         if (DETAIL.matcher(path).matches()) return "/api/activities/{id}";

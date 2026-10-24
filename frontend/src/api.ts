@@ -5,6 +5,8 @@ import type {
   Registration,
   MyRegistrationQuery,
   MyRegistrationPage,
+  MyRegistration,
+  LocationCheckIn,
   User,
   NewUser,
   AdminOverview,
@@ -385,6 +387,12 @@ export const api = {
       })}`,
       { signal },
     ),
+  locationCheckIn: (registrationId: number, location: LocationCheckIn, signal?: AbortSignal) =>
+    request<MyRegistration>(`/me/registrations/${registrationId}/check-in`, {
+      method: "POST", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ longitude: location.longitude, latitude: location.latitude,
+        accuracyMeters: location.accuracyMeters, expectedVersion: location.expectedVersion }),
+    }),
   notifications: (query: NotificationQuery, signal?: AbortSignal) =>
     request<NotificationPage>(
       `/me/notifications?${new URLSearchParams({
@@ -449,9 +457,19 @@ export const api = {
       )}`,
       { signal },
     ),
-  checkInRegistration: (id: string, registrationId: number, signal?: AbortSignal) =>
+  checkInRegistration: (id: string, registrationId: number, signal?: AbortSignal, expectedVersion?: number) =>
     request<AdminRegistration>(`/admin/activities/${encodeURIComponent(id)}/registrations/${registrationId}/check-in`, {
       method: "POST", signal,
+      ...(expectedVersion === undefined ? {} : {
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expectedVersion }),
+      }),
+    }),
+  correctRegistrationCheckIn: (id: string, registrationId: number,
+    correction: { checkedIn: boolean; reason: string; expectedVersion: number }, signal?: AbortSignal) =>
+    request<AdminRegistration>(`/admin/activities/${encodeURIComponent(id)}/registrations/${registrationId}/check-in`, {
+      method: "PATCH", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ checkedIn: correction.checkedIn, reason: correction.reason,
+        expectedVersion: correction.expectedVersion }),
     }),
   exportAdminRegistrations: (
     id: string,

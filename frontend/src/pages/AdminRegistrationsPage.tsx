@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Alert, App as AntApp, Button, Card, Descriptions, Input, Modal, Select, Statistic } from "antd";
 import { DownloadOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
@@ -15,7 +15,7 @@ import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime }
 import { activityClosed, activityRegistrationClosed } from "../activityLifecycle";
 import { useActivityClock } from "../useActivityClock";
 import { downloadCsv } from "../fileDownload";
-import { canCheckInRegistration } from "../registrationCheckIn";
+import { canCheckInRegistration, canCorrectCheckInRegistration } from "../registrationCheckIn";
 import type {
   AdminRegistration,
   AdminRegistrationQuery,
@@ -25,6 +25,7 @@ import type {
 import { useResource } from "../useResource";
 import { AdminRegistrationTable } from "./AdminRegistrationTable";
 import { useRosterActions } from "./useRosterActions";
+import { CheckInCorrectionModal } from "./CheckInCorrectionModal";
 import { defaultRosterQuery, parseRosterQuery, rosterActivityDetailsPath, rosterListPath, serializeRosterQuery } from "../rosterQuery";
 
 const dateTime = (value: string) => `${formatDate(value)} ${formatTime(value)}`;
@@ -37,42 +38,52 @@ export function AdminRegistrationsRoute() {
 
 function AdminRegistrationsPage() {
   const { id = "" } = useParams();
-  const { pathname, search } = useLocation();
+  const { pathname, search, key: locationKey } = useLocation();
   const navigate = useNavigate();
   const auth = useAuth();
   const { message } = AntApp.useApp();
-  const account = auth.captureAccountRequest();
+  const generation = useSyncExternalStore(auth.subscribeAuthentication,
+    auth.captureAuthenticationRequest, auth.captureAuthenticationRequest);
+  const account = auth.userGeneration === generation ? auth.captureAccountRequest() : null;
   const accountKey = `${account?.userId}:${account?.generation}`;
   const { query, notice } = parseRosterQuery(search);
   const canonicalSearch = serializeRosterQuery(query);
   const [keywordDraft, setKeywordDraft] = useState(query.keyword);
   const [normalizationNotice, setNormalizationNotice] = useState(notice);
   const [revision, setRevision] = useState(0);
-  const [selection, setSelection] = useState<{ pageKey: string; registration: AdminRegistration } | null>(null);
-  const pageKey = `${pathname}:${id}:${accountKey}:${canonicalSearch}:${revision}`;
+  const [selection, setSelection] = useState<{ pageKey: string; registration: AdminRegistration; correcting: boolean } | null>(null);
+  const pageKey = `${pathname}:${id}:${accountKey}:${generation}:${canonicalSearch}:${revision}`;
   const selected = selection?.pageKey === pageKey ? selection.registration : null;
+  const correcting = !!selected && selection!.correcting;
   const currentPage = useRef<string | null>(pageKey);
+  const pendingNavigation = useRef<string | null>(null);
+  if (pendingNavigation.current !== null && pendingNavigation.current !== locationKey)
+    pendingNavigation.current = null;
   currentPage.current = pageKey;
   useLayoutEffect(() => {
     currentPage.current = pageKey;
     return () => { if (currentPage.current === pageKey) currentPage.current = null; };
   }, [pageKey]);
-  const current = () => !!account && auth.user?.role === "ADMIN" && currentPage.current === pageKey && auth.isCurrentAccountRequest(account);
-  const actions = useRosterActions(pageKey);
-  const refresh = () => setRevision((value) => value + 1);
+  const current = () => !!account && auth.user?.role === "ADMIN" && currentPage.current === pageKey &&
+    pendingNavigation.current === null && account.generation === auth.userGeneration &&
+    auth.isCurrentAuthenticationRequest(auth.userGeneration) && auth.isCurrentAccountRequest(account);
+  const actions = useRosterActions(pageKey, current);
+  const refresh = () => {
+    if (!current()) return;
+    currentPage.current = null;
+    setRevision((value) => value + 1);
+  };
   const resource = useResource(
     async (signal) => {
-      const ticket = auth.captureAccountRequest();
-      const startedPage = pageKey;
-      const current = () => !!ticket && !signal.aborted && currentPage.current === startedPage && auth.isCurrentAccountRequest(ticket);
       const cancelled = () => new DOMException("Roster request cancelled", "AbortError");
-      if (!ticket || auth.user?.role !== "ADMIN" || !current()) throw cancelled();
+      const active = () => !signal.aborted && current();
+      if (!active()) throw cancelled();
       try {
         const result = await api.adminRegistrations(id, query, signal);
-        if (!current()) throw cancelled();
+        if (!active()) throw cancelled();
         return result;
       } catch (err) {
-        if (!current()) throw cancelled();
+        if (!active()) throw cancelled();
         if (err instanceof ApiError && err.status === 401) auth.expire();
         throw err;
       }
@@ -92,29 +103,54 @@ function AdminRegistrationsPage() {
     if (correctingPage && current()) navigate(rosterListPath(id, { ...query, page: lastPage }), { replace: true });
   }, [correctingPage, lastPage, pageKey, navigate]);
   const activity = resource.data?.activity;
-  useActivityClock([activity]);
+  const now = useActivityClock([activity]);
   const summary = resource.data?.summary;
-  const canConfirm = !!selected && !!activity && canCheckInRegistration(activity, selected);
+  const canConfirm = !!selected && !!activity && canCheckInRegistration(activity, selected, now);
+  const canCorrect = !!selected && !!activity && canCorrectCheckInRegistration(activity, selected, now);
 
   function changeQuery(next: AdminRegistrationQuery) {
     if (!current()) return;
     setNormalizationNotice(null);
     if (serializeRosterQuery(next) === canonicalSearch) refresh();
-    else navigate(rosterListPath(id, next));
+    else {
+      pendingNavigation.current = locationKey;
+      currentPage.current = null;
+      navigate(rosterListPath(id, next));
+    }
+  }
+
+  function refreshAfterWriteError(error: unknown) {
+    if (!current()) return;
+    if (error instanceof ApiError && error.code === "CHECK_IN_VERSION_CONFLICT") {
+      setSelection(null);
+      message.warning("签到状态已变化，请核对刷新后的名单再操作。");
+    }
+    resource.retry();
   }
 
   function confirmCheckIn() {
-    if (!selected || !canConfirm) return;
+    if (!selected || !canConfirm || !current()) return;
     const registration = selected;
-    void actions.run("checkIn", (signal) => api.checkInRegistration(id, registration.id, signal), () => {
+    void actions.run("checkIn", (signal) => api.checkInRegistration(id, registration.id, signal, registration.checkInVersion), () => {
       setSelection(null);
       message.success("签到成功，名单已刷新");
-      refresh();
-    });
+      resource.retry();
+    }, refreshAfterWriteError);
+  }
+
+  function correctCheckIn(checkedIn: boolean, reason: string) {
+    if (!selected || !correcting || !canCorrect || !current() || checkedIn === !!selected.checkedInAt) return;
+    const registration = selected;
+    void actions.run("correctCheckIn", signal => api.correctRegistrationCheckIn(id, registration.id,
+      { checkedIn, reason, expectedVersion: registration.checkInVersion }, signal), () => {
+      setSelection(null);
+      message.success("签到已更正，名单已刷新");
+      resource.retry();
+    }, refreshAfterWriteError);
   }
 
   function exportCsv() {
-    if (!activity) return;
+    if (!activity || !current()) return;
     const filters = { status: query.status, checkInStatus: query.checkInStatus, keyword: query.keyword };
     const filename = `activity-${activity.id}-registrations.csv`;
     void actions.run("export", (signal) => api.exportAdminRegistrations(id, filters, signal), (blob, isCurrent) => {
@@ -250,7 +286,7 @@ function AdminRegistrationsPage() {
           </span>
         </form>
         {activity && !activity.cancelled && <p className="roster-guidance metadata">
-          {activityClosed(activity) ? "活动已开始，可确认有效报名者到场。签到后不可撤销，活动结束后仍支持补录。" : "活动开始后开放签到。"}
+          {activityClosed(activity) ? "活动已开始，可确认有效报名者到场；补签或撤销须填写原因，活动结束后仍可更正。" : "活动开始后开放签到。"}
         </p>}
         {actions.error && !selected && <Alert type="error" showIcon title={actions.error} className="form-alert" />}
         {resource.error ? (
@@ -258,7 +294,14 @@ function AdminRegistrationsPage() {
         ) : (
           <AdminRegistrationTable activity={activity} items={resource.data?.items ?? []}
             loading={resource.loading || correctingPage} busy={actions.busy}
-            onCheckIn={(registration) => { actions.clearError(); setSelection({ pageKey, registration }); }}
+            onCheckIn={(registration) => {
+              if (!current()) return;
+              actions.clearError(); setSelection({ pageKey, registration, correcting: false });
+            }}
+            onCorrectCheckIn={(registration) => {
+              if (!current()) return;
+              actions.clearError(); setSelection({ pageKey, registration, correcting: true });
+            }}
             pagination={correctingPage ? false : {
               current: query.page,
               pageSize: query.pageSize,
@@ -276,7 +319,7 @@ function AdminRegistrationsPage() {
           />
         )}
       </Card>
-      <Modal title="确认签到" open={!!selected} destroyOnHidden onCancel={() => { if (!actions.busy) setSelection(null); }}
+      <Modal title="确认签到" open={!!selected && !correcting} destroyOnHidden onCancel={() => { if (!actions.busy) setSelection(null); }}
         closable={!actions.busy} maskClosable={!actions.busy}
         footer={[
           <Button key="cancel" aria-label="取消签到确认" disabled={actions.busy} onClick={() => setSelection(null)}>取消</Button>,
@@ -284,9 +327,12 @@ function AdminRegistrationsPage() {
             disabled={actions.busy || !canConfirm} onClick={confirmCheckIn}>确认签到</Button>,
         ]}>
         <p>确认 <strong>{selected?.displayName}</strong>（{selected?.username}）已经到场？</p>
-        <p className="metadata">签到会记录当前管理员与首次签到时间，成功后不可撤销。</p>
+        <p className="metadata">签到会记录当前管理员与签到时间；需要更正时须填写原因并保留审计记录。</p>
         {actions.error && <Alert type="error" showIcon title={actions.error} />}
       </Modal>
+      {selected && correcting && <CheckInCorrectionModal key={`${pageKey}:${selected.id}`}
+        registration={selected} busy={actions.busy} allowed={canCorrect} error={actions.error}
+        onCancel={() => { if (!actions.busy && current()) setSelection(null); }} onSubmit={correctCheckIn} />}
     </div>
   );
 }

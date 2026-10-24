@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import mysql from 'mysql2/promise';
 import { verifyAvatarSchema } from './avatar-schema.mjs';
 import { verifyLocationPointSchema } from './location-point-schema.mjs';
+import { verifyRegistrationCheckInSchema } from './registration-check-in-schema.mjs';
 
 const runtimeDirectory = resolve('.runtime/e2e');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -36,18 +37,19 @@ export async function verifyDatabase(connection, config, expected) {
       || expected.database !== config.database || expected.serverUuid !== identity.serverUuid)) {
     throw new Error('Database target differs from the fixture manifest. Cleanup refused.');
   }
-  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14') ORDER BY installed_rank");
-  if (!['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'].every(version => migrations.some(row => row.version === version))) {
-    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8/V9/V10/V11/V12/V13/V14 migrations are missing. Cleanup refused.');
+  const [migrations] = await connection.execute("SELECT version FROM flyway_schema_history WHERE success = 1 AND version IN ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15') ORDER BY installed_rank");
+  if (!['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'].every(version => migrations.some(row => row.version === version))) {
+    throw new Error('Gather Flyway V1/V2/V3/V4/V5/V6/V7/V8/V9/V10/V11/V12/V13/V14/V15 migrations are missing. Cleanup refused.');
   }
   // These reads also validate the expected tables/columns before any fixture writes/deletes.
   await connection.execute('SELECT id, title, description, category, registered_count, cancellation_reason, cancelled_at, cancelled_by FROM activities LIMIT 0');
   await connection.execute('SELECT starts_at, ends_at, registration_deadline FROM activities LIMIT 0');
   await connection.execute('SELECT cover_hash, cover_image FROM activities LIMIT 0');
-  await connection.execute('SELECT id, activity_id, user_id, status, checked_in_at, checked_in_by FROM registrations LIMIT 0');
+  await connection.execute('SELECT id, activity_id, user_id, status, checked_in_at, checked_in_by, check_in_method, check_in_version FROM registrations LIMIT 0');
   await connection.execute('SELECT id, username, display_name, role, credential_version, avatar_hash, avatar_image FROM users LIMIT 0');
   await verifyAvatarSchema(connection);
   await verifyLocationPointSchema(connection);
+  await verifyRegistrationCheckInSchema(connection);
   await connection.execute('SELECT id, user_id, activity_id, type, activity_title, cancellation_reason, created_at, read_at FROM notifications LIMIT 0');
   await connection.execute('SELECT id, action, activity_id, activity_title, actor_user_id, actor_username, actor_display_name, registration_id, target_username, target_display_name, occurred_at, changes_json FROM activity_audit_logs LIMIT 0');
   await connection.execute('SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0');

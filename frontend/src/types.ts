@@ -48,6 +48,17 @@ export interface Registration {
 
 export interface MyRegistration extends Registration {
   checkedInAt: string | null;
+  checkInMethod: CheckInMethod;
+  checkInVersion: number;
+}
+
+export type CheckInMethod = "ADMIN" | "SELF_LOCATION" | null;
+export interface LocationCheckIn {
+  /** Native browser coordinates are WGS84; conversion and distance checks belong to the server. */
+  longitude: number;
+  latitude: number;
+  accuracyMeters: number;
+  expectedVersion: number;
 }
 
 export interface FavoriteState { favorited: boolean; favoritedAt: string | null }
@@ -63,6 +74,7 @@ export interface MyRegistrationQuery {
 }
 
 export interface MyRegistrationPage extends PageResult<MyRegistration> {
+  locationCheckInEnabled: boolean;
   summary: {
     activeRegistrations: number;
     waitingRegistrations: number;
@@ -169,7 +181,7 @@ export interface PageResult<T> {
   pageSize: number;
 }
 
-export type AuditLogAction = "CREATE" | "EDIT" | "CANCEL" | "CHECK_IN";
+export type AuditLogAction = "CREATE" | "EDIT" | "CANCEL" | "CHECK_IN" | "CHECK_IN_REVOKE";
 export type AuditLogActionFilter = "ALL" | AuditLogAction;
 
 export interface AdminAuditLogQuery {
@@ -194,7 +206,7 @@ export interface AdminAuditLog {
 }
 
 export type AuditLogField = "title" | "description" | "location" | "locationLongitude" | "locationLatitude" | "category" | "coverHash" | "startsAt" | "endsAt" | "registrationDeadline" | "capacity" |
-  "cancelledAt" | "cancellationReason" | "checkedInAt";
+  "cancelledAt" | "cancellationReason" | "checkedInAt" | "checkInMethod" | "checkedInBy" | "checkInReason";
 
 export interface AdminAuditLogDetail extends AdminAuditLog {
   changes: { field: AuditLogField; before: string | null; after: string | null }[];
@@ -242,6 +254,8 @@ export interface AdminRegistration {
   createdAt: string;
   updatedAt: string;
   checkedInAt: string | null;
+  checkInMethod: CheckInMethod;
+  checkInVersion: number;
   checkedInBy: number | null;
   checkedInByDisplayName: string | null;
 }

@@ -56,7 +56,7 @@ export function AdminAuditLogsPage() {
   const pageSizeOptions = [...new Set([10, 20, 50, query.pageSize])].sort((a, b) => a - b);
   return <div className="page-container">
     <PageHeading title="管理员操作记录" section="管理后台"
-      description="查看活动发布、编辑、取消和管理员签到的操作记录及字段变化。"
+      description="查看活动发布、编辑、取消、签到及更正的操作记录与字段变化。"
       extra={<Button aria-label="刷新操作记录" icon={<ReloadOutlined aria-hidden="true" />} loading={resource.loading} onClick={refresh}>刷新操作记录</Button>} />
     <Card className="audit-controls">
       <form className="filter-form" onSubmit={event => {

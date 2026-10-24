@@ -47,7 +47,7 @@ public interface AdminMapper {
 
     String ROSTER_SELECT = """
         SELECT r.id, r.user_id, u.username, u.display_name, r.status, r.created_at, r.updated_at,
-               r.checked_in_at, r.checked_in_by, checker.display_name AS checked_in_by_display_name
+               r.checked_in_at, r.checked_in_by, checker.display_name AS checked_in_by_display_name, r.check_in_method, r.check_in_version
         FROM registrations r JOIN users u ON u.id = r.user_id
         LEFT JOIN users checker ON checker.id = r.checked_in_by
         """;
@@ -73,7 +73,10 @@ public interface AdminMapper {
     RosterRow findRosterRegistration(@Param("activityId") long activityId, @Param("registrationId") long registrationId);
 
     // The caller holds the parent activity lock. Preserve registration status, queue order and update time.
-    @Update("UPDATE registrations SET checked_in_at=#{checkedInAt}, checked_in_by=#{adminId} WHERE id=#{registrationId} AND checked_in_at IS NULL")
+    @Update("UPDATE registrations SET checked_in_at=#{checkedInAt}, checked_in_by=#{adminId}, check_in_method='ADMIN', check_in_version=check_in_version+1 WHERE id=#{registrationId} AND checked_in_at IS NULL")
     int checkIn(@Param("registrationId") long registrationId, @Param("checkedInAt") LocalDateTime checkedInAt,
                 @Param("adminId") long adminId);
+
+    @Update("UPDATE registrations SET checked_in_at=NULL, checked_in_by=NULL, check_in_method=NULL, check_in_version=check_in_version+1 WHERE id=#{registrationId} AND checked_in_at IS NOT NULL")
+    int revokeCheckIn(long registrationId);
 }

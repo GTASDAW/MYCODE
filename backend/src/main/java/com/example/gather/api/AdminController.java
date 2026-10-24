@@ -5,6 +5,8 @@ import com.example.gather.api.ApiModels.ActivityView;
 import com.example.gather.api.ApiModels.CreateActivityRequest;
 import com.example.gather.api.ApiModels.EditActivityRequest;
 import com.example.gather.api.ApiModels.CancelActivityRequest;
+import com.example.gather.api.CheckInModels.ConfirmCheckInRequest;
+import com.example.gather.api.CheckInModels.CorrectCheckInRequest;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.ActivityService;
 import com.example.gather.service.AdminService;
@@ -59,8 +61,16 @@ public class AdminController {
 
     @PostMapping("/activities/{id}/registrations/{registrationId}/check-in")
     RosterView checkIn(@PathVariable long id, @PathVariable long registrationId,
+                       @Valid @RequestBody(required = false) ConfirmCheckInRequest request,
                        @AuthenticationPrincipal AppUserDetails principal) {
-        return checkIns.checkIn(id, registrationId, principal.id());
+        return checkIns.checkIn(id, registrationId, principal.id(), request == null ? null : request.expectedVersion());
+    }
+
+    @PatchMapping("/activities/{id}/registrations/{registrationId}/check-in")
+    RosterView correctCheckIn(@PathVariable long id, @PathVariable long registrationId,
+                              @Valid @RequestBody CorrectCheckInRequest request,
+                              @AuthenticationPrincipal AppUserDetails principal) {
+        return checkIns.correct(id, registrationId, principal.id(), request);
     }
 
     @GetMapping("/activities/{id}/registrations/export")

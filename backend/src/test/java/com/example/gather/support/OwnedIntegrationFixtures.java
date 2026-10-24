@@ -28,8 +28,8 @@ public final class OwnedIntegrationFixtures {
         var transaction = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         transaction.executeWithoutResult(status -> {
             if (!"activity_platform_test".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))
-                || !"14".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
-                throw new IllegalStateException("Fixture cleanup requires the dedicated V14 test database");
+                || !"15".equals(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class))) {
+                throw new IllegalStateException("Fixture cleanup requires the dedicated V15 test database");
             }
             jdbc.queryForList("SELECT id, credential_version, avatar_image, avatar_hash FROM users LIMIT 0");
             if (!Long.valueOf(2).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -45,6 +45,7 @@ public final class OwnedIntegrationFixtures {
                 + "OR BINARY avatar_hash <> BINARY SHA2(avatar_image,256)))", List.of(), "Invalid existing avatar pairs or checksums");
             jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline, location_longitude, location_latitude FROM activities LIMIT 0");
             verifyLocationPointSchema(jdbc);
+            verifyRegistrationCheckInSchema(jdbc);
             jdbc.queryForList("SELECT id, user_id, activity_id, created_at FROM activity_favorites LIMIT 0");
             if (!activities.isEmpty()) {
                 jdbc.queryForList("SELECT id FROM activities WHERE id IN (" + marks(activities) + ") FOR UPDATE", activities.toArray());
@@ -112,6 +113,76 @@ public final class OwnedIntegrationFixtures {
         noReferences(jdbc, "SELECT COUNT(*) FROM activities WHERE (location_longitude IS NULL) <> (location_latitude IS NULL) "
             + "OR (location_longitude IS NOT NULL AND (location_longitude NOT BETWEEN -180 AND 180 OR location_latitude NOT BETWEEN -90 AND 90))",
             List.of(), "Invalid existing location point pairs or ranges");
+    }
+
+    public static void verifyRegistrationCheckInSchema(JdbcTemplate jdbc) {
+        if (!Long.valueOf(4).equals(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='registrations' AND ("
+            + "(COLUMN_NAME='checked_in_at' AND DATA_TYPE='datetime' AND COLUMN_TYPE='datetime(6)' AND DATETIME_PRECISION=6 AND IS_NULLABLE='YES') OR "
+            + "(COLUMN_NAME='checked_in_by' AND DATA_TYPE='bigint' AND COLUMN_TYPE='bigint' AND IS_NULLABLE='YES') OR "
+            + "(COLUMN_NAME='check_in_method' AND DATA_TYPE='varchar' AND COLUMN_TYPE='varchar(16)' AND CHARACTER_MAXIMUM_LENGTH=16 AND CHARACTER_SET_NAME='ascii' AND COLLATION_NAME='ascii_bin' AND IS_NULLABLE='YES' AND COLUMN_DEFAULT IS NULL) OR "
+            + "(COLUMN_NAME='check_in_version' AND DATA_TYPE='bigint' AND COLUMN_TYPE='bigint' AND NUMERIC_PRECISION=19 AND NUMERIC_SCALE=0 AND IS_NULLABLE='NO' AND COLUMN_DEFAULT='0'))", Long.class)))
+            throw new IllegalStateException("Fixture cleanup requires the precise V15 check-in fields");
+        String state = "((checked_in_at IS NULL AND checked_in_by IS NULL AND check_in_method IS NULL) OR (status='ACTIVE' AND checked_in_at IS NOT NULL AND check_in_method='ADMIN' AND checked_in_by IS NOT NULL) OR (status='ACTIVE' AND checked_in_at IS NOT NULL AND check_in_method='SELF_LOCATION' AND checked_in_by IS NULL)) IS TRUE";
+        String actions = "action IN ('CREATE','EDIT','CANCEL','CHECK_IN','CHECK_IN_REVOKE')";
+        String targets = "((action IN ('CHECK_IN','CHECK_IN_REVOKE') AND registration_id IS NOT NULL AND target_username IS NOT NULL AND target_display_name IS NOT NULL) OR (action NOT IN ('CHECK_IN','CHECK_IN_REVOKE') AND registration_id IS NULL AND target_username IS NULL AND target_display_name IS NULL)) IS TRUE";
+        for (var expected : List.of(new String[]{"registrations", "chk_registration_check_in", state},
+            new String[]{"registrations", "chk_registration_check_in_version", "check_in_version >= 0"},
+            new String[]{"activity_audit_logs", "chk_audit_action", actions}, new String[]{"activity_audit_logs", "chk_audit_target", targets})) {
+            var checks = jdbc.queryForList("SELECT c.CHECK_CLAUSE AS clause, t.ENFORCED AS enforced FROM information_schema.TABLE_CONSTRAINTS t "
+                + "JOIN information_schema.CHECK_CONSTRAINTS c ON c.CONSTRAINT_SCHEMA=t.CONSTRAINT_SCHEMA AND c.CONSTRAINT_NAME=t.CONSTRAINT_NAME "
+                + "WHERE t.TABLE_SCHEMA=DATABASE() AND t.TABLE_NAME=? AND t.CONSTRAINT_TYPE='CHECK' AND t.CONSTRAINT_NAME=?", expected[0], expected[1]);
+            String parsed = CheckInCheck.parse(checks.size() == 1 ? String.valueOf(checks.getFirst().get("clause")) : "");
+            if (checks.size() != 1 || !"YES".equals(checks.getFirst().get("enforced")) || parsed == null || !parsed.equals(CheckInCheck.parse(expected[2])))
+                throw new IllegalStateException("Fixture cleanup requires the enforced V15 check-in and audit constraints");
+        }
+        noReferences(jdbc, "SELECT COUNT(*) FROM registrations WHERE check_in_version IS NULL OR check_in_version < 0 OR NOT (" + state + ")", List.of(), "Invalid check-in method pairs or versions");
+        noReferences(jdbc, "SELECT COUNT(*) FROM activity_audit_logs WHERE NOT ((" + actions + ") IS TRUE) OR NOT (" + targets + ")", List.of(), "Invalid audit actions or target pairs");
+    }
+
+    private static final class CheckInCheck {
+        private final List<String> tokens;
+        private int position;
+        private CheckInCheck(String clause) {
+            tokens = Pattern.compile("(?:_[a-z0-9]+)?'[^']*'|[a-z_][a-z_0-9]*|\\d+|>=|[(),=]|\\S", Pattern.CASE_INSENSITIVE)
+                .matcher(clause.replaceAll("\\\\'([^'\\\\]*)\\\\'", "'$1'").replace("`", "")).results().map(match -> match.group()).toList();
+        }
+        static String parse(String clause) {
+            try { var parser = new CheckInCheck(clause); String value = parser.expression(); return parser.position == parser.tokens.size() ? value : null; }
+            catch (IllegalArgumentException | IndexOutOfBoundsException error) { return null; }
+        }
+        private boolean next(String token) { return position < tokens.size() && token.equalsIgnoreCase(tokens.get(position)); }
+        private void take(String token) { if (!next(token)) throw new IllegalArgumentException(); position++; }
+        private String expression() { return combine("or", () -> combine("and", this::atom)); }
+        private String combine(String operator, Supplier<String> parse) {
+            var values = new ArrayList<String>(); values.add(parse.get());
+            while (next(operator)) { position++; values.add(parse.get()); }
+            if (values.size() == 1) return values.getFirst();
+            String prefix = operator + "[";
+            return prefix + String.join(",", values.stream().map(value -> value.startsWith(prefix) ? value.substring(prefix.length(), value.length() - 1) : value).toList()) + "]";
+        }
+        private String value() {
+            if (next("(")) { position++; String value = expression(); take(")"); return value; }
+            String token = tokens.get(position++);
+            if (token.matches("(?i)(?:_[a-z0-9]+)?'[^']*'")) return "literal[" + token.substring(token.indexOf("'")) + "]";
+            if (!token.matches("[a-zA-Z_][a-zA-Z_0-9]*|\\d+")) throw new IllegalArgumentException();
+            return token.toLowerCase(Locale.ROOT);
+        }
+        private String atom() {
+            String value = value();
+            if (next("=") || next(">=")) { String operator = tokens.get(position++); value = operator + "[" + value + "," + value() + "]"; }
+            else if (next("in") || next("not")) {
+                boolean negative = next("not"); if (negative) position++; take("in"); take("(");
+                var choices = new ArrayList<String>(); choices.add(value());
+                while (next(",")) { position++; choices.add(value()); } take(")");
+                value = (negative ? "notin[" : "in[") + value + "," + String.join(",", choices) + "]";
+            }
+            if (next("is")) {
+                position++; boolean negative = next("not"); if (negative) position++;
+                if (next("null")) { position++; value = (negative ? "notnull[" : "null[") + value + "]"; }
+                else { if (negative) throw new IllegalArgumentException(); take("true"); value = "true[" + value + "]"; }
+            }
+            return value;
+        }
     }
 
     /** Preserve boolean grouping; dropping every parenthesis could accept a weakened CHECK. */

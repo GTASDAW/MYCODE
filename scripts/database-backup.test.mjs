@@ -1,3 +1,4 @@
+import { checkInSchemaFixture, checkInSchemaRead } from './test-support/registration-check-in-fixture.mjs';
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -33,15 +34,15 @@ function fixture() {
     users: [{ id: '1', username: 'admin', role: 'ADMIN', password_hash: '$2a$10$unit-secret-hash', credential_version: '7', avatar_image: null, avatar_hash: null },
       { id: '2', username: 'demo', role: 'USER', password_hash: '$2a$10$another-secret-hash', credential_version: '1', avatar_image: Buffer.from([255,216,255,217]), avatar_hash: createHash('sha256').update(Buffer.from([255,216,255,217])).digest('hex') }],
     activities: [{ id: '3', title: '含中文与换行\n活动', description: 'literal \\n', cover_image: Buffer.from([0, 255, 128, 10]), cover_hash: 'f'.repeat(64), starts_at: '2026-10-01 01:02:03.123456', ends_at: '2026-10-01 03:02:03.123456', registration_deadline: '2026-10-01 01:02:03.123455', location_longitude: '116.3974281', location_latitude: '39.9092301' }],
-    registrations: [{ id: '4', activity_id: '3', user_id: '2', status: 'ACTIVE', checked_in_at: null }],
+    registrations: [{ id: '4', activity_id: '3', user_id: '2', status: 'ACTIVE', updated_at: '2026-10-01 00:00:00.123456', checked_in_at: null, checked_in_by: null, check_in_method: null, check_in_version: '0' }],
     notifications: [{ id: '5', user_id: '2', activity_id: '3', read_at: null }],
     activity_audit_logs: [{ id: '6', activity_id: '3', changes_json: '{"category":{"before":"OTHER","after":"CULTURE"}}' }],
     activity_favorites: [{ id: '7', user_id: '2', activity_id: '3' }],
-    flyway_schema_history: Array.from({ length: 14 }, (_, index) => ({ installed_rank: index + 1, version: String(index + 1), checksum: index * 100 - 100, success: 1 })),
+    flyway_schema_history: Array.from({ length: 15 }, (_, index) => ({ installed_rank: index + 1, version: String(index + 1), checksum: index * 100 - 100, success: 1 })),
   };
 }
 
-function database({ config = baseConfig, data = fixture(), nonempty = {}, grants, account, version = '8.4.7', engine = 'InnoDB', fail } = {}) {
+function database({ config = baseConfig, data = fixture(), nonempty = {}, grants, account, version = '8.4.7', engine = 'InnoDB', fail, checkInSchema = checkInSchemaFixture(), omitRegistrationField } = {}) {
   const state = { data: copy(data), queries: [], commits: 0, rollbacks: 0, ended: false, imported: false };
   return {
     state,
@@ -68,6 +69,7 @@ function database({ config = baseConfig, data = fixture(), nonempty = {}, grants
         const kind = sql.match(/information_schema\.(\w+)/)[1];
         return [[{ objectCount: state.imported ? 7 : nonempty[kind] ?? 0 }]];
       }
+      const checkIn = checkInSchemaRead(sql, checkInSchema); if (checkIn) return checkIn;
       if (sql.includes('information_schema.COLUMNS')) return [sql.includes("TABLE_NAME='activities'")
         ? [{name:'location_latitude',type:'decimal',columnType:'decimal(9,7)',nullable:'YES',numericPrecision:9,numericScale:7},{name:'location_longitude',type:'decimal',columnType:'decimal(10,7)',nullable:'YES',numericPrecision:10,numericScale:7}]
         : [{name:'avatar_hash',type:'char',nullable:'YES',charset:'ascii',length:64},{name:'avatar_image',type:'mediumblob',nullable:'YES',charset:null,length:16777215}]];
@@ -85,7 +87,7 @@ function database({ config = baseConfig, data = fixture(), nonempty = {}, grants
       if (sql.startsWith('SELECT * FROM')) {
         const name = sql.match(/`([^`]+)`/)[1];
         const rows = state.data[name];
-        return [copy(rows), Object.keys(rows[0] ?? fixture()[name][0]).map(name => ({ name }))];
+        return [copy(rows), Object.keys(rows[0] ?? fixture()[name][0]).filter(column => name !== 'registrations' || column !== omitRegistrationField).map(name => ({ name }))];
       }
       throw new Error('Unexpected private query');
     },
@@ -155,7 +157,7 @@ test('snapshots use one read-only RR transaction, all columns and primary-key or
   assert.equal(connection.state.rollbacks, 0);
   assert.equal(Object.keys(result.tables).length, 7);
   assert.equal(result.tables.users.rows, 2);
-  assert.equal(result.migrations.length, 14);
+  assert.equal(result.migrations.length, 15);
   for (const name of tableNames) assert.ok(connection.state.queries.includes(`SELECT * FROM \`${name}\` ORDER BY \`${name === 'flyway_schema_history' ? 'installed_rank' : 'id'}\``));
   assert.doesNotMatch(JSON.stringify(result), /secret-hash|含中文/);
   connection.state.data.activities[0].cover_image[1] = 254;
@@ -165,7 +167,7 @@ test('snapshots use one read-only RR transaction, all columns and primary-key or
   connection.state.data.activities[0].ends_at = null;
   const legacy = await snapshotDatabase(connection);
   assert.notEqual(legacy.tables.activities.contentSha256, changed.tables.activities.contentSha256);
-  assert.equal(legacy.migrations.length, 14);
+  assert.equal(legacy.migrations.length, 15);
   connection.state.data.activities[0].registration_deadline = null;
   const noDeadline = await snapshotDatabase(connection);
   assert.notEqual(noDeadline.tables.activities.contentSha256, legacy.tables.activities.contentSha256);
@@ -174,7 +176,7 @@ test('snapshots use one read-only RR transaction, all columns and primary-key or
   const changedAvatar = await snapshotDatabase(connection);
   assert.notEqual(changedAvatar.tables.users.contentSha256, noDeadline.tables.users.contentSha256);
   assert.equal(changedAvatar.tables.activities.contentSha256, noDeadline.tables.activities.contentSha256);
-  assert.equal(changedAvatar.schemaVersion, 14);
+  assert.equal(changedAvatar.schemaVersion, 15);
   assert.doesNotMatch(JSON.stringify(changedAvatar), /avatar_image|another-secret-hash/);
   connection.state.data.activities[0].location_longitude = '116.3974282';
   const exactPoint = await snapshotDatabase(connection);

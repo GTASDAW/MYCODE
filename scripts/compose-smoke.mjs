@@ -5,6 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import mysql from 'mysql2/promise';
 import { verifyAvatarSchema } from './avatar-schema.mjs';
 import { verifyLocationPointSchema } from './location-point-schema.mjs';
+import { verifyRegistrationCheckInSchema } from './registration-check-in-schema.mjs';
 import { initializeRun, cleanupRun, deleteOwnedFixtures } from './e2e-cleanup.mjs';
 
 const baseUrl = new URL(process.env.E2E_BASE_URL ?? 'http://127.0.0.1:18088');
@@ -168,7 +169,7 @@ async function waitHealthy() {
 async function snapshot() {
   const [users] = await db.query('SELECT *, SHA2(avatar_image,256) AS avatar_checksum FROM users ORDER BY id');
   const [activities] = await db.query('SELECT id, title, description, location, category, starts_at, ends_at, registration_deadline, capacity, registered_count, created_by, cancelled_at, cancellation_reason, cancelled_by, cover_hash, SHA2(cover_image,256) AS cover_checksum FROM activities ORDER BY id');
-  const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by FROM registrations ORDER BY id');
+  const [registrations] = await db.query('SELECT id, activity_id, user_id, status, created_at, updated_at, checked_in_at, checked_in_by, check_in_method, check_in_version FROM registrations ORDER BY id');
   const [notifications] = await db.query('SELECT * FROM notifications ORDER BY id');
   const [auditLogs] = await db.query('SELECT * FROM activity_audit_logs ORDER BY id');
   const [favorites] = await db.query('SELECT * FROM activity_favorites ORDER BY id');
@@ -202,12 +203,13 @@ try {
   assert.equal(identity.databaseName, database);
   assert.match(identity.version, /^8\.4\./, 'Compose must use real MySQL 8.4.');
   const [migrations] = await db.query('SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank');
-  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14']);
+  assert.deepEqual(migrations.map(row => row.version), ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15']);
   assert(migrations.every(row => row.success === 1));
   await db.query('SELECT category, starts_at, ends_at, registration_deadline, cover_hash, cover_image FROM activities LIMIT 0');
   await verifyAvatarSchema(db);
   await verifyLocationPointSchema(db);
-  check('fresh MySQL schema contains successful Flyway V1 through V14, avatar pairs, location point pairs/ranges and activity registration-deadline/end-time/category/cover columns');
+  await verifyRegistrationCheckInSchema(db);
+  check('fresh MySQL schema contains successful Flyway V1 through V15, check-in method/version and audit checks, avatar pairs, location point pairs/ranges and activity registration-deadline/end-time/category/cover columns');
   await waitForDemoSeed();
   await verifyApiDatabaseBeforeWrites();
   check('running Docker ownership, exact ports and a cleaned UUID probe bind API writes to the isolated database');
@@ -383,6 +385,8 @@ try {
   const signed = await admin.write(checkInPath);
   assert(signed.checkedInAt && signed.checkedInBy === adminIdentity.id);
   assert.equal(signed.status, 'ACTIVE');
+  assert.equal(signed.checkInMethod, 'ADMIN');
+  assert.equal(signed.checkInVersion, 1);
   assert.equal(signed.updatedAt, initialSignedRoster.items[0].updatedAt);
   assert.equal(signed.createdAt, initialSignedRoster.items[0].createdAt);
   assert.deepEqual(await admin.write(checkInPath), signed);
@@ -398,6 +402,8 @@ try {
   const csvBytes = new Uint8Array(await csv.arrayBuffer());
   assert.deepEqual([...csvBytes.slice(0, 3)], [239, 187, 191]);
   assert(new TextDecoder().decode(csvBytes).includes('"\tadmin"'));
+  assert(new TextDecoder().decode(csvBytes).split('\r\n')[0].endsWith(',"签到方式"'));
+  assert(new TextDecoder().decode(csvBytes).includes(',"管理员签到"\r\n'));
   const beforeAttendanceOnly = JSON.parse(beforeCheckIn);
   const afterAttendanceOnly = JSON.parse(await snapshot());
   const oldAuditIds = new Set(beforeAttendanceOnly.auditLogs.map(row => row.id));
@@ -411,10 +417,10 @@ try {
   const checkInAuditPage = await admin.json(`/api/admin/audit-logs?activityId=${startedFixture.id}&action=CHECK_IN`);
   assert.equal(checkInAuditPage.total, 1);
   const checkInAudit = await admin.json(`/api/admin/audit-logs/${checkInAuditPage.items[0].id}`);
-  assert.deepEqual(checkInAudit.changes, [{ field: 'checkedInAt', before: null, after: signed.checkedInAt }]);
+  assert.deepEqual(checkInAudit.changes, [{ field: 'checkedInAt', before: null, after: signed.checkedInAt }, { field: 'checkedInBy', before: null, after: String(adminIdentity.id) }, { field: 'checkInMethod', before: null, after: 'ADMIN' }]);
   afterAttendanceOnly.auditLogs = afterAttendanceOnly.auditLogs.filter(row => oldAuditIds.has(row.id));
   for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
-    state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
+    state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, check_in_method, check_in_version, ...businessFields }) => businessFields);
   }
   assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Check-in/export must preserve every previous business field, notification and audit snapshot apart from check-in fields and its one new audit.');
   const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [startedFixture.id]);
@@ -446,7 +452,9 @@ try {
   assert.equal(personalItem.status, 'ACTIVE');
   assert.equal(personalItem.activity.registrationStatus, personalItem.status);
   assert.equal(personalItem.checkedInAt, signed.checkedInAt);
-  assert.deepEqual(Object.keys(personalItem).sort(), ['activity', 'checkedInAt', 'id', 'status']);
+  assert.equal(personalItem.checkInMethod, 'ADMIN');
+  assert.equal(personalItem.checkInVersion, 1);
+  assert.deepEqual(Object.keys(personalItem).sort(), ['activity', 'checkInMethod', 'checkInVersion', 'checkedInAt', 'id', 'status']);
   const legacyPersonal = await admin.json('/api/me/registrations');
   assert.equal(legacyPersonal.length, 2);
   assert.deepEqual(legacyPersonal.map(row => row.activity.id), [fixture.id, startedFixture.id]);

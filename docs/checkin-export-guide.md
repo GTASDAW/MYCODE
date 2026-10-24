@@ -1,27 +1,45 @@
-# 管理员签到、整场统计与 CSV 导出
+# 到场签到、管理员更正与 CSV 导出
 
-管理员从 `/admin/activities` 或活动详情进入“报名名单”，查看有效报名者的到场情况，并下载全部符合筛选条件的记录。活动开始后才允许手工签到；活动可提供结束时间，结束后仍支持补录，不设置自动截止，也不提供撤销签到。项目继续在本机演示，复用 React、Spring Boot 和 MySQL。
+用户从“我的报名”主动请求到场定位签到；管理员从 `/admin/activities` 或活动详情进入“报名名单”，确认到场、填写原因补签或撤销，并下载全部符合筛选条件的记录。管理员在活动开始后操作，结束后仍支持补录和纠错；本人定位签到只在活动进行窗口开放。项目继续在本机演示，复用 React、Spring Boot 和 MySQL。
 
 ## 资格与首次签到
 
-签到请求没有请求体。Spring Security 检查 ADMIN 和 CSRF，操作人 ID 来自可信的 `AppUserDetails`，客户端不能代替指定管理员。
+原管理员 POST 保留无请求体调用，也接受可选 JSON `{ "expectedVersion": 0 }`。Spring Security 检查 ADMIN 和 CSRF，操作人 ID 来自可信的 `AppUserDetails`，客户端不能代替指定管理员。新管理页面始终提交所选行的版本。
 
 1. `CheckInService.checkIn` 开启独立 `READ_COMMITTED` 写事务，用 `ActivityMapper.lockById` 锁活动主键。
 2. 在该活动内普通查询报名 ID；不存在或属于其他活动均返回 `REGISTRATION_NOT_FOUND`。
 3. 拒绝已取消活动，再在取得活动锁之后读取一次服务端 UTC 微秒时间。`starts_at <= now` 才允许签到，等待锁期间跨越开始时间的请求按取得锁后的时间判断。
 4. 只有 `ACTIVE` 有效报名可签到；`WAITING`、`CANCELLED` 不适用。
-5. 首次请求保存 `checked_in_at` 与可信的 `checked_in_by`，随后读取名单行返回。重复或并发请求保留首次时间、操作人 ID，不覆盖为后来的管理员。
+5. 可选版本与锁后版本不一致时409 `CHECK_IN_VERSION_CONFLICT`。未签到时保存 `checked_in_at`、可信 `checked_in_by`、方式 `ADMIN` 并使版本加1；已签到则返回当前行，不覆盖原时间、管理员或定位方式。无版本的旧重复请求继续幂等。
 
-签到在报名表只更新两个签到字段，并在同一事务追加 V6 的首次 `CHECK_IN` 操作记录；保留报名状态、`created_at`、`updated_at`、人数、候补队列及通知。它与报名、用户取消、组织者取消和编辑共享同一活动主键锁，不额外锁不存在的报名键。包括操作记录插入在内的任何数据库失败都回滚本次写入。名单和 CSV 中管理员昵称是当前数据库资料，可能随资料修改变化，首次身份由保存的用户 ID 指向；V6 操作记录另保存当时的操作人与目标用户名称快照，不随之后改名变化。两者不能混为同一种昵称口径，详见 [管理员操作记录指南](audit-log-guide.md)。
+每次真实签到与 `CHECK_IN` 操作记录同事务保存；保留报名状态、`created_at`、`updated_at`、人数、候补队列及通知。它与报名、用户取消、组织者取消和编辑共享同一活动主键锁，不额外锁不存在的报名键。包括操作记录插入在内的任何数据库失败都回滚本次字段和版本写入。名单和 CSV 中管理员昵称是当前数据库资料；操作记录另保存当时的操作人与目标用户名称快照，不随之后改名变化，详见 [管理员操作记录指南](audit-log-guide.md)。
 
-V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DATETIME(6)` 和用户外键。CHECK 要求两字段同时为空，或同时非空且状态为 `ACTIVE`；外键 `ON DELETE RESTRICT` 防止删除被签到历史引用的用户。旧记录保持两个字段为空，没有补签到或覆盖旧迁移。约束不负责验证管理员角色或开始时间，这些业务判断由可信服务层完成。
+V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹配的 `check_in_method VARCHAR(16)` 与非负 `check_in_version BIGINT NOT NULL DEFAULT 0`；历史已签记录仅将方式回填 `ADMIN`，全部历史版本为0，原时间、管理员、`updated_at` 及历史审计保持。替换后的 CHECK 以 `IS TRUE` 严格限定三态：未签到的时间/管理员/方式全空；`ACTIVE` 的 `ADMIN` 已签到必须有管理员；`ACTIVE` 的 `SELF_LOCATION` 已签到管理员必须为空。外键仍限制删除，角色、时间、距离和归属由可信服务层检查。
+
+## 本人到场定位签到
+
+`POST /api/me/registrations/{registrationId}/check-in` 要求登录、CSRF及本人报名；非本人和不存在均返回404 `REGISTRATION_NOT_FOUND`。JSON 必填 `longitude`、`latitude`、`accuracyMeters`、`expectedVersion`，不读取客户端用户ID、角色、半径、距离或时间。经纬度固定来自浏览器原生定位的 WGS84，范围分别为±180/±90，精度必须 `0 < accuracyMeters <= 100` 米；版本为非负整数。
+
+服务先普通读取本人记录，检查归属、ACTIVE及版本，再在活动写事务和行锁之外把单点转换为GCJ-02。转换仅使用后端独立 Web服务 Key、固定高德 HTTPS 端点，禁止重定向，沿用包含正文的5秒时限及2MiB响应上限。缺Key不调用，网络或响应失败503 `LOCATION_CHECK_IN_UNAVAILABLE`，不伪造成功或以客户端点直接比较；配置及申请见 [地点指南](activity-location-guide.md#申请与本机配置)。
+
+转换成功后由独立 Spring 事务 `LocationCheckInWriter` 以 `READ_COMMITTED` 锁原活动主键，普通重读报名及单独的活动结束时间/坐标，不扩报名热锁列；重核本人、版本、ACTIVE、未取消及锁后单次UTC微秒时刻。必须同时有活动坐标和结束时间，且 `startsAt <= now < endsAt`；以服务端 Haversine 计算转换后点与活动点距离，要求 `distance <= 300` 米，精度合格与距离合格是独立条件，不把100米加进半径。成功写 `SELF_LOCATION`、时间、空管理员并使版本加1，追加可信本人为 actor 的 `CHECK_IN`。
+
+响应为本人 `MyRegistrationView`，包括 `checkedInAt`、`checkInMethod`、`checkInVersion`，不含管理员身份或更正原因。原始用户GPS不存数据库、审计、日志、浏览器地址栏URL或浏览器持久存储；后端转换请求需把该单点交给提供商，不能声称完全没有对外发送位置。页面只在主动点击时定位，不轮询；权限拒绝、无位置、精度不足或超时有中文反馈且需手动重试。坐标与精度由终端提供，距离校验不等于防伪定位或真实到场证明。真实手机需要可信HTTPS及定位权限，不能把视口模拟当作设备GPS或提供商真实转换，详见 [手机限制](activity-location-guide.md#设备定位与手机限制)。
+
+## 管理员补签与撤销
+
+`PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` 必填 `{ "checkedIn": false, "reason": "核实后撤销", "expectedVersion": 1 }`。`checkedIn` 使用必填可空包装校验，缺失不会默认撤销；原因是1–500字的非空单行文本，版本必填。权限和资格沿用管理员正常签到，结束后仍可纠错；跨活动报名仍404。
+
+锁后先比较版本，冲突409；目标状态与当前一致时不写入、不追加审计或增加版本。补签保存当前可信管理员和时间，方式为 `ADMIN`；撤销清当前时间、管理员和方式。真实变化均版本加1，分别追加 `CHECK_IN` 或 `CHECK_IN_REVOKE`；原因仅进管理员审计，撤销保留原时间、方式、管理员的前值及全部历史事件。撤销后仍在有效窗口时可用新版本重新定位签到，产生新事件；旧定位请求即使晚到也会因版本冲突被拒。响应丢失时先刷新核对，不自动重提未知结果。
 
 ## 接口与统计合同
 
 | 方法与路径 | 行为 | 权限 |
 | --- | --- | --- |
 | `GET /api/admin/activities/{id}/registrations` | 筛选、分页、活动详情与整场签到统计 | ADMIN |
-| `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 保存首次签到，返回当前名单行，无请求体 | ADMIN，需 CSRF |
+| `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认，空体兼容或可选 expectedVersion，返回当前名单行 | ADMIN，需 CSRF |
+| `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填状态、原因及版本的补签/撤销，返回当前名单行 | ADMIN，需 CSRF |
+| `POST /api/me/registrations/{registrationId}/check-in` | 本人定位签到，返回本人记录 | 已登录且本人，需 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词及两类状态筛选的 CSV | ADMIN |
 
 名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，新增 `checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。
@@ -40,11 +58,11 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 }
 ```
 
-这三个数表示整场活动全部 `ACTIVE`，不受页码、关键词或两类状态筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留原报名及用户字段，并增加 `checkedInAt`（UTC 或 null）、`checkedInBy`（用户 ID 或 null）、`checkedInByDisplayName`（当前管理员昵称或 null）。候补和已取消的签到状态在页面与 CSV 显示“不适用”。
+这三个数表示整场活动全部 `ACTIVE`，不受页码、关键词或两类状态筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留 `checkedInAt`（UTC或null）、`checkedInBy`、`checkedInByDisplayName`，并新增 `checkInMethod`（`ADMIN|SELF_LOCATION|null`）、`checkInVersion`。后两个管理员字段仅表示管理员签到，定位签到为空；候补和已取消在页面与CSV显示“不适用”。统计仍按ACTIVE及当前非空签到时间，不按方式另算，也不增SQL次数。
 
 活动、整场统计、筛选总数与当前页在 `AdminService` 的只读 `REPEATABLE_READ` 事务内共享一致性快照，按 `updated_at DESC, id DESC` 排序。签到不更新 `updated_at`，因此不会让签到者跳到名单顶部或干扰候补 FIFO。并发签到提交后，本次读取仍使用原快照，下一次刷新才反映新结果；只读查询不增加活动写锁。
 
-关键词计数与列表/CSV共用 `AdminMapper.ROSTER_FILTER`，计数联表users读取相同的当前昵称；昵称在两次读取之间提交变化时，本次查询仍按原快照返回，下次刷新才改变匹配集合。分页保持活动、整场统计、匹配计数、当前页四次业务SELECT；导出为活动、匹配计数、全集三次，认证凭据版本查询另计。搜索不增加字段、索引、依赖或迁移，当前门禁保持V12。
+关键词计数与列表/CSV共用 `AdminMapper.ROSTER_FILTER`，计数联表users读取相同的当前昵称；昵称在两次读取之间提交变化时，本次查询仍按原快照返回，下次刷新才改变匹配集合。分页保持活动、整场统计、匹配计数、当前页四次业务SELECT；导出为活动、匹配计数、全集三次，认证凭据版本查询另计。当前门禁为V15，不新增索引或依赖。
 
 常见错误沿用 JSON `{code,message}` 与服务端 `X-Request-Id`：
 
@@ -55,10 +73,14 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 | 404 / `ACTIVITY_NOT_FOUND`、`REGISTRATION_NOT_FOUND` | 活动不存在，或报名不在该活动内 |
 | 409 / `CHECK_IN_NOT_OPEN` | 未到活动开始时间 |
 | 409 / `REGISTRATION_NOT_ACTIVE`、`ACTIVITY_CANCELLED` | 非有效报名或活动已取消 |
+| 409 / `CHECK_IN_VERSION_CONFLICT` | 读取后签到状态发生变化，需刷新核对 |
+| 409 / `LOCATION_CHECK_IN_CLOSED`、`LOCATION_OUT_OF_RANGE` | 定位窗口关闭，或转换后超过300米 |
+| 409 / `LOCATION_CHECK_IN_UNAVAILABLE` | 活动缺坐标或结束时间 |
+| 503 / `LOCATION_CHECK_IN_UNAVAILABLE` | 未配置独立Web服务Key，或提供商转换失败 |
 | 400 / `VALIDATION_ERROR` | 非法分页、筛选状态或超长关键词 |
 | 413 / `EXPORT_TOO_LARGE` | 匹配导出记录超过 20,000 条 |
 
-两个新接口纳入固定日志和指标路由，不把报名 ID、昵称、筛选参数或 CSV 内容写进请求日志。实例内指标仍只表示当前 JVM，不能将跨实例或不同路由的 P95 平均为系统 P95。
+签到及导出接口纳入固定日志和指标路由，不把报名ID、昵称、筛选参数、GPS、Key或CSV正文写进请求日志。实例内指标仍只表示当前 JVM，不能将跨实例或不同路由的 P95 平均为系统 P95。
 
 ## 文件合同与 Excel 查看
 
@@ -71,7 +93,8 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 | 报名记录ID、用户名、昵称 | 当前报名及用户资料 |
 | 报名状态、签到状态 | 中文状态，有效报名者才适用签到 |
 | 首次报名时间、报名更新时间、签到时间 | 表头注明北京时间，格式 `yyyy-MM-dd HH:mm:ss`；空签到时间留空 |
-| 签到管理员ID、签到管理员昵称 | 首次操作人 ID 与当前昵称；未签到留空 |
+| 签到管理员ID、签到管理员昵称 | 当前管理员签到的操作人ID与当前昵称；未签到或定位签到留空 |
+| 签到方式（新增最后一列） | `管理员签到`、`定位签到`；未签到留空，原十列顺序保持 |
 
 接口和数据库保留 UTC 微秒，文件按北京时间显示到秒，展示精度不改变首次审计数据。非空自由文本和 ID 在双引号内部加 Tab 前缀，避免公式前缀触发 Excel 计算，并按文本处理数值 ID；固定中文状态和时间不添加前缀。原始昵称仍保存在数据库中，导出保护不改写账号资料。
 
@@ -83,7 +106,7 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 
 已提交的keyword、status、checkInStatus、page、pageSize存于 `/admin/activities/{id}/registrations` URL，输入草稿独立，未提交的文字不改变名单或CSV。查询与Enter提交，同条件仍重新读取；重置清空关键词与状态、回第一页并保留每页数量，手动刷新使用已提交条件。非法URL状态和数字归默认，超长关键词清空并提示、其他合法条件保留；无关参数规范化移除。刷新、浏览器历史和登录返回保留条件，不因筛选/hash重挂页面和Providers。名单进入同活动详情携带规范来源，只有当前管理员且活动编号一致可“返回报名名单”，外部路径、其他活动或非管理员不能扩展原公开来源白名单。
 
-未开始时提示到开始时间后操作，页面在开始边界更新按钮，没有轮询。对有效未签到者点击“确认签到”后，弹窗展示账号、昵称与不可撤销说明，确认过程中禁止重复提交。非有效报名者显示“不适用”，已签到者显示结果。表格内部横向滚动，操作列固定在右侧，桌面与手机共用现有蓝白后台布局。
+未开始时提示到开始时间后操作，页面在开始边界更新按钮，没有轮询。对有效未签到者点击“确认签到”后，弹窗展示账号、昵称；另用“更正签到”选择补签或撤销并填写原因，提交带所选行版本，过程中禁止重复提交。版本冲突关闭旧选择并刷新核对，非有效报名者显示“不适用”。表格内部横向滚动，操作列固定在右侧，桌面与手机共用现有蓝白后台布局。
 
 统一 `api.ts` 处理 JSON 与 CSV，身份仍只由现有 `AuthProvider` 管理：
 
@@ -91,18 +114,18 @@ V5 `V5__add_registration_check_in.sql` 给 `registrations` 增加可空 UTC `DAT
 - 签到写入继续只对明确 403 `CSRF_INVALID` 刷新 Token 并重试一次，普通拒绝、未知错误和第二次 CSRF 失败可见。
 - 读取、签到与下载同时核对可信账号请求票据的认证代次、取消信号与页面状态。页面进一步核对活动、筛选、页码和刷新版本；同一账号重新登录也使旧票据失效。
 - 页面离开或已提交条件变化时取消旧请求，作用域包含关键词、URL条件及认证代次；迟到成功不能更新新名单、提示旧成功或下载，迟到401不能退出新会话，旧finally不能清除新操作状态。导出使用点击时已提交的关键词及两类状态，不携带草稿、客户端身份或分页。
-- 浏览器下载只在当前请求仍有效时创建临时链接，点击前再次检查，结束时移除链接并释放对象 URL。网络失败可以重试；服务端已提交但响应丢失时，签到重试仍保留首次审计。
+- 浏览器下载只在当前请求仍有效时创建临时链接，点击前再次检查，结束时移除链接并释放对象 URL。签到提交结果未知时提示刷新核对，不自动重提；再次使用旧版本将明确冲突。
 
 ## 阅读、验证与业务演示
 
-按一次签到请求阅读 `AdminRegistrationsPage → AdminRegistrationTable/useRosterActions → api.ts → AdminController → CheckInService → ActivityMapper/AdminMapper → V5`，再沿 `CheckInService → AuditLogService.checkedIn → AuditLogMapper → V6` 查看首次事件、当前数据库名称快照与 `MANDATORY` 同事务回滚；重复签到在追加之前返回首次结果。随后沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 比较同快照的统计、过滤、排序和完整导出。
+管理员路径为 `AdminRegistrationsPage → AdminRegistrationTable/CheckInCorrectionModal/useRosterActions → api.ts → AdminController → CheckInService → ActivityMapper/AdminMapper → V5/V15`；本人路径为 `MyRegistrationsPage → useLocationCheckIn/nativeLocation → LocationCheckInController → LocationCheckInService → LocationCoordinateConverter → LocationCheckInWriter`。审计沿 `AuditLogService → AuditLogMapper → V6/V15` 查看同事务与前后值；名单及CSV沿 `AdminService.roster/exportRoster → AdminMapper/RegistrationCsv` 比较快照与字段顺序。
 
-`CheckInIntegrationTest` 使用真实 MySQL，覆盖开始时间边界、等待活动锁期间越过开始时间、可信身份与 CSRF、跨活动报名 ID、重复与并发首次信息、异常回滚、V5 约束、两类筛选、整场统计及并发中的读取快照。`RegistrationCsvTest` 验证编码、字段转义与文本保护；导出边界检查 20,000 条成功和超限拒绝，不用 H2 替代锁或快照行为。
+`CheckInIntegrationTest` 使用真实 MySQL，覆盖开始时间边界、等待活动锁期间越过开始时间、可信身份与 CSRF、跨活动报名 ID、重复与并发首次信息、异常回滚、V15严格三态约束、两类筛选、整场统计及并发中的读取快照。`RegistrationCsvTest` 验证编码、字段转义与文本保护；导出边界检查 20,000 条成功和超限拒绝，不用 H2 替代锁或快照行为。
 
 前端 `api.test.mjs` 验证文件响应、错误编号、身份与分页剔除、CSRF 重试边界和取消信号；`checkin.test.mjs` 验证资格、对象 URL 清理和同账号重登后的旧下载阻断。`e2e/checkin.spec.ts` 用本轮准确归属记录覆盖桌面/手机真实签到、筛选统计、末页修正、下载内容、网络失败、迟到成功/错误与账号切换。默认 Compose 与 Redis 双实例验证针对真实服务及数据库，不以模拟序列化代替跨实例行为。
 
-清理先核对活动归属和账号外部引用，包含 `checked_in_by` 与操作记录 `actor_user_id`；若本轮账号为外部活动执行过签到或留有操作记录，拒绝整次清理。另检查操作记录的报名与所属活动一致，异常跨活动绑定在任何 DELETE 前拒绝；原管理员作为本轮活动 actor 是合法引用，原账号与其他历史保留。V9 收藏还需通过准确用户/活动对的归属证明，外部引用拒绝；先删已证明收藏，再在同一事务按操作记录、通知、报名、活动、用户顺序删除本轮记录。当前环境核验V12、六张业务表、报名截止/结束时间、封面、分类、签到列及用户凭据版本；历史 V2 性能实验只查询原三表，不读取新增签到、通知、操作记录或凭据版本，独立合同保持，不把当前业务写成历史 SQL 优化收益。归属保护与阅读路径见 [管理员操作记录指南](audit-log-guide.md)。
+清理先核对活动归属和账号外部引用，包含 `checked_in_by` 与操作记录 `actor_user_id`；若本轮账号为外部活动执行过签到或留有操作记录，拒绝整次清理。另检查操作记录的报名与所属活动一致，异常跨活动绑定在任何 DELETE 前拒绝；原管理员作为本轮活动 actor 是合法引用，原账号与其他历史保留。收藏还需准确用户/活动对的归属证明；先删已证明收藏，再同事务按操作记录、通知、报名、活动、用户顺序清理。当前环境写入前及清理前核验V15、六张业务表、签到严格三态/非负版本与两个审计CHECK，兼顾原坐标、头像、截止/结束时间、封面、分类及凭据版本；历史V2的独立合同保持。归属保护见 [管理员操作记录指南](audit-log-guide.md)。
 
 具体执行数量、浏览器下载是否通过及 CI 结果统一见 [验证记录](verification.md)。复现与精确清理见 [交付指南](delivery-guide.md)，跨实例身份及持久化见 [共享 Session 指南](shared-session.md)。测试代码存在与实际运行通过需要分别说明。
 
-演示时用新活动让参与者在开始前报名，等自然到达开始时间后刷新名单，确认签到，再切换未签到筛选与下载 CSV。解释相同活动锁、首次审计幂等、整场统计与筛选总数区别，以及 Excel 人工查看保护的取舍。手工演示不修改已有数据的开始时间，成功签到不能撤销，活动与历史保持保存；完整可选流程见 [演示指南](demo-guide.md)。
+演示使用独立新活动并在开始前报名，等自然开始后选择本人定位或管理员确认，再填写原因更正并查看审计与CSV。定位演示须另外核对真实Web服务Key、设备HTTPS和权限；不修改已有样例时间，不以模拟定位展示为真实到场证据。完整可选流程见 [演示指南](demo-guide.md)。

@@ -51,7 +51,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
-/** Real MySQL V14 persistence/transactions; AMap transport is a contract replacement, never a real provider claim. */
+/** Real MySQL V15 persistence/transactions; AMap transport is a contract replacement, never a real provider claim. */
 @SpringBootTest(properties = {"app.maps.js-key=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "app.maps.js-security-code=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
 @AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(LocationIntegrationTest.Configuration.class)
@@ -118,10 +118,11 @@ class LocationIntegrationTest {
     final Map<Long, String> fixtureUsers = new LinkedHashMap<>();
     final List<FavoriteKey> favoriteKeys = new ArrayList<>();
 
-    @BeforeEach void verifyDedicatedV14BeforeWritingFixtures() {
+    @BeforeEach void verifyDedicatedV15BeforeWritingFixtures() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(14);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(15);
         OwnedIntegrationFixtures.verifyLocationPointSchema(jdbc);
     }
     @AfterEach void cleanup() {

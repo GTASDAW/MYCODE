@@ -4,6 +4,7 @@ import com.example.gather.api.ApiException;
 import com.example.gather.api.AuditLogModels.*;
 import com.example.gather.domain.ActivityAuditText;
 import com.example.gather.domain.NewActivity;
+import com.example.gather.domain.RosterRow;
 import com.example.gather.mapper.AuditLogMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -24,7 +25,7 @@ import java.math.BigDecimal;
 
 @Service
 public class AuditLogService {
-    private static final Set<String> ACTIONS = Set.of("ALL", "CREATE", "EDIT", "CANCEL", "CHECK_IN");
+    private static final Set<String> ACTIONS = Set.of("ALL", "CREATE", "EDIT", "CANCEL", "CHECK_IN", "CHECK_IN_REVOKE");
     private final AuditLogMapper audit;
     private final ObjectMapper json;
 
@@ -104,8 +105,27 @@ public class AuditLogService {
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void checkedIn(long activityId, long actorId, long registrationId, LocalDateTime now) {
-        append("CHECK_IN", activityId, actorId, registrationId,
-            List.of(new AuditChange("checkedInAt", null, now.toInstant(ZoneOffset.UTC).toString())), now);
+        checkedIn(activityId, actorId, registrationId, "ADMIN", actorId, null, now);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void checkedIn(long activityId, long actorId, long registrationId, String method, Long adminId, String reason, LocalDateTime now) {
+        if (!Set.of("ADMIN", "SELF_LOCATION").contains(method)) throw new IllegalArgumentException("Unsupported check-in method");
+        List<AuditChange> changes = new ArrayList<>(List.of(
+            new AuditChange("checkedInAt", null, now.toInstant(ZoneOffset.UTC).toString()),
+            new AuditChange("checkedInBy", null, adminId == null ? null : adminId.toString()),
+            new AuditChange("checkInMethod", null, method)));
+        if (reason != null) changes.add(new AuditChange("checkInReason", null, reason));
+        append("CHECK_IN", activityId, actorId, registrationId, changes, now);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void checkInRevoked(long activityId, long actorId, RosterRow before, String reason, LocalDateTime now) {
+        append("CHECK_IN_REVOKE", activityId, actorId, before.id(), List.of(
+            new AuditChange("checkedInAt", before.checkedInAt().toInstant(ZoneOffset.UTC).toString(), null),
+            new AuditChange("checkedInBy", before.checkedInBy() == null ? null : before.checkedInBy().toString(), null),
+            new AuditChange("checkInMethod", before.checkInMethod(), null),
+            new AuditChange("checkInReason", null, reason)), now);
     }
 
     private void append(String action, long activityId, long actorId, Long registrationId, List<AuditChange> changes, LocalDateTime now) {

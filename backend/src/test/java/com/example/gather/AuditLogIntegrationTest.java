@@ -145,9 +145,10 @@ class AuditLogIntegrationTest {
 
     @BeforeEach
     void prepareVerifiedFixtures() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("14");
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", String.class)).isEqualTo("15");
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
         actor = createUser("ADMIN", "审计管理员");
@@ -335,7 +336,8 @@ class AuditLogIntegrationTest {
         assertThat(detail.targetUsername()).isEqualTo(ownedUsers.get(target));
         assertThat(detail.targetDisplayName()).isEqualTo("签到用户最新昵称");
         assertThat(detail.occurredAt()).isEqualTo(NOW);
-        assertThat(detail.changes()).containsExactly(new AuditChange("checkedInAt", null, NOW.toString()));
+        assertThat(detail.changes()).containsExactly(new AuditChange("checkedInAt", null, NOW.toString()),
+            new AuditChange("checkedInBy", null, Long.toString(actor)), new AuditChange("checkInMethod", null, "ADMIN"));
         assertThat(jdbc.queryForObject("SELECT checked_in_at FROM registrations WHERE id=?", LocalDateTime.class, registrationId))
             .isEqualTo(LocalDateTime.ofInstant(NOW, ZoneOffset.UTC));
         assertThat(jdbc.queryForObject("SELECT updated_at FROM registrations WHERE id=?", LocalDateTime.class, registrationId)).isEqualTo(updated);

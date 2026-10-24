@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Alert, Button, Card, Input, Pagination, Select, Statistic, Tag } from "antd";
 import { CalendarOutlined, EnvironmentOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -17,7 +17,7 @@ import {
 import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import { useActivityClock } from "../useActivityClock";
 import { useResource } from "../useResource";
-import { checkInLabel } from "../registrationCheckIn";
+import { checkInLabel, checkInMethodLabel } from "../registrationCheckIn";
 import { myRegistrationDetailsPath } from "../activityDetailNavigation";
 import {
   myRegistrationListPath,
@@ -27,6 +27,8 @@ import {
 } from "../myRegistrationQuery";
 import type { MyRegistrationQuery, RegistrationFilter } from "../types";
 import { WaitingPositionNotice } from "../components/WaitingPositionNotice";
+import { useLocationCheckIn } from "./useLocationCheckIn";
+import { LocationCheckInButton } from "./LocationCheckInButton";
 
 const statistics = [
   { key: "activeRegistrations", title: "已报名" },
@@ -46,16 +48,19 @@ export function MyRegistrationsPage() {
   const [keywordError, setKeywordError] = useState<string | null>(null);
   const [normalizationNotice, setNormalizationNotice] = useState<string | null>(notice);
   const [revision, setRevision] = useState(0);
-  const account = auth.captureAccountRequest();
+  const generation = useSyncExternalStore(auth.subscribeAuthentication,
+    auth.captureAuthenticationRequest, auth.captureAuthenticationRequest);
+  const account = auth.userGeneration === generation ? auth.captureAccountRequest() : null;
   const accountKey = account ? `${account.userId}:${account.generation}` : null;
-  const scope = `${accountKey}:${canonicalSearch}:${revision}`;
+  const scope = `${accountKey}:${generation}:${canonicalSearch}:${revision}`;
   const currentScope = useRef<string | null>(scope);
   const pendingNavigation = useRef<string | null>(null);
   if (pendingNavigation.current !== null && pendingNavigation.current !== locationKey)
     pendingNavigation.current = null;
   currentScope.current = scope;
   const current = () => currentScope.current === scope && pendingNavigation.current === null &&
-    !!account && auth.isCurrentAccountRequest(account);
+    !!account && account.generation === auth.userGeneration &&
+    auth.isCurrentAuthenticationRequest(auth.userGeneration) && auth.isCurrentAccountRequest(account);
   useLayoutEffect(() => {
     currentScope.current = scope;
     return () => { if (currentScope.current === scope) currentScope.current = null; };
@@ -68,6 +73,7 @@ export function MyRegistrationsPage() {
       if (error instanceof ApiError && error.status === 401) auth.expire();
     },
   ), [scope]);
+  const checkIn = useLocationCheckIn(scope, current, resource.retry);
   const loading = resource.loading || pendingNavigation.current !== null;
   const records = resource.data?.items ?? [];
   const now = useActivityClock(records.map(record => record.activity));
@@ -91,11 +97,13 @@ export function MyRegistrationsPage() {
   }, [correctingPage, lastPage, scope, keyword, query.status, query.page, query.pageSize, navigate]);
 
   function refresh() {
+    if (!current()) return;
     currentScope.current = null;
     setRevision(value => value + 1);
   }
 
   function changeQuery(next: MyRegistrationQuery) {
+    if (!current()) return;
     setNormalizationNotice(null);
     if (serializeMyRegistrationQuery(next) === canonicalSearch) refresh();
     else {
@@ -117,7 +125,7 @@ export function MyRegistrationsPage() {
   return (
     <div className="page-container">
       <PageHeading title="我的报名" section="我的账号"
-        description="查看报名、候补和本人签到结果；打开活动详情可取消或重新报名。"
+        description="查看报名、候补和签到结果；到达场地后可定位签到，打开活动详情可取消或重新报名。"
         extra={<Button aria-label="刷新报名" icon={<ReloadOutlined aria-hidden="true" />}
           loading={loading} onClick={refresh}>刷新报名</Button>} />
       <div className="overview-grid myregistrations-overview">
@@ -131,6 +139,7 @@ export function MyRegistrationsPage() {
       </div>
       {normalizationNotice && <Alert className="discovery-notice" type="warning" showIcon closable
         title={normalizationNotice} onClose={() => setNormalizationNotice(null)} />}
+      {checkIn.error && <Alert className="form-alert" type="error" showIcon title={checkIn.error} />}
       <Card className="myregistrations-controls">
         <form className="filter-form" onSubmit={event => {
           event.preventDefault();
@@ -198,7 +207,7 @@ export function MyRegistrationsPage() {
                     <p className="myregistration-checkin" data-testid={`myregistration-checkin-${id}`}>
                       签到状态：{checkInLabel(record)}
                       {status === "ACTIVE" && checkedInAt && (
-                        <span> · 签到时间（北京时间）：{formatDate(checkedInAt)} {formatTime(checkedInAt)}</span>
+                        <span> · {checkInMethodLabel(record.checkInMethod)} · 签到时间（北京时间）：{formatDate(checkedInAt)} {formatTime(checkedInAt)}</span>
                       )}
                     </p>
                   </div>
@@ -207,6 +216,9 @@ export function MyRegistrationsPage() {
                       {activity.cancelled ? "活动已取消" : status === "ACTIVE" ? "已报名" : status === "WAITING" ? "候补中" : "已取消"}
                     </Tag>
                     {!activity.cancelled && <ActivityStatus activity={activity} personal={false} />}
+                    <LocationCheckInButton registration={record} enabled={resource.data?.locationCheckInEnabled === true}
+                      now={now} busy={checkIn.busyRegistrationId} locating={checkIn.locating}
+                      onCheckIn={() => { void checkIn.run(record, resource.data?.locationCheckInEnabled === true); }} />
                     <Link to={detailPath}>查看活动</Link>
                   </div>
                 </article>

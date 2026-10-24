@@ -618,6 +618,8 @@ export async function runRedisSessionChecks() {
     }), 403, 'FORBIDDEN');
     const checkedIn = await admin.write(settings.a, checkInPath, token);
     assert(checkedIn.checkedInAt && checkedIn.checkedInBy === user.id && checkedIn.updatedAt === checkInRegistration.updatedAt);
+    assert.equal(checkedIn.checkInMethod, 'ADMIN');
+    assert.equal(checkedIn.checkInVersion, 1);
     for (const base of [settings.a, settings.b, settings.web]) {
       assert.deepEqual(await admin.write(base, checkInPath, token), checkedIn);
       const page = await admin.json(base, `/api/admin/activities/${ownedCheckInFixture.id}/registrations?checkInStatus=CHECKED_IN`);
@@ -635,6 +637,8 @@ export async function runRedisSessionChecks() {
       assert.deepEqual([...bytes.slice(0, 3)], [239, 187, 191]);
       const csv = new TextDecoder().decode(bytes);
       assert(csv.includes(`"\t${ownedAccount.username}"`));
+      assert(csv.split('\r\n')[0].endsWith(',"签到方式"'));
+      assert(csv.includes(',"管理员签到"\r\n'));
       if (checkInCsv === undefined) checkInCsv = csv;
       else assert.equal(csv, checkInCsv);
     }
@@ -648,7 +652,7 @@ export async function runRedisSessionChecks() {
       && newAudits[0].target_username === ownedAccount.username && newAudits[0].target_display_name === ownedAccount.allowedDisplayNames[1]);
     afterAttendanceOnly.activity_audit_logs = afterAttendanceOnly.activity_audit_logs.filter(row => oldAuditIds.has(row.id));
     for (const state of [beforeAttendanceOnly, afterAttendanceOnly]) {
-      state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, ...businessFields }) => businessFields);
+      state.registrations = state.registrations.map(({ checked_in_at, checked_in_by, check_in_method, check_in_version, ...businessFields }) => businessFields);
     }
     assert(JSON.stringify(afterAttendanceOnly) === JSON.stringify(beforeAttendanceOnly), 'Cross-instance check-in/export must preserve old business rows and audit snapshots apart from check-in fields and one new audit.');
     const [[attendanceTruth]] = await db.execute("SELECT a.registered_count AS registeredCount, SUM(r.status='ACTIVE') AS active, SUM(r.status='WAITING') AS waiting, SUM(r.checked_in_at IS NOT NULL) AS checked FROM activities a JOIN registrations r ON r.activity_id=a.id WHERE a.id=? GROUP BY a.id", [ownedCheckInFixture.id]);
@@ -761,7 +765,7 @@ export async function runRedisSessionChecks() {
       const attendanceAudit = await admin.json(base, `/api/admin/audit-logs?activityId=${ownedCheckInFixture.id}&action=CHECK_IN`);
       assert.equal(attendanceAudit.total, 1);
       const detail = await admin.json(base, `/api/admin/audit-logs/${attendanceAudit.items[0].id}`);
-      assert.deepEqual(detail.changes, [{ field: 'checkedInAt', before: null, after: checkedIn.checkedInAt }]);
+      assert.deepEqual(detail.changes, [{ field: 'checkedInAt', before: null, after: checkedIn.checkedInAt }, { field: 'checkedInBy', before: null, after: String(user.id) }, { field: 'checkInMethod', before: null, after: 'ADMIN' }]);
       assert(detail.targetUsername === ownedAccount.username && detail.targetDisplayName === ownedAccount.allowedDisplayNames[1]);
     }
     await expectedError(await accountClient.response(settings.b, '/api/admin/audit-logs'), 403, 'FORBIDDEN');
@@ -828,11 +832,13 @@ export async function runRedisSessionChecks() {
       assert.deepEqual(full.items.map(row => row.activity.category), ['SPORTS', 'UNCATEGORIZED']);
       assert.deepEqual(full.summary, { activeRegistrations: 1, waitingRegistrations: 0, cancelledRegistrations: 1,
         checkedInRegistrations: current === admin ? 0 : 1 });
-      assert.deepEqual(full.items.map(({ checkedInAt, ...oldFields }) => oldFields), legacy);
-      assert(full.items.every(row => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(['activity', 'checkedInAt', 'id', 'status'])
+      assert.deepEqual(full.items.map(({ checkedInAt, checkInMethod, checkInVersion, ...oldFields }) => oldFields), legacy);
+      assert(full.items.every(row => JSON.stringify(Object.keys(row).sort()) === JSON.stringify(['activity', 'checkInMethod', 'checkInVersion', 'checkedInAt', 'id', 'status'])
         && row.activity.registrationStatus === row.status), 'Personal queries must not expose attendance administrator fields.');
       const ownAttendance = full.items.find(row => row.activity.id === ownedCheckInFixture.id);
       assert.equal(ownAttendance.checkedInAt, current === admin ? null : checkedIn.checkedInAt);
+      assert.equal(ownAttendance.checkInMethod, current === admin ? null : 'ADMIN');
+      assert.equal(ownAttendance.checkInVersion, current === admin ? 0 : 1);
       for (const base of [settings.a, settings.b, settings.web]) {
         const page = await current.json(base, `/api/me/registrations/search?page=1&pageSize=1&status=ACTIVE&userId=${demoIdentity.id}`);
         assert.equal(page.total, 1);
@@ -849,8 +855,10 @@ export async function runRedisSessionChecks() {
     assert.equal(demoPersonal.items[0].activity.id, ownedCheckInFixture.id);
     assert.equal(demoPersonal.items[0].status, 'WAITING');
     assert.equal(demoPersonal.items[0].activity.registrationStatus, demoPersonal.items[0].status);
-    assert.deepEqual(Object.keys(demoPersonal.items[0]).sort(), ['activity', 'checkedInAt', 'id', 'status']);
+    assert.deepEqual(Object.keys(demoPersonal.items[0]).sort(), ['activity', 'checkInMethod', 'checkInVersion', 'checkedInAt', 'id', 'status']);
     assert.equal(demoPersonal.items[0].checkedInAt, null);
+    assert.equal(demoPersonal.items[0].checkInMethod, null);
+    assert.equal(demoPersonal.items[0].checkInVersion, 0);
     assert.deepEqual(demoPersonal.summary, { activeRegistrations: 0, waitingRegistrations: 1, cancelledRegistrations: 1, checkedInRegistrations: 0 });
     await expectedError(await new ApiClient().response(settings.web, '/api/me/registrations/search'), 401, 'UNAUTHENTICATED');
     passed('personal pagination and global summary are scoped to each Session on A/B/Nginx; only own attendance is exposed and legacy arrays agree');

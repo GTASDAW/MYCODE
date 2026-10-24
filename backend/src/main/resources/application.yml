@@ -51,6 +51,7 @@ app:
   maps:
     js-key: ${AMAP_JS_KEY:}
     js-security-code: ${AMAP_JS_SECURITY_CODE:}
+    web-service-key: ${AMAP_WEB_SERVICE_KEY:}
   auth-rate-limit:
     login-source-limit: ${AUTH_RATE_LIMIT_LOGIN_SOURCE_LIMIT:60}
     login-source-window-seconds: ${AUTH_RATE_LIMIT_LOGIN_SOURCE_WINDOW_SECONDS:60}

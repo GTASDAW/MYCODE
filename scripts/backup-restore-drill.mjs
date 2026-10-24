@@ -17,7 +17,7 @@ class DrillError extends Error {}
 function check(value,message) {if(!value) throw new DrillError(message);}
 function childEnvironment(extra={}) {
   return {...Object.fromEntries(Object.entries(process.env).filter(([key])=>
-    !/^(SPRING_|SERVER_|MANAGEMENT_|APP_|DB_|DEMO_|AUTH_RATE_LIMIT_|SESSION_|MYSQL_|PORT$|JAVA_TOOL_OPTIONS$|JDK_JAVA_OPTIONS$|_JAVA_OPTIONS$)/i.test(key))),...extra};
+    !/^(SPRING_|SERVER_|MANAGEMENT_|APP_|AMAP_|DB_|DEMO_|AUTH_RATE_LIMIT_|SESSION_|MYSQL_|PORT$|JAVA_TOOL_OPTIONS$|JDK_JAVA_OPTIONS$|_JAVA_OPTIONS$)/i.test(key))),...extra};
 }
 function connection(config) {
   return mysql.createConnection({host:config.host,port:config.port,database:config.database,user:config.user,
@@ -67,6 +67,7 @@ class Api {
       }
       return Buffer.from(await response.arrayBuffer());
     }
+    if(response.headers.get('Content-Type')?.startsWith('text/csv')) return response.text();
     return response.status===204?null:response.json();
   }
   login(username,password) {return this.call('/api/auth/login',{method:'POST',form:{username,password}});}
@@ -118,7 +119,7 @@ async function prepareFixture(config,origin,runId,adminPassword) {
   const admin=new Api(origin);const actor=await admin.login('admin',adminPassword);
   const password=`Restore${randomBytes(12).toString('hex')}123!`;
   const users=[];
-  for(let index=0;index<2;index++) {
+  for(let index=0;index<3;index++) {
     const username=`restore${index}${runId.replaceAll('-','').slice(0,14)}`;
     users.push(await admin.call('/api/auth/register',{method:'POST',status:201,data:{username,password,displayName:`恢复用户 ${index+1} 😀`}}));
   }
@@ -146,14 +147,22 @@ async function prepareFixture(config,origin,runId,adminPassword) {
   const cancelled=await createActivity(admin,`恢复取消 ${runId.slice(0,8)}`);
   await first.call(`/api/activities/${cancelled.id}/registration`,{method:'POST'});
   await admin.call(`/api/admin/activities/${cancelled.id}/cancel`,{method:'POST',data:{reason:'恢复演练取消，保留通知快照'}});
-  const db=await connection(config);let startedId,registrationId;
+  check(/^gatherrestore[0-9a-f]{32}$/.test(config.database),'签到结构样本仅允许写入本轮新建恢复库');
+  const db=await connection(config);let startedId,registrationId,selfRegistrationId,uncheckedRegistrationId;
   try {
-    const [activity]=await db.execute('INSERT INTO activities(title,description,location,starts_at,capacity,registered_count,created_by) VALUES(?,?,?,UTC_TIMESTAMP(6)-INTERVAL 1 HOUR,1,1,?)',
-      [`恢复签到 ${runId.slice(0,8)}`,runId,'独立恢复签到样本',actor.id]);startedId=activity.insertId;
+    const [activity]=await db.execute('INSERT INTO activities(title,description,location,starts_at,capacity,registered_count,created_by) VALUES(?,?,?,UTC_TIMESTAMP(6)-INTERVAL 1 HOUR,3,3,?)',
+      [`恢复签到 ${runId.slice(0,8)}`,`${runId}：V15 SELF_LOCATION 为独立恢复库结构样本，不代表定位业务 API 成功`,'独立恢复签到样本',actor.id]);startedId=activity.insertId;
     const [registration]=await db.execute("INSERT INTO registrations(activity_id,user_id,status) VALUES(?,?,'ACTIVE')",[startedId,users[0].id]);registrationId=registration.insertId;
+    // Construct a storage-shape sample only in the new restore database. No user
+    // coordinates are persisted and no historical self-check-in audit is invented.
+    const [self]=await db.execute("INSERT INTO registrations(activity_id,user_id,status,checked_in_at,check_in_method,check_in_version) VALUES(?,?,'ACTIVE',UTC_TIMESTAMP(6),'SELF_LOCATION',7)",[startedId,users[1].id]);selfRegistrationId=self.insertId;
+    const [unchecked]=await db.execute("INSERT INTO registrations(activity_id,user_id,status) VALUES(?,?,'ACTIVE')",[startedId,users[2].id]);uncheckedRegistrationId=unchecked.insertId;
   } finally {await db.end();}
   await admin.call(`/api/admin/activities/${startedId}/registrations/${registrationId}/check-in`,{method:'POST'});
-  return {main:withCover,cancelledId:cancelled.id,startedId,users,password,imageHash:digest(image),imageBytes:image.length,
+  const verifyDb=await connection(config);let checkInRows;
+  try {[checkInRows]=await verifyDb.execute('SELECT id,status,created_at,updated_at,checked_in_at,checked_in_by,check_in_method,check_in_version FROM registrations WHERE activity_id=? ORDER BY id',[startedId]);}
+  finally {await verifyDb.end();}
+  return {main:withCover,cancelledId:cancelled.id,startedId,registrationId,selfRegistrationId,uncheckedRegistrationId,checkInRows,users,password,imageHash:digest(image),imageBytes:image.length,
     avatarHash:digest(avatar),avatarBytes:avatar.length};
 }
 
@@ -179,8 +188,8 @@ async function startWeb(port,apiPort) {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});return server;
 }
-async function verifyRecovered(origin,fixture,adminPassword) {
-  const admin=new Api(origin);await admin.login('admin',adminPassword);
+async function verifyRecovered(origin,fixture,adminPassword,config) {
+  const admin=new Api(origin);const adminIdentity=await admin.login('admin',adminPassword);
   check(digest(await admin.call(fixture.main.coverUrl))===fixture.imageHash,'恢复后的 JPEG 字节摘要不一致');
   const recovered=await admin.call(`/api/activities/${fixture.main.id}`);
   check(recovered.endsAt===fixture.main.endsAt,'恢复后的非空结束时间不一致');
@@ -197,14 +206,42 @@ async function verifyRecovered(origin,fixture,adminPassword) {
   await second.call(owner.avatarUrl,{status:404});
   await new Api(origin).call(owner.avatarUrl,{status:401});
   const history=await first.call('/api/me/registrations/search?pageSize=100');
-  check(history.items.some(row=>row.activity.id===fixture.startedId&&row.checkedInAt&&row.activity.registrationDeadline===null&&row.activity.locationPoint===null),'恢复后的本人签到记录缺失');
+  check(history.items.some(row=>row.activity.id===fixture.startedId&&row.checkedInAt&&row.checkInMethod==='ADMIN'&&row.checkInVersion===1&&row.activity.registrationDeadline===null&&row.activity.locationPoint===null),'恢复后的本人管理员签到方式、版本或记录缺失');
+  const selfHistory=await second.call('/api/me/registrations/search?pageSize=100');
+  check(selfHistory.items.some(row=>row.activity.id===fixture.startedId&&row.checkedInAt&&row.checkInMethod==='SELF_LOCATION'&&row.checkInVersion===7),'恢复后的定位签到结构样本方式/版本缺失');
+  const db=await connection(config);
+  try {
+    const [rows]=await db.execute('SELECT id,status,created_at,updated_at,checked_in_at,checked_in_by,check_in_method,check_in_version FROM registrations WHERE activity_id=? ORDER BY id',[fixture.startedId]);
+    check(JSON.stringify(rows)===JSON.stringify(fixture.checkInRows),'恢复后的签到方式/版本或原始时间/管理员字段发生变化');
+    const [[sampleAudit]]=await db.execute('SELECT COUNT(*) AS total FROM activity_audit_logs WHERE registration_id=?',[fixture.selfRegistrationId]);
+    check(Number(sampleAudit.total)===0,'结构样本不能伪造历史定位签到审计');
+  } finally {await db.end();}
   check(history.items.some(row=>row.activity.id===fixture.main.id&&row.status==='WAITING'&&row.activity.endsAt===fixture.main.endsAt&&row.activity.registrationDeadline===fixture.main.registrationDeadline&&sameLocationPoint(row.activity.locationPoint,recoveryLocationPoint)),'恢复后的候补记录、截止时间或坐标缺失');
   check(history.items.some(row=>row.activity.id===fixture.cancelledId&&row.status==='CANCELLED'),'恢复后的取消历史缺失');
   const favorites=await first.call('/api/me/favorites');
   check(favorites.items.some(row=>row.activity.id===fixture.main.id&&row.activity.endsAt===fixture.main.endsAt&&row.activity.registrationDeadline===fixture.main.registrationDeadline&&sameLocationPoint(row.activity.locationPoint,recoveryLocationPoint)),'恢复后的收藏、结束时间、截止时间或坐标缺失');
   check((await second.call('/api/me/notifications?status=ALL')).total>0,'恢复后的递补通知缺失');
   check((await admin.call(`/api/admin/audit-logs?activityId=${fixture.main.id}`)).total>=2,'恢复后的操作记录缺失');
-  return {admin,checks:['nullable-and-nonnull-location-point-exact-gcj02','location-point-detail-registration-favorite-projections','nullable-and-nonnull-registration-deadline','nullable-and-nonnull-end-time','cover-byte-sha256','avatar-byte-sha256-256-jpeg','avatar-owner-authentication-and-no-store','credentials-and-roles','active-waiting-cancelled-history','check-in','favorites','notifications','audit-log']};
+  const rosterPath=`/api/admin/activities/${fixture.startedId}/registrations`;
+  const roster=await admin.call(rosterPath);
+  const self=roster.items.find(row=>row.id===Number(fixture.selfRegistrationId));
+  const unchecked=roster.items.find(row=>row.id===Number(fixture.uncheckedRegistrationId));
+  check(self?.checkedInAt&&self.checkedInBy===null&&self.checkInMethod==='SELF_LOCATION'&&self.checkInVersion===7,'恢复后的定位结构样本不能被归为管理员签到');
+  check(unchecked?.checkedInAt===null&&unchecked.checkedInBy===null&&unchecked.checkInMethod===null&&unchecked.checkInVersion===0,'恢复后的未签到三空字段/零版本错误');
+  const csv=await admin.call(rosterPath+'/export');
+  check(csv.split('\r\n')[0].endsWith(',"签到方式"')&&csv.includes(',"管理员签到"\r\n')&&csv.includes(',"定位签到"\r\n'),'恢复 CSV 必须在末列追加管理员/定位签到方式');
+  const correctionPath=`${rosterPath}/${fixture.selfRegistrationId}/check-in`;
+  const revoked=await admin.call(correctionPath,{method:'PATCH',data:{checkedIn:false,reason:'恢复演练撤销定位结构样本',expectedVersion:7}});
+  check(revoked.checkedInAt===null&&revoked.checkedInBy===null&&revoked.checkInMethod===null&&revoked.checkInVersion===8&&revoked.updatedAt===self.updatedAt,'管理员撤销必须递增版本并保留报名更新时间');
+  const stale=await admin.call(correctionPath,{method:'PATCH',status:409,data:{checkedIn:true,reason:'恢复演练过期版本',expectedVersion:7}});
+  check(stale.code==='CHECK_IN_VERSION_CONFLICT','过期签到版本必须明确冲突');
+  const corrected=await admin.call(correctionPath,{method:'PATCH',data:{checkedIn:true,reason:'恢复演练管理员补签',expectedVersion:8}});
+  check(corrected.checkedInAt&&corrected.checkInMethod==='ADMIN'&&corrected.checkedInBy===adminIdentity.id&&corrected.checkInVersion===9&&corrected.updatedAt===self.updatedAt,'管理员补签必须使用管理员方式、可信管理员、递增版本并保留报名更新时间');
+  const revocations=await admin.call(`/api/admin/audit-logs?activityId=${fixture.startedId}&action=CHECK_IN_REVOKE`);
+  check(revocations.total===1,'首次撤销必须生成一个 CHECK_IN_REVOKE 审计');
+  const revocation=await admin.call(`/api/admin/audit-logs/${revocations.items[0].id}`);
+  check(revocation.changes.some(change=>change.field==='checkInReason'&&change.after==='恢复演练撤销定位结构样本'),'撤销审计必须保留原因');
+  return {admin,checks:['nullable-and-nonnull-location-point-exact-gcj02','location-point-detail-registration-favorite-projections','nullable-and-nonnull-registration-deadline','nullable-and-nonnull-end-time','cover-byte-sha256','avatar-byte-sha256-256-jpeg','avatar-owner-authentication-and-no-store','credentials-and-roles','active-waiting-cancelled-history','real-admin-check-in-and-audit','v15-admin-self-location-unchecked-storage-shapes-and-versions','v15-original-registration-timestamps-and-admin-preserved','self-location-is-restore-only-structure-sample-without-business-api-evidence','csv-appended-check-in-method-column','real-admin-correction-revoke-reason-version-conflict-api','favorites','notifications','audit-log']};
 }
 async function verifyConstraints(config,fixture) {
   const db=await connection(config);
@@ -229,10 +266,19 @@ async function verifyConstraints(config,fixture) {
       ['UPDATE users SET avatar_image=NULL WHERE id=?',[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
       ["UPDATE users SET avatar_hash=REPEAT('g',64) WHERE id=?",[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
       ["UPDATE users SET avatar_image=X'' WHERE id=?",[fixture.users[0].id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE registrations SET check_in_version=-1 WHERE id=?',[fixture.registrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ['UPDATE registrations SET check_in_method=NULL WHERE id=?',[fixture.registrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE registrations SET check_in_method='self_location' WHERE id=?",[fixture.selfRegistrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE registrations SET check_in_method='ADMIN' WHERE id=?",[fixture.selfRegistrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE registrations SET checked_in_by=? WHERE id=?",[fixture.users[0].id,fixture.selfRegistrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE registrations SET status='WAITING' WHERE id=?",[fixture.selfRegistrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE registrations SET check_in_method='SELF_LOCATION' WHERE id=?",[fixture.uncheckedRegistrationId],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE activity_audit_logs SET action='CHECK_IN_REVOKE' WHERE activity_id=? AND registration_id IS NULL",[fixture.main.id],'ER_CHECK_CONSTRAINT_VIOLATED'],
+      ["UPDATE activity_audit_logs SET registration_id=NULL WHERE activity_id=? AND action='CHECK_IN'",[fixture.startedId],'ER_CHECK_CONSTRAINT_VIOLATED'],
     ]) {
       let rejected=false;
       try {await db.execute(sql,args);} catch(error) {rejected=error.code===code;}
-      check(rejected,'恢复后的外键、唯一键、名额、结束时间、截止时间、坐标或头像约束未按预期拒绝非法数据');
+      check(rejected,'恢复后的外键、唯一键、名额、时间、坐标、头像、签到方式/版本或审计目标约束未按预期拒绝非法数据');
     }
     const [[point]]=await db.execute('SELECT location_longitude,location_latitude FROM activities WHERE id=?',[fixture.main.id]);
     check(point.location_longitude==='116.3974281'&&point.location_latitude==='39.9092301','恢复数据库未精确保留七位小数坐标');
@@ -310,7 +356,7 @@ export async function runDrill() {
   const runId=randomUUID(),directory=join(root,'.runtime/restore-drills',runId);
   await secureRuntimeDirectory(dirname(directory));
   await mkdir(directory,{recursive:true,mode:0o700});check(await realpath(directory)===resolve(directory),'演练目录不能是符号链接');
-  const report={runId,schemaVersion:14,startedAt:new Date().toISOString(),phase:'capture-source',completed:false,sourcePreserved:false,checks:[],browser:[]};
+  const report={runId,schemaVersion:15,startedAt:new Date().toISOString(),phase:'capture-source',completed:false,sourcePreserved:false,checks:[],browser:[]};
   const children=[],webServers=[];let adminDb,initial,daemon;
   try {
     initial=await fullSnapshot(source);
@@ -357,8 +403,8 @@ export async function runDrill() {
     report.phase='verify-recovered-application';
     const originB=await application(second,ports.b,'b');await bindApiToDatabase(second,new Api(originB),randomUUID());
     await verifyConstraints(second,fixture);
-    const verified=await verifyRecovered(originB,fixture,process.env.BACKUP_DEMO_ADMIN_PASSWORD);report.checks=verified.checks;
-    report.checks.push('foreign-key-unique-capacity-end-time-registration-deadline-location-pair-range-and-avatar-pair-enforcement');
+    const verified=await verifyRecovered(originB,fixture,process.env.BACKUP_DEMO_ADMIN_PASSWORD,second);report.checks=verified.checks;
+    report.checks.push('foreign-key-unique-capacity-end-time-registration-deadline-location-avatar-check-in-version-method-and-audit-target-enforcement');
     webServers.push(await startWeb(ports.web,ports.b));
     report.phase='verify-browser';
     report.browser=await verifyBrowser(`http://127.0.0.1:${ports.web}`,fixture,verified.admin,directory);

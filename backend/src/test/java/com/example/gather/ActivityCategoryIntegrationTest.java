@@ -147,9 +147,10 @@ class ActivityCategoryIntegrationTest {
     private final String prefix = "Category " + UUID.randomUUID();
 
     @BeforeEach void verifyCurrentSchemaBeforeWrites() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(14);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(15);
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0"); jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
     }
     @AfterEach void cleanOnlyOwnedFixtures() {
@@ -367,7 +368,7 @@ class ActivityCategoryIntegrationTest {
             AdminMapper.class.getName() + ".countActivities", AdminMapper.class.getName() + ".activities");
         assertSnapshot(adminQueries.subList(1, 3));
         var evidence = new StringBuilder("# Activity category query evidence\n\n")
-            .append("Dedicated MySQL activity_platform_test; schema V14; MySQL ").append(jdbc.queryForObject("SELECT VERSION()", String.class)).append(".\n")
+            .append("Dedicated MySQL activity_platform_test; schema V15; MySQL ").append(jdbc.queryForObject("SELECT VERSION()", String.class)).append(".\n")
             .append("Observed classification-filter business SELECT statements: public=2; administrator=2. Authenticated HTTP adds one credential-version SELECT.\n")
             .append("Both business reads use a single UTC microsecond time and a read-only REPEATABLE_READ snapshot.\n")
             .append("Bound category: CULTURE. Other parameter values are omitted.\n")

@@ -144,9 +144,10 @@ class AttendanceIntegrationTest {
 
     @BeforeEach
     void verifyDedicatedDatabaseBeforeOwnedFixtureWrites() {
+        com.example.gather.support.OwnedIntegrationFixtures.verifyRegistrationCheckInSchema(jdbc);
         assertThat(jdbc.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("activity_platform_test");
         assertThat(jdbc.queryForObject("SELECT VERSION()", String.class)).startsWith("8.4.");
-        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(14);
+        assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history WHERE success=1", Integer.class)).isEqualTo(15);
         jdbc.queryForList("SELECT id, credential_version FROM users LIMIT 0");
         jdbc.queryForList("SELECT id, category, cover_hash, cover_image, ends_at, registration_deadline FROM activities LIMIT 0");
         jdbc.queryForList("SELECT id, checked_in_at, checked_in_by FROM registrations LIMIT 0");
@@ -443,8 +444,8 @@ class AttendanceIntegrationTest {
             for (int index = 0; index < active + waiting + cancelled; index++) {
                 String status = index < active ? "ACTIVE" : index < active + waiting ? "WAITING" : "CANCELLED";
                 boolean attended = index < checked;
-                jdbc.update("INSERT INTO registrations(activity_id,user_id,status,checked_in_at,checked_in_by) VALUES(?,?,?,?,?)",
-                    row.id, participants.get(index), status, attended ? utc(AS_OF) : null, attended ? adminId() : null);
+                jdbc.update("INSERT INTO registrations(activity_id,user_id,status,checked_in_at,checked_in_by,check_in_method) VALUES(?,?,?,?,?,?)",
+                    row.id, participants.get(index), status, attended ? utc(AS_OF) : null, attended ? adminId() : null, attended ? "ADMIN" : null);
             }
             jdbc.update("UPDATE activities SET registered_count=? WHERE id=?", active, row.id);
             if (activityCancelled) jdbc.update("UPDATE activities SET cancelled_at=?,cancellation_reason=?,cancelled_by=? WHERE id=?",

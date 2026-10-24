@@ -15,7 +15,7 @@
     "measure:loading": "node scripts/frontend-loading-measure.mjs",
     "test:cleanup": "node --test scripts/e2e-cleanup.test.mjs",
     "cleanup:e2e": "node scripts/e2e-cleanup.mjs",
-    "test:backup": "node --test scripts/avatar-schema.test.mjs scripts/location-point-schema.test.mjs scripts/database-backup.test.mjs scripts/backup-restore-drill.test.mjs",
+    "test:backup": "node --test scripts/avatar-schema.test.mjs scripts/location-point-schema.test.mjs scripts/registration-check-in-schema.test.mjs scripts/database-backup.test.mjs scripts/backup-restore-drill.test.mjs",
     "backup:database": "node scripts/database-backup.mjs backup",
     "restore:database": "node scripts/database-backup.mjs restore",
     "verify:restore": "node scripts/backup-restore-drill.mjs",

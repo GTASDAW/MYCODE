@@ -8,6 +8,8 @@ import com.example.gather.domain.RegistrationRow;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.RegistrationMapper;
 import com.example.gather.monitoring.MonitoringService;
+import com.example.gather.maps.LocationCheckInConfiguration;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,14 +30,23 @@ public class RegistrationService {
     private final NotificationService notifications;
     private final Clock clock;
     private final MonitoringService monitoring;
+    private final LocationCheckInConfiguration locationCheckInConfiguration;
 
     public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService, NotificationService notifications, Clock clock, MonitoringService monitoring) {
+        this(activities, registrations, activityService, notifications, clock, monitoring, new LocationCheckInConfiguration(""));
+    }
+
+    @Autowired
+    public RegistrationService(ActivityMapper activities, RegistrationMapper registrations, ActivityService activityService,
+                               NotificationService notifications, Clock clock, MonitoringService monitoring,
+                               LocationCheckInConfiguration locationCheckInConfiguration) {
         this.activities = activities;
         this.registrations = registrations;
         this.activityService = activityService;
         this.notifications = notifications;
         this.clock = clock;
         this.monitoring = monitoring;
+        this.locationCheckInConfiguration = locationCheckInConfiguration;
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -106,11 +117,11 @@ public class RegistrationService {
         var totals = registrations.mineTotals(userId, status, keyword);
         long offset = ((long) page - 1L) * pageSize;
         var items = registrations.searchMine(userId, status, keyword, pageSize, offset).stream()
-            .map(row -> new MyRegistrationView(row.registrationId(), row.status(), ActivityView.from(row.activity(), now),
-                row.checkedInAt() == null ? null : row.checkedInAt().toInstant(ZoneOffset.UTC))).toList();
+            .map(row -> MyRegistrationView.from(row, now)).toList();
         return new MyRegistrationPageView(items, totals.total(), page, pageSize,
             new MyRegistrationSummary(totals.activeRegistrations(), totals.waitingRegistrations(),
-                totals.cancelledRegistrations(), totals.checkedInRegistrations()));
+                totals.cancelledRegistrations(), totals.checkedInRegistrations()),
+            locationCheckInConfiguration.enabled());
     }
 
     private ActivityLockRow lockOpenActivity(long activityId, boolean registering) {

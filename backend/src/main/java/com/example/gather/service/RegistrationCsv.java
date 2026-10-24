@@ -17,13 +17,14 @@ final class RegistrationCsv {
     static byte[] encode(List<RosterRow> rows) {
         var csv = new StringBuilder("\uFEFF");
         append(csv, "报名记录ID", "用户名", "昵称", "报名状态", "签到状态", "首次报名时间（北京时间）",
-            "报名更新时间（北京时间）", "签到时间（北京时间）", "签到管理员ID", "签到管理员昵称");
+            "报名更新时间（北京时间）", "签到时间（北京时间）", "签到管理员ID", "签到管理员昵称", "签到方式");
         for (var row : rows) {
             append(csv, text(Long.toString(row.id())), text(row.username()), text(row.displayName()),
                 switch (row.status()) { case "ACTIVE" -> "有效报名"; case "WAITING" -> "候补"; default -> "已取消"; },
                 !row.status().equals("ACTIVE") ? "不适用" : row.checkedInAt() == null ? "未签到" : "已签到",
                 time(row.createdAt()), time(row.updatedAt()), time(row.checkedInAt()),
-                row.checkedInBy() == null ? "" : text(Long.toString(row.checkedInBy())), text(row.checkedInByDisplayName()));
+                row.checkedInBy() == null ? "" : text(Long.toString(row.checkedInBy())), text(row.checkedInByDisplayName()),
+                row.checkInMethod() == null ? "" : row.checkInMethod().equals("SELF_LOCATION") ? "定位签到" : "管理员签到");
         }
         return csv.toString().getBytes(StandardCharsets.UTF_8);
     }
