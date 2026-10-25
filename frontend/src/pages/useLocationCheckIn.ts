@@ -15,6 +15,8 @@ export function useLocationCheckIn(scope: string, isCurrentPage: () => boolean, 
   });
   useLayoutEffect(() => {
     ownedScope.current = scope;
+    // Revisiting a URL scope starts idle after its previous request was aborted.
+    setState({ scope, registrationId: null, locating: false, error: null });
     const unsubscribe = auth.subscribeAuthentication(() => pending.current?.abort());
     return () => {
       if (ownedScope.current === scope) ownedScope.current = null;

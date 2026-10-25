@@ -166,6 +166,26 @@ async function openMine(page: Page, row: Registration) {
   await page.goto('/my-registrations');
   await expect(myRow(page, row.id)).toBeVisible();
 }
+async function roundTripMineFilter(page: Page, row: Registration) {
+  const originalUrl = page.url();
+  const read = (status: 'ALL' | 'ACTIVE') => page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === '/api/me/registrations/search'
+      && url.searchParams.get('status') === status;
+  });
+  const filtered = read('ACTIVE');
+  await choose(page, '报名状态', '已报名');
+  expect((await filtered).status()).toBe(200);
+  await expect(page).toHaveURL(/status=ACTIVE/);
+  await expect(myRow(page, row.id)).toBeVisible();
+  await expect(myButton(page, row.id)).toBeEnabled();
+  // B has finished loading. Do not locate, refresh, or leave the page before returning to A.
+  const returned = read('ALL');
+  await page.goBack();
+  expect((await returned).status()).toBe(200);
+  await expect(page).toHaveURL(originalUrl);
+  await expect(myRow(page, row.id)).toBeVisible();
+}
 async function openRoster(page: Page, fixture: Fixture) {
   await page.goto(`/admin/activities/${fixture.id}/registrations`);
   await expect(adminRow(page, ownedRow(fixture).id)).toBeVisible();
@@ -527,6 +547,84 @@ test('定位及接口契约替身：同账号重登和换身份后旧native回�
     await assertDatabaseUnsigned(request, fixture);
   } finally { contract?.releaseAll(); await page.unrouteAll({ behavior: 'wait' }); await logoutApi(page.request); await logoutApi(request); }
 });
+
+test('定位及接口契约替身：A→B不发新定位→返回A后旧native不复活busy且新定位可运行', async ({ page, request }, info) => {
+  await nativeContract(page);
+  let contract: Awaited<ReturnType<typeof selfInterfaceContract>> | undefined;
+  try {
+    await loginApi(request);
+    const fixture = await fixtures(request, info), row = ownedRow(fixture);
+    contract = await selfInterfaceContract(page, fixture); contract.mode('hold');
+    await login(page, fixture.accounts[0]); await openMine(page, row);
+    const old = await beginNative(page, row);
+    await expect(myButton(page, row.id)).toContainText('正在定位');
+    await roundTripMineFilter(page, row);
+    expect(await nativeCount(page)).toBe(old + 1); expect(contract.writes).toHaveLength(0);
+    await expect(myButton(page, row.id)).toBeEnabled();
+    await succeed(page, old); await nativeFail(page, old, 1); await settle(page);
+    expect(contract.writes).toHaveLength(0);
+    await expect(myButton(page, row.id)).toBeEnabled();
+    const fresh = await beginNative(page, row);
+    await succeed(page, old); await nativeFail(page, old, 1); await settle(page);
+    expect(contract.writes).toHaveLength(0);
+    await expect(myButton(page, row.id)).toContainText('正在定位');
+    await expect(myButton(page, row.id)).toBeDisabled();
+    await succeed(page, fresh);
+    await expect.poll(() => contract!.writes.length).toBe(1);
+    await expect(myButton(page, row.id)).toContainText('正在签到');
+    contract.writes[0].release(200);
+    await expect(myRow(page, row.id)).toContainText('本人定位');
+    await mineStatistics(page, 1); expect(contract.writes).toHaveLength(1);
+    await expect(page.getByText('旧签到错误不得出现', { exact: true })).toHaveCount(0);
+    await assertDatabaseUnsigned(request, fixture);
+  } finally { contract?.releaseAll(); await page.unrouteAll({ behavior: 'wait' }); await logoutApi(page.request); await logoutApi(request); }
+});
+
+for (const outcome of [200, 500, 401] as const) {
+  test(`定位及接口契约替身：A→B不发新定位→返回A后旧POST ${outcome}不复活busy或影响新提交`, async ({ page, request }, info) => {
+    await nativeContract(page);
+    let contract: Awaited<ReturnType<typeof selfInterfaceContract>> | undefined;
+    try {
+      await loginApi(request);
+      const fixture = await fixtures(request, info), row = ownedRow(fixture);
+      contract = await selfInterfaceContract(page, fixture); contract.mode('hold');
+      await login(page, fixture.accounts[0]); await openMine(page, row);
+      for (const phase of ['idle', 'new-write'] as const) {
+        if (phase === 'new-write') {
+          contract.reset();
+          await page.getByRole('button', { name: '刷新报名', exact: true }).click();
+          await expect(myButton(page, row.id)).toBeEnabled(); await mineStatistics(page, 0);
+        }
+        const before = contract.writes.length;
+        const old = await beginNative(page, row); await succeed(page, old);
+        await expect.poll(() => contract!.writes.length).toBe(before + 1);
+        await expect(myButton(page, row.id)).toContainText('正在签到');
+        await roundTripMineFilter(page, row);
+        expect(await nativeCount(page)).toBe(old + 1); expect(contract.writes).toHaveLength(before + 1);
+        await expect(myButton(page, row.id)).toBeEnabled();
+        if (phase === 'idle') {
+          contract.writes[before].release(outcome, false); await contract.writes[before].done; await settle(page);
+          await expect(myButton(page, row.id)).toBeEnabled(); await mineStatistics(page, 0);
+          await expect(page.getByText('旧签到错误不得出现', { exact: true })).toHaveCount(0);
+        }
+        const fresh = await beginNative(page, row); await succeed(page, fresh);
+        await expect.poll(() => contract!.writes.length).toBe(before + 2);
+        await expect(myButton(page, row.id)).toContainText('正在签到');
+        if (phase === 'new-write') {
+          contract.writes[before].release(outcome, false); await contract.writes[before].done; await settle(page);
+          await expect(myButton(page, row.id)).toContainText('正在签到');
+          await expect(myButton(page, row.id)).toBeDisabled(); await mineStatistics(page, 0);
+        }
+        await expect(page.getByText('旧签到错误不得出现', { exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: `账号菜单，${fixture.accounts[0].displayName}`, exact: true })).toBeVisible();
+        contract.writes[before + 1].release(200);
+        await expect(myRow(page, row.id)).toContainText('本人定位');
+        await mineStatistics(page, 1); expect(contract.writes).toHaveLength(before + 2);
+      }
+      await assertDatabaseUnsigned(request, fixture);
+    } finally { contract?.releaseAll(); await page.unrouteAll({ behavior: 'wait' }); await logoutApi(page.request); await logoutApi(request); }
+  });
+}
 
 for (const outcome of [200, 500, 401] as const) {
   test(`定位及接口契约替身：旧POST ${outcome}及finally跨条件或身份不覆盖新签到busy`, async ({ page, request }, info) => {
