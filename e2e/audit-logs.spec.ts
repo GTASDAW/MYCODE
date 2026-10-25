@@ -10,7 +10,7 @@ test.use({ trace: 'off' });
 const listApi = '/api/admin/audit-logs';
 const listPage = '/admin/audit-logs';
 const networkError = '暂时无法连接服务，请检查网络后重试。';
-const labels = { CREATE: '发布活动', EDIT: '编辑活动', CANCEL: '取消活动', CHECK_IN: '管理员签到' };
+const labels = { CREATE: '发布活动', EDIT: '编辑活动', CANCEL: '取消活动', CHECK_IN: '签到' };
 interface Account { key: string; id: number; username: string; displayName: string; allowedDisplayNames: string[] }
 interface Audit { id: number; action: keyof typeof labels; activityId: number; activityTitle: string;
   actorUserId: number; actorUsername: string; actorDisplayName: string; registrationId: number | null;
@@ -272,6 +272,7 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
   const checkedIn = await write(request, `/api/admin/activities/${attendance.id}/registrations/${attendance.registrationId}/check-in`);
   expect(checkedIn.status()).toBe(200);
   const signed = await checkedIn.json();
+  expect(signed).toMatchObject({ checkInMethod: 'ADMIN', checkInVersion: 1, checkedInBy: admin.id });
   expect((await write(request, `/api/admin/activities/${attendance.id}/registrations/${attendance.registrationId}/check-in`)).status()).toBe(200);
   const participant = await playwright.request.newContext({ baseURL: info.project.use.baseURL });
   let primaryError: unknown;
@@ -323,7 +324,7 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
       } else expect(await page.getByTestId('audit-after-cancellationReason').textContent()).toBe(reason);
       await closeDetail(page, expected.items[0].id);
     }
-    await choose(page, '操作类型', '管理员签到');
+    await choose(page, '操作类型', labels.CHECK_IN);
     await page.getByLabel('筛选活动 ID', { exact: true }).fill(String(attendance.id));
     await page.getByRole('button', { name: '查询记录', exact: true }).click();
     await assertList(page, attendanceLogs);
@@ -332,8 +333,16 @@ test('四类管理员操作的真实快照、长文本前后值和只读详情�
     await expect(content).not.toContainText(account.allowedDisplayNames[1]);
     await expect(content).toContainText(account.username);
     await expect(page.getByTestId('audit-before-checkedInAt')).toHaveText('未设置');
+    await expect(page.getByTestId('audit-before-checkedInBy')).toHaveText('未设置');
+    await expect(page.getByTestId('audit-after-checkedInBy')).toHaveText(String(admin.id));
+    await expect(page.getByTestId('audit-before-checkInMethod')).toHaveText('未设置');
+    await expect(page.getByTestId('audit-after-checkInMethod')).toHaveText('管理员确认');
     const actualDetail = await (await request.get(`${listApi}/${attendanceLogs.items[0].id}`)).json();
-    expect(actualDetail.changes).toEqual([{ field: 'checkedInAt', before: null, after: signed.checkedInAt }]);
+    expect(actualDetail.changes).toEqual([
+      { field: 'checkedInAt', before: null, after: signed.checkedInAt },
+      { field: 'checkedInBy', before: null, after: String(admin.id) },
+      { field: 'checkInMethod', before: null, after: 'ADMIN' },
+    ]);
     await capture(page, info, 'audit-checkin-snapshot');
   } catch (error) { primaryError = error; }
   finally {

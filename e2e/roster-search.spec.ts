@@ -12,7 +12,7 @@ test.use({ trace: 'off' });
 type Status = 'ACTIVE' | 'WAITING' | 'CANCELLED';
 type CheckIn = 'ALL' | 'CHECKED_IN' | 'NOT_CHECKED_IN';
 interface Account { key: string; id: number; username: string; displayName: string; allowedDisplayNames: string[] }
-interface Registration { id: number; userId: number; username: string; displayName: string; status: Status; checkedInAt: string | null }
+interface Registration { id: number; userId: number; username: string; displayName: string; status: Status; checkedInAt: string | null; checkInMethod: 'ADMIN' | 'SELF_LOCATION' | null; checkInVersion: number }
 interface Roster {
   activity: { id: number; title: string }; items: Registration[]; total: number; page: number; pageSize: number;
   summary: { activeRegistrations: number; checkedInRegistrations: number; notCheckedInRegistrations: number };
@@ -165,7 +165,10 @@ function parseCsv(bytes: Buffer) {
     }
     rows.push(row);
   }
-  expect(rows.every(row => row.length === 10)).toBe(true); return rows;
+  expect(rows.every(row => row.length === 11)).toBe(true);
+  expect(rows[0]).toEqual(['报名记录ID', '用户名', '昵称', '报名状态', '签到状态', '首次报名时间（北京时间）',
+    '报名更新时间（北京时间）', '签到时间（北京时间）', '签到管理员ID', '签到管理员昵称', '签到方式']);
+  return rows;
 }
 async function exportCsv(page: Page, id: number) {
   const received = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 CSV', exact: true }).click();
@@ -264,6 +267,9 @@ test('关键词与报名签到筛选共同分页，统计整场人数且CSV导�
   await assertRoster(page, await next); await assertQuery(page, fixture.id, { keyword: '同-', page: 2 });
   const all = await roster(request, fixture.id, { keyword: '同-', pageSize: 100 }), csv = await exportCsv(page, fixture.id);
   expect(csv.slice(1).map(row => row[0])).toEqual(all.items.map(row => `\t${row.id}`)); expect(csv).toHaveLength(15);
+  for (const row of all.items) expect(row).toMatchObject(row.checkedInAt === null
+    ? { checkInMethod: null, checkInVersion: 0 } : { checkInMethod: 'ADMIN', checkInVersion: 1 });
+  expect(csv.slice(1).map(row => row[10])).toEqual(all.items.map(row => row.checkedInAt === null ? '' : '管理员签到'));
   const resized = pageRoster(page, fixture.id, { keyword: '同-', pageSize: 20 }); await choose(page, '每页名单数量', '20 条/页');
   await assertRoster(page, await resized); await assertQuery(page, fixture.id, { keyword: '同-', pageSize: 20 });
   const marked = pageRoster(page, fixture.id, { keyword: '同-', pageSize: 20, checkInStatus: 'CHECKED_IN' }); await choose(page, '签到状态', '已签到');

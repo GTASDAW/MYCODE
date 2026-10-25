@@ -314,6 +314,9 @@ async function hold(page: Page, path: string, method: string, status: number,
   let release!: () => void, ready!: () => void, reject!: (error: unknown) => void, armed = true, released = false, count = 0;
   const gate = new Promise<void>(resolve => { release = () => { released = true; resolve(); }; });
   const started = new Promise<void>((resolve, failed) => { ready = resolve; reject = failed; });
+  // Inspection can fail before the triggering click completes. Observe that rejection
+  // immediately; ready and cleanup still report the original inspection failure.
+  void started.catch(() => undefined);
   const jobs: Promise<{ error?: unknown }>[] = [], outcomes: Promise<{ failure?: string; status?: number }>[] = [];
   const pattern = `**${path}`;
   await page.route(pattern, route => {

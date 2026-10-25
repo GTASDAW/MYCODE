@@ -480,7 +480,14 @@ test('定位及接口契约替身：筛选和站内离页使旧native回调失�
     for (const change of ['condition', 'leave'] as const) {
       const old = await beginNative(page, row);
       if (change === 'condition') await choose(page, '报名状态', '已报名');
-      else { await myRow(page, row.id).getByRole('link', { name: '查看活动', exact: true }).click(); await page.goBack(); }
+      else {
+        await myRow(page, row.id).getByRole('link', { name: '查看活动', exact: true }).click();
+        await expect(page).toHaveURL(new RegExp(`/activities/${fixture.id}(?:\\?|$)`));
+        await expect(page.getByRole('heading', { name: fixture.title, exact: true })).toBeVisible();
+        await expect(myRow(page, row.id)).toHaveCount(0);
+        await page.goBack();
+        await expect(myRow(page, row.id)).toBeVisible();
+      }
       await expect(myButton(page, row.id)).toBeEnabled();
       const fresh = await beginNative(page, row);
       await succeed(page, old); await nativeFail(page, old, 1); await settle(page);

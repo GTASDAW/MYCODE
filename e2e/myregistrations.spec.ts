@@ -11,7 +11,7 @@ test.use({ trace: 'off' });
 type Status = 'ACTIVE' | 'WAITING' | 'CANCELLED';
 interface Account { key: string; id: number; username: string; displayName: string }
 interface Registration {
-  id: number; status: Status; checkedInAt: string | null;
+  id: number; status: Status; checkedInAt: string | null; checkInMethod: 'ADMIN' | 'SELF_LOCATION' | null; checkInVersion: number;
   activity: { id: number; title: string; description: string; closed: boolean; cancelled: boolean; registrationStatus: Status; registeredCount: number; waitingCount: number; cancellationReason: string | null };
 }
 interface Result {
@@ -199,8 +199,9 @@ test('我的报名真实分页和全量统计一致，本人签到只读，URL�
     expect(first.items).toHaveLength(10);
     await assertResult(page, first);
     const checked = first.items.find(item => item.activity.id === fixture.ids[0])!;
-    expect(Object.keys(checked).sort()).toEqual(['activity', 'checkedInAt', 'id', 'status']);
+    expect(Object.keys(checked).sort()).toEqual(['activity', 'checkInMethod', 'checkInVersion', 'checkedInAt', 'id', 'status']);
     expect(checked.checkedInAt).not.toBeNull();
+    expect(checked).toMatchObject({ checkInMethod: 'ADMIN', checkInVersion: 1 });
     const checkedRow = page.getByTestId(`myregistration-${checked.id}`);
     await expect(checkedRow).toContainText('已签到');
     const beijing = new Date(Date.parse(checked.checkedInAt!) + 8 * 3600000).toISOString();
@@ -216,6 +217,9 @@ test('我的报名真实分页和全量统计一致，本人签到只读，URL�
     expect(last.items).toHaveLength(3);
     expect(new Set([...first.items, ...last.items].map(item => item.id)).size).toBe(13);
     expect([...first.items, ...last.items].map(item => item.activity.id)).toEqual(fixture.ids);
+    for (const item of [...first.items, ...last.items].filter(item => item.checkedInAt === null)) {
+      expect(item).toMatchObject({ checkInMethod: null, checkInVersion: 0 });
+    }
     expect(last.summary).toEqual(first.summary);
     await assertResult(page, last); await assertQuery(page, { page: 2 });
     for (const item of last.items) await expect(page.getByTestId(`myregistration-${item.id}`)).toContainText('不适用');

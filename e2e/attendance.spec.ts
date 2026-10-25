@@ -167,9 +167,9 @@ async function seed(request: APIRequestContext, info: TestInfo, scenario: number
       for (const [position, status] of statuses.entries()) {
         const signed = status === 'ACTIVE' && position < checked;
         const [record] = await db.execute<mysql.ResultSetHeader>(
-          'INSERT INTO registrations(activity_id,user_id,status,created_at,updated_at,checked_in_at,checked_in_by) VALUES (?,?,?,?,?,?,?)',
+          'INSERT INTO registrations(activity_id,user_id,status,created_at,updated_at,checked_in_at,checked_in_by,check_in_method) VALUES (?,?,?,?,?,?,?,?)',
           [created.insertId, users[position].id, status, sqlTime(base - 7200000), sqlTime(base - 7200000),
-            signed ? sqlTime(base + 7200000) : null, signed ? administrator.id : null]);
+            signed ? sqlTime(base + 7200000) : null, signed ? administrator.id : null, signed ? 'ADMIN' : null]);
         registrationIds.push(record.insertId);
       }
       rows.push({ id: created.insertId, title: intents[index].title, startsAt, active, checked, registrationIds });
