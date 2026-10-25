@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -48,6 +48,22 @@ export function digest(value) { return createHash('sha256').update(value).digest
 export function slash(value) { return value.replaceAll('\\', '/'); }
 export function jsonFile(file) { return JSON.parse(readFileSync(file, 'utf8')); }
 export function byteSizes(buffer) { return { rawBytes: buffer.length, gzipBytes: gzipSync(buffer, { level: 9 }).length }; }
+
+export function dependencyLockEvidence(sourceRoot, dependencyRoot, viteVersion) {
+  const installedRoot = path.join(dependencyRoot, 'node_modules');
+  assert.equal(realpathSync(path.join(sourceRoot, 'node_modules')), realpathSync(installedRoot),
+    'Source must resolve the same installed dependency tree used by the build tool');
+  const lockText = readFileSync(path.join(dependencyRoot, 'package-lock.json'), 'utf8').replaceAll('\r\n', '\n');
+  const installedText = readFileSync(path.join(installedRoot, '.package-lock.json'), 'utf8').replaceAll('\r\n', '\n');
+  const lock = JSON.parse(lockText), installed = JSON.parse(installedText);
+  assert.equal(lock.lockfileVersion, 3, 'The dependency package lock must use the current format');
+  assert.equal(installed.lockfileVersion, 3, 'The installed dependency lock must use the current format');
+  assert(typeof viteVersion === 'string' && viteVersion, 'The actual Vite runtime version is required');
+  assert.equal(lock.packages?.['node_modules/vite']?.version, viteVersion, 'The actual Vite runtime differs from the build dependency lock');
+  assert.equal(installed.packages?.['node_modules/vite']?.version, viteVersion, 'The actual Vite runtime differs from the installed dependency lock');
+  return { lockSha256: digest(lockText), installedLockSha256: digest(installedText),
+    sourceLockSha256: digest(readFileSync(path.join(sourceRoot, 'package-lock.json'), 'utf8').replaceAll('\r\n', '\n')) };
+}
 
 export function relativeModule(id, sourceRoot) {
   const normalized = slash(id);
@@ -161,7 +177,11 @@ export function afterContract(after) {
 
 export function buildContract(before, after) {
   assert(before.baselineRevision === BASELINE_REVISION, 'Baseline must use the fixed source revision');
+  for (const build of [before, after]) for (const field of ['lockSha256', 'installedLockSha256', 'sourceLockSha256']) {
+    assert(/^[0-9a-f]{64}$/.test(build[field] ?? ''), `Build ${field} evidence is missing or invalid`);
+  }
   assert.equal(before.lockSha256, after.lockSha256, 'Before/after package locks must match');
+  assert.equal(before.installedLockSha256, after.installedLockSha256, 'Before/after installed dependency locks must match');
   assert.equal(before.nodeVersion, after.nodeVersion, 'Before/after must use the same Node runtime');
   assert.equal(before.viteVersion, after.viteVersion, 'Before/after must use the same Vite runtime');
   assert.deepEqual(before.buildParameters, after.buildParameters, 'Before/after build parameters must match');
@@ -171,7 +191,9 @@ export function buildContract(before, after) {
   assert(current.jsRawBytes < baseline.jsRawBytes, 'Initial JS raw bytes must fall below baseline');
   assert(current.jsGzipBytes < baseline.jsGzipBytes, 'Initial JS gzip estimate must fall below baseline');
   return { schemaVersion: 1, baselineRevision: BASELINE_REVISION, generatedAt: new Date().toISOString(),
-    baseline: { eager: baseline, sourceSha256: before.sourceSha256 }, after: { eager: current, sourceSha256: after.sourceSha256 },
+    baseline: { eager: baseline, sourceSha256: before.sourceSha256, sourceLockSha256: before.sourceLockSha256 },
+    after: { eager: current, sourceSha256: after.sourceSha256, sourceLockSha256: after.sourceLockSha256 },
+    dependencies: { lockSha256: before.lockSha256, installedLockSha256: before.installedLockSha256 },
     lazyEntries: evidence.lazyEntries, publicRequired: evidence.publicRequired,
     administratorDeferredDependencies: evidence.adminDeferredSrc, administratorTableImplementations: evidence.tableImplementationModules,
     estimates: { gzip: 'Independent level-9 gzip per JS/CSS file; excludes HTTP headers and is not a browser measurement' },

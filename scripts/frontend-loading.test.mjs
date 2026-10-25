@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
-import { afterContract, argumentsOf, assetInventory, BASELINE_REVISION, buildContract, byteSizes, eagerGraph,
+import { afterContract, argumentsOf, assetInventory, BASELINE_REVISION, buildContract, byteSizes, dependencyLockEvidence, digest, eagerGraph,
   LAZY_MODULES, outputRoot, PROJECT_ROOT, relativeModule, sourceDigest, verifyMeasurementArtifacts } from './frontend-loading-core.mjs';
 import { createProductionServer } from './frontend-loading-server.mjs';
 import { runLoadingSample } from './frontend-loading-sample.mjs';
@@ -15,7 +15,8 @@ function fixture() {
     facadeModule: 'src/main.tsx', modules: ['src/main.tsx', 'src/pages/ActivitiesPage.tsx', 'src/Layout.tsx', 'src/provider.ts'] };
   const chunks = [eager, ...LAZY_MODULES.map((module, index) => ({ file: `assets/page${index}-12345678.js`, imports: [], dynamicImports: [],
     isEntry: false, isDynamicEntry: true, facadeModule: module, modules: [module, ...(module.includes('AdminDashboard') ? [PRIVATE, TABLE] : [])] }))];
-  return { baselineRevision: BASELINE_REVISION, lockSha256: 'lock', nodeVersion: process.version, viteVersion: '8.3.2', buildParameters: { minify: true },
+  return { baselineRevision: BASELINE_REVISION, lockSha256: digest('lock'), sourceLockSha256: digest('source-lock'),
+    installedLockSha256: digest('installed-lock'), nodeVersion: process.version, viteVersion: '8.3.2', buildParameters: { minify: true },
     manifest: { 'index.html': { file: eager.file, isEntry: true, css: ['assets/index-12345678.css'] } }, chunks,
     modules: [{ id: 'src/main.tsx', imports: ['src/pages/ActivitiesPage.tsx', 'src/Layout.tsx'], dynamicImports: LAZY_MODULES },
       { id: 'src/Layout.tsx', imports: ['src/provider.ts'], dynamicImports: [] },
@@ -81,13 +82,53 @@ test('missing byte inventory cannot silently count initial assets as zero', () =
 test('comparison enforces raw and gzip reductions and matching fixed runtime lock and parameters', () => {
   const after = fixture(); const before = fixture(); before.assets[0].rawBytes = 200; before.assets[0].gzipBytes = 90;
   assert.equal(buildContract(before, after).savings.jsRawBytes, 100);
-  for (const field of ['lockSha256', 'nodeVersion', 'viteVersion', 'buildParameters']) {
+  for (const field of ['lockSha256', 'installedLockSha256', 'nodeVersion', 'viteVersion', 'buildParameters']) {
     const invalid = structuredClone(after); invalid[field] = 'different';
     assert.throws(() => buildContract(before, invalid));
   }
   assert.throws(() => buildContract(after, after), /raw bytes/);
   const worseGzip = fixture(); worseGzip.assets[0].gzipBytes = 91;
   assert.throws(() => buildContract(before, worseGzip), /gzip estimate/);
+});
+function dependencyFixture(t) {
+  const root = temp(t), current = path.join(root, 'current'), baseline = path.join(root, 'baseline');
+  mkdirSync(path.join(current, 'node_modules'), { recursive: true }); mkdirSync(baseline);
+  const installed = { lockfileVersion: 3, packages: { 'node_modules/vite': { version: '8.3.3' } } };
+  const currentLock = JSON.stringify({ ...installed, packages: { '': { devDependencies: { vite: '8.3.3' } }, ...installed.packages } }) + '\n';
+  const originalLock = JSON.stringify({ ...installed, packages: { '': { devDependencies: { vite: '8.3.2' } }, 'node_modules/vite': { version: '8.3.2' } } }) + '\n';
+  writeFileSync(path.join(current, 'package-lock.json'), currentLock);
+  writeFileSync(path.join(current, 'node_modules/.package-lock.json'), JSON.stringify(installed) + '\n');
+  writeFileSync(path.join(baseline, 'package-lock.json'), originalLock);
+  symlinkSync(path.join(current, 'node_modules'), path.join(baseline, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  return { current, baseline, currentLock, originalLock, installed };
+}
+test('archived source retains its old lock while both builds compare the actual shared updated dependency lock', t => {
+  const { current, baseline, currentLock, originalLock } = dependencyFixture(t);
+  const beforeEvidence = dependencyLockEvidence(baseline, current, '8.3.3');
+  const afterEvidence = dependencyLockEvidence(current, current, '8.3.3');
+  assert.equal(beforeEvidence.sourceLockSha256, digest(originalLock));
+  assert.equal(beforeEvidence.lockSha256, digest(currentLock));
+  assert.notEqual(beforeEvidence.sourceLockSha256, afterEvidence.sourceLockSha256);
+  assert.equal(beforeEvidence.lockSha256, afterEvidence.lockSha256);
+  assert.equal(beforeEvidence.installedLockSha256, afterEvidence.installedLockSha256);
+  assert.equal(readFileSync(path.join(baseline, 'package-lock.json'), 'utf8'), originalLock);
+  const before = { ...fixture(), ...beforeEvidence, viteVersion: '8.3.3' }, after = { ...fixture(), ...afterEvidence, viteVersion: '8.3.3' };
+  before.assets[0].rawBytes = 200; before.assets[0].gzipBytes = 90;
+  const contract = buildContract(before, after);
+  assert.equal(contract.baseline.sourceLockSha256, digest(originalLock));
+  assert.equal(contract.after.sourceLockSha256, digest(currentLock));
+  assert.equal(contract.dependencies.lockSha256, digest(currentLock));
+  for (const field of ['lockSha256', 'installedLockSha256']) {
+    assert.throws(() => buildContract(before, { ...after, [field]: digest('other-dependencies') }), /locks must match/);
+  }
+});
+test('dependency evidence rejects another installation tree and Vite runtime mismatches in either lock', t => {
+  const { current, baseline, installed } = dependencyFixture(t);
+  assert.throws(() => dependencyLockEvidence(baseline, current, '8.3.2'), /runtime differs from the build dependency lock/);
+  writeFileSync(path.join(current, 'node_modules/.package-lock.json'), JSON.stringify({ ...installed, packages: { 'node_modules/vite': { version: '8.3.2' } } }));
+  assert.throws(() => dependencyLockEvidence(baseline, current, '8.3.3'), /runtime differs from the installed dependency lock/);
+  const other = path.join(current, 'other'); mkdirSync(path.join(other, 'node_modules'), { recursive: true });
+  assert.throws(() => dependencyLockEvidence(baseline, other, '8.3.3'), /same installed dependency tree/);
 });
 test('unknown repeated or missing CLI parameters are rejected', () => {
   assert.deepEqual(argumentsOf(['--variant', 'after'], ['variant']), { variant: 'after' });
@@ -170,7 +211,7 @@ test('measurement preflight refuses an overwritten manifest or incompatible buil
   const { root, baseline, after } = artifactPair(t);
   writeFileSync(path.join(root, 'after/dist/.vite/manifest.json'), '{}');
   assert.throws(() => verifyMeasurementArtifacts(baseline, after, root), /disk manifest differs/);
-  const incompatible = structuredClone(after); incompatible.lockSha256 = 'different';
+  const incompatible = structuredClone(after); incompatible.lockSha256 = digest('different');
   assert.throws(() => verifyMeasurementArtifacts(baseline, incompatible, root), /locks must match/);
 });
 const sampleSettings = { network: { latencyMs: 150, downloadBitsPerSecond: 1600000, uploadBitsPerSecond: 750000 }, timeoutMs: 1000 };

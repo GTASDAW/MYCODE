@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { argumentsOf, assetInventory, BASELINE_REVISION, digest, outputRoot, PROJECT_ROOT, rejectSymlinkAncestors, relativeModule, sourceDigest } from './frontend-loading-core.mjs';
+import { argumentsOf, assetInventory, BASELINE_REVISION, dependencyLockEvidence, digest, outputRoot, PROJECT_ROOT, rejectSymlinkAncestors, relativeModule, sourceDigest } from './frontend-loading-core.mjs';
 
 const options = argumentsOf(process.argv.slice(2), ['variant', 'output-root']);
 const variant = options.variant ?? 'both';
@@ -50,6 +50,7 @@ for (const selected of variant === 'both' ? ['baseline', 'after'] : [variant]) {
   rejectSymlinkAncestors(path.join(destination, 'dist'));
   const chunks = [];
   const modules = [];
+  const dependencies = dependencyLockEvidence(root, frontend, viteVersion);
   const buildParameters = { mode: 'production', minify: true, sourcemap: false, manifest: true, defaultChunkWarningLimit: true };
   execFileSync(process.execPath, [path.join(nodeModules, 'typescript/bin/tsc'), '--project', path.join(root, 'tsconfig.app.json'), '--noEmit', '--incremental', 'false'], { cwd: root, stdio: 'inherit' });
   execFileSync(process.execPath, [path.join(nodeModules, 'typescript/bin/tsc'), '--project', path.join(root, 'tsconfig.node.json'), '--noEmit', '--incremental', 'false'], { cwd: root, stdio: 'inherit' });
@@ -68,13 +69,14 @@ for (const selected of variant === 'both' ? ['baseline', 'after'] : [variant]) {
         }
       } }] } } });
   assert.equal(sourceDigest(root), sourceSha256, 'Source changed while the production build was running');
+  assert.deepEqual(dependencyLockEvidence(root, frontend, viteVersion), dependencies, 'Dependency locks or installation changed while the production build was running');
   const result = { schemaVersion: 1, variant: selected, baselineRevision: BASELINE_REVISION,
     nodeVersion: process.version, viteVersion, sourceRevision: selected === 'baseline' ? BASELINE_REVISION
       : execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT_ROOT, encoding: 'utf8' }).trim(),
     harnessRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT_ROOT, encoding: 'utf8' }).trim(),
     sourceDirty: selected === 'baseline' ? false : execFileSync('git', ['status', '--porcelain', '--untracked-files=all', '--', 'frontend'],
       { cwd: PROJECT_ROOT, encoding: 'utf8' }).trim().length > 0,
-    sourceSha256, lockSha256: digest(readFileSync(path.join(root, 'package-lock.json'), 'utf8').replaceAll('\r\n', '\n')), buildParameters,
+    sourceSha256, ...dependencies, buildParameters,
     manifest: JSON.parse(readFileSync(path.join(destination, 'dist/.vite/manifest.json'), 'utf8')),
     chunks: chunks.sort((a, b) => a.file.localeCompare(b.file)), modules: modules.sort((a, b) => a.id.localeCompare(b.id)),
     assets: assetInventory(path.join(destination, 'dist')) };
