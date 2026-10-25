@@ -8,6 +8,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Semaphore;
 
 /** One WGS84 point enters the fixed AMap GPS-to-GCJ02 endpoint. No point or key is logged or persisted. */
 @Service
@@ -15,6 +16,7 @@ public class LocationCoordinateConverter {
     private final LocationCheckInConfiguration configuration;
     private final AmapTransport transport;
     private final ObjectMapper json;
+    private final Semaphore inFlight = new Semaphore(16);
     public LocationCoordinateConverter(LocationCheckInConfiguration configuration, AmapTransport transport, ObjectMapper json) {
         this.configuration = configuration; this.transport = transport; this.json = json;
     }
@@ -22,6 +24,7 @@ public class LocationCoordinateConverter {
         if (!configuration.enabled()) throw unavailable();
         if (TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("Coordinate conversion must precede the attendance transaction");
+        if (!inFlight.tryAcquire()) throw unavailable();
         try {
             var uri = URI.create("https://restapi.amap.com/v3/assistant/coordinate/convert?coordsys=gps&output=JSON&locations="
                 + longitude.toPlainString() + "," + latitude.toPlainString() + "&key=" + configuration.webServiceKey());
@@ -43,6 +46,8 @@ public class LocationCoordinateConverter {
         } catch (Exception exception) {
             // Upstream exceptions can include request URIs, GPS coordinates and the Web service key.
             throw unavailable();
+        } finally {
+            inFlight.release();
         }
     }
     private static ApiException unavailable() {

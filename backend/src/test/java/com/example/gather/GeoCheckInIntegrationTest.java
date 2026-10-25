@@ -2,6 +2,7 @@ package com.example.gather;
 
 import com.example.gather.api.ApiException;
 import com.example.gather.api.CheckInModels.*;
+import com.example.gather.api.ApiModels.CancelActivityRequest;
 import com.example.gather.domain.NewActivity;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.UserMapper;
@@ -119,6 +120,7 @@ class GeoCheckInIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired UserMapper users;
     @Autowired ActivityMapper activities;
+    @Autowired ActivityService activityService;
     @Autowired LocationCheckInService location;
     @Autowired CheckInService checkIns;
     @Autowired RegistrationService registrations;
@@ -166,6 +168,7 @@ class GeoCheckInIntegrationTest {
         long activity=activity(), owner=account(), registration=registration(activity,owner,"ACTIVE");
         long waiter=registration(activity,account(),"WAITING");
         var before=untouched(activity); var waitingBefore=state(waiter);
+        transport.hook.set(()->assertThat(clock.calls).hasValue(0));
         clock.calls.set(0); var observed=new ArrayList<Query>(); queries.captured.set(observed);
         var result=location.checkIn(registration,owner,request(0,100)); queries.captured.remove();
         assertThat(result.checkedInAt()).isEqualTo(NOW); assertThat(result.checkInMethod()).isEqualTo("SELF_LOCATION");
@@ -175,6 +178,12 @@ class GeoCheckInIntegrationTest {
         var locked=observed.stream().filter(query->query.id().endsWith("ActivityMapper.lockById")).findFirst().orElseThrow();
         assertThat(locked.sql()).doesNotContain("location_longitude","location_latitude","ends_at");
         assertThat(locked.isolation()).isEqualTo(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        assertThat(observed.stream().filter(query->query.sql().stripLeading().startsWith("SELECT"))
+            .map(query->query.id().substring(query.id().lastIndexOf('.')+1)).toList()).containsExactly(
+                "findLocationCheckInPreflight","lockById","findMineCheckIn","locationCheckInTarget","context","findMineById");
+        var preflight=observed.getFirst();
+        assertThat(preflight.sql()).contains("JOIN activities", "r.user_id").doesNotContain("FOR UPDATE", "starts_at");
+        assertThat(preflight.isolation()).isNull();
         var event=audit.detail(audit.search(1,10,"CHECK_IN",activity).items().getFirst().id());
         assertThat(event.actorUserId()).isEqualTo(owner); assertThat(event.registrationId()).isEqualTo(registration);
         assertThat(event.occurredAt()).isEqualTo(NOW); assertThat(json.writeValueAsString(event)).contains("SELF_LOCATION").doesNotContain(RAW_LONGITUDE,RAW_LATITUDE,WEB_KEY);
@@ -224,6 +233,104 @@ class GeoCheckInIntegrationTest {
         transport.hook.set(()->clock.time.set(NOW.plusSeconds(3600)));
         clock.calls.set(0); expectCode(()->location.checkIn(id,owner,request(0,10)),"LOCATION_CHECK_IN_CLOSED");
         assertThat(clock.calls).hasValue(1); assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+    }
+    @Test void missingLocationPrerequisitesRejectBeforeProviderWithOneReadNoClockAndExistingErrorPriority() {
+        transport.fail.set(true);
+        for(boolean missingEnd:List.of(true,false)) {
+            long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+            jdbc.update(missingEnd?"UPDATE activities SET ends_at=NULL WHERE id=?":"UPDATE activities SET location_longitude=NULL,location_latitude=NULL WHERE id=?",activity);
+            clock.calls.set(0);
+            var observed=new ArrayList<Query>(); queries.captured.set(observed);
+            try {expectCode(()->location.checkIn(id,owner,request(0,10)),"LOCATION_CHECK_IN_UNAVAILABLE");}
+            finally {queries.captured.remove();}
+            assertThat(observed).hasSize(1);
+            assertThat(observed.getFirst().id()).endsWith("RegistrationMapper.findLocationCheckInPreflight");
+            assertThat(observed.getFirst().sql()).contains("JOIN activities", "r.id", "r.user_id").doesNotContain("FOR UPDATE", "starts_at");
+            expectCode(()->location.checkIn(id,owner,request(1,10)),"CHECK_IN_VERSION_CONFLICT");
+            expectCode(()->location.checkIn(id,account(),request(0,10)),"REGISTRATION_NOT_FOUND");
+            assertThat(transport.calls).hasValue(0); assertThat(clock.calls).hasValue(0);
+            assertThat(state(id).get("check_in_version")).isEqualTo(0L); assertThat(state(id).get("checked_in_at")).isNull();
+            assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+        }
+    }
+    @Test void targetChangesDuringConversionAreStillRejectedByLockedWriter() {
+        for(int change=0;change<3;change++) {
+            long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+            String mutation=switch(change) {
+                case 0->"UPDATE activities SET ends_at=NULL WHERE id=?";
+                case 1->"UPDATE activities SET location_longitude=NULL,location_latitude=NULL WHERE id=?";
+                default->"UPDATE activities SET location_longitude=0,location_latitude=0 WHERE id=?";
+            };
+            transport.hook.set(()->{assertThat(clock.calls).hasValue(0);jdbc.update(mutation,activity);});
+            clock.calls.set(0); int calls=transport.calls.get();
+            expectCode(()->location.checkIn(id,owner,request(0,10)),change<2?"LOCATION_CHECK_IN_UNAVAILABLE":"LOCATION_OUT_OF_RANGE");
+            assertThat(clock.calls).hasValue(1); assertThat(transport.calls).hasValue(calls+1);
+            assertThat(state(id).get("check_in_version")).isEqualTo(0L); assertThat(state(id).get("checked_in_at")).isNull();
+            assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+        }
+    }
+    @Test void activityCancelledDuringConversionCannotBeSignedEvenAfterSuccessfulPreflight() {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE"), actor=adminId();
+        jdbc.update("UPDATE activities SET starts_at=? WHERE id=?",utc(NOW.plusSeconds(30)),activity);
+        transport.hook.set(()->{
+            activityService.cancel(activity,new CancelActivityRequest("转换期间正常取消专项"),actor);
+            clock.calls.set(0);
+        });
+        expectCode(()->location.checkIn(id,owner,request(0,10)),"ACTIVITY_CANCELLED");
+        assertThat(transport.calls).hasValue(1); assertThat(state(id).get("status")).isEqualTo("CANCELLED");
+        assertThat(state(id).get("check_in_version")).isEqualTo(0L); assertThat(state(id).get("checked_in_at")).isNull();
+        assertThat(audit.search(1,10,"CHECK_IN",activity).total()).isZero();
+        assertThat(audit.search(1,10,"CANCEL",activity).total()).isEqualTo(1);
+    }
+    @Test void requestBeforeStartMayCrossStartDuringConversionWithoutAnExtraClockRead() {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        Instant start=NOW.plusSeconds(30);
+        jdbc.update("UPDATE activities SET starts_at=? WHERE id=?",utc(start),activity);
+        transport.hook.set(()->{assertThat(clock.calls).hasValue(0);clock.time.set(start);});
+        clock.calls.set(0);
+        assertThat(location.checkIn(id,owner,request(0,10)).checkedInAt()).isEqualTo(start);
+        assertThat(clock.calls).hasValue(1); assertThat(transport.calls).hasValue(1);
+        assertThat(state(id).get("check_in_version")).isEqualTo(1L);
+    }
+    @Test void signedRepeatStillUsesWriterChecksAndNeverCallsProviderAgain() {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        location.checkIn(id,owner,request(0,10));
+        jdbc.update("UPDATE activities SET ends_at=NULL WHERE id=?",activity);
+        transport.fail.set(true); clock.calls.set(0);
+        var observed=new ArrayList<Query>(); queries.captured.set(observed);
+        try {expectCode(()->location.checkIn(id,owner,request(1,10)),"LOCATION_CHECK_IN_UNAVAILABLE");}
+        finally {queries.captured.remove();}
+        assertThat(observed).extracting(query->query.id().substring(query.id().lastIndexOf('.')+1))
+            .containsExactly("findLocationCheckInPreflight","lockById","findMineCheckIn","locationCheckInTarget");
+        assertThat(clock.calls).hasValue(1); assertThat(transport.calls).hasValue(1);
+        assertThat(state(id).get("check_in_version")).isEqualTo(1L);
+        assertThat(audit.search(1,10,"CHECK_IN",activity).total()).isEqualTo(1);
+    }
+    @Test void saturatedConverterRejectsBeforeWriterAndOtherContendersKeepOneCommittedCheckIn() throws Exception {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        var entered=new CountDownLatch(16); var release=new CountDownLatch(1);
+        transport.hook.set(()->{entered.countDown();try {
+            if(!release.await(10,TimeUnit.SECONDS))throw new IllegalStateException("Timed out waiting for contract release");
+        }catch(InterruptedException error){Thread.currentThread().interrupt();throw new IllegalStateException(error);}});
+        var pending=new ArrayList<Future<String>>(); var pool=Executors.newFixedThreadPool(16);
+        try {
+            for(int request=0;request<16;request++)pending.add(pool.submit(()->outcome(()->location.checkIn(id,owner,request(0,10)))));
+            assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+            var observed=new ArrayList<Query>(); queries.captured.set(observed); clock.calls.set(0);
+            try {expectCode(()->location.checkIn(id,owner,request(0,10)),"LOCATION_CHECK_IN_UNAVAILABLE");}
+            finally {queries.captured.remove();}
+            assertThat(observed).hasSize(1);
+            assertThat(observed.getFirst().id()).endsWith("RegistrationMapper.findLocationCheckInPreflight");
+            assertThat(clock.calls).hasValue(0); assertThat(transport.calls).hasValue(16);
+            assertThat(state(id).get("check_in_version")).isEqualTo(0L); assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+            release.countDown();
+            var outcomes=new ArrayList<String>();for(var request:pending)outcomes.add(request.get(20,TimeUnit.SECONDS));
+            assertThat(outcomes).filteredOn("OK"::equals).hasSize(1);
+            assertThat(outcomes).filteredOn("CHECK_IN_VERSION_CONFLICT"::equals).hasSize(15);
+            assertThat(state(id).get("check_in_version")).isEqualTo(1L); assertThat(audit.search(1,10,"CHECK_IN",activity).total()).isEqualTo(1);
+        }finally {
+            release.countDown(); transport.hook.set(null); pool.shutdownNow(); assertThat(pool.awaitTermination(20,TimeUnit.SECONDS)).isTrue();
+        }
     }
     @Test void administratorPostRemainsCompatibleAndPatchRequiresAdminCsrfReasonAndBoxedState() throws Exception {
         long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE"); String path=adminPath(activity,id);

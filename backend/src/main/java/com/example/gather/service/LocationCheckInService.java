@@ -20,12 +20,20 @@ public class LocationCheckInService {
     }
     public MyRegistrationView checkIn(long registrationId, long userId, LocationCheckInRequest request) {
         validate(request);
-        var existing = registrations.findMineCheckIn(registrationId, userId);
+        var existing = registrations.findLocationCheckInPreflight(registrationId, userId);
         if (existing == null) throw new ApiException(HttpStatus.NOT_FOUND, "REGISTRATION_NOT_FOUND", "报名记录不存在");
         CheckInService.verifyVersion(request.expectedVersion(), existing.checkInVersion());
         if (!existing.status().equals("ACTIVE"))
             throw new ApiException(HttpStatus.CONFLICT, "REGISTRATION_NOT_ACTIVE", "只有有效报名者可以签到");
-        var point = existing.checkedInAt() == null ? converter.convert(request.longitude(), request.latitude()) : null;
+        LocationCoordinateConverter.Point point = null;
+        if (existing.checkedInAt() == null) {
+            if (existing.cancelledAt() != null)
+                throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CANCELLED", "活动已取消，不能签到");
+            if (existing.endsAt() == null || existing.locationLongitude() == null || existing.locationLatitude() == null)
+                throw new ApiException(HttpStatus.CONFLICT, "LOCATION_CHECK_IN_UNAVAILABLE", "此活动未配置地点坐标或结束时间，请联系管理员签到");
+            // Do not decide the time window here: conversion or parent-lock waits may cross the start boundary.
+            point = converter.convert(request.longitude(), request.latitude());
+        }
         return writer.checkIn(existing.activityId(), registrationId, userId, request.expectedVersion(), point);
     }
     private static void validate(LocationCheckInRequest request) {

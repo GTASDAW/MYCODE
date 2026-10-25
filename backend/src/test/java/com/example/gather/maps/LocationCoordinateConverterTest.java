@@ -8,6 +8,8 @@ import java.math.BigDecimal;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.*;
@@ -50,12 +52,69 @@ class LocationCoordinateConverterTest {
     }
     @Test void refusesConversionInsideAnyDatabaseTransaction() {
         var calls = new AtomicInteger();
+        var converter = service(WEB_KEY, uri -> { calls.incrementAndGet(); return success(); });
         TransactionSynchronizationManager.setActualTransactionActive(true);
         try {
-            assertThatThrownBy(() -> service(WEB_KEY, uri -> { calls.incrementAndGet(); return response("{}"); })
-                .convert(BigDecimal.ZERO, BigDecimal.ZERO)).isInstanceOf(IllegalStateException.class);
+            for (int attempt = 0; attempt < 32; attempt++)
+                assertThatThrownBy(() -> converter.convert(BigDecimal.ZERO, BigDecimal.ZERO)).isInstanceOf(IllegalStateException.class);
         } finally { TransactionSynchronizationManager.setActualTransactionActive(false); }
         assertThat(calls).hasValue(0);
+        assertThat(converter.convert(BigDecimal.ZERO, BigDecimal.ZERO).longitude()).isEqualByComparingTo("116.4031234");
+        assertThat(calls).hasValue(1);
+    }
+    @Test void admitsSixteenInFlightRejectsTheNextWithoutTransportAndRestoresFullCapacity() throws Exception {
+        var calls = new AtomicInteger();
+        var entered = new AtomicReference<CountDownLatch>();
+        var release = new AtomicReference<CountDownLatch>();
+        var converter = service(WEB_KEY, uri -> {
+            calls.incrementAndGet(); entered.get().countDown();
+            if (!release.get().await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Timed out waiting for contract response");
+            return success();
+        });
+        var pool = Executors.newFixedThreadPool(16);
+        try {
+            for (int round = 0; round < 2; round++) {
+                entered.set(new CountDownLatch(16)); release.set(new CountDownLatch(1));
+                var pending = new ArrayList<Future<LocationCoordinateConverter.Point>>();
+                for (int index = 0; index < 16; index++) pending.add(pool.submit(() -> converter.convert(BigDecimal.ZERO, BigDecimal.ZERO)));
+                try {
+                    assertThat(entered.get().await(10, TimeUnit.SECONDS)).isTrue();
+                    int dispatched = calls.get();
+                    assertUnavailable(converter);
+                    assertThat(calls).hasValue(dispatched);
+                } finally { release.get().countDown(); }
+                for (var request : pending) assertThat(request.get(10, TimeUnit.SECONDS).latitude()).isEqualByComparingTo("39.9101234");
+            }
+            assertThat(calls).hasValue(32);
+        } finally {
+            if (release.get() != null) release.get().countDown();
+            pool.shutdownNow(); assertThat(pool.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+    @Test void providerTransportAndParsingFailuresAlwaysReleaseTheirPermit() {
+        var calls = new AtomicInteger();
+        var converter = service(WEB_KEY, uri -> {
+            int sequence = calls.getAndIncrement();
+            return switch (sequence % 4) {
+                case 0 -> throw new java.io.IOException("Sensitive upstream request");
+                case 1 -> response("{broken");
+                case 2 -> response("{\"status\":\"0\"}");
+                default -> new AmapTransport.Response(302, "application/json", new byte[0]);
+            };
+        });
+        for (int attempt = 0; attempt < 64; attempt++) assertUnavailable(converter);
+        assertThat(calls).hasValue(64);
+    }
+    @Test void interruptionRestoresInterruptFlagAndReleasesCapacity() {
+        var calls = new AtomicInteger();
+        var converter = service(WEB_KEY, uri -> { calls.incrementAndGet(); throw new InterruptedException("Interrupted contract response"); });
+        for (int attempt = 0; attempt < 32; attempt++) {
+            try {
+                assertUnavailable(converter);
+                assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            } finally { Thread.interrupted(); }
+        }
+        assertThat(calls).hasValue(32);
     }
     private void assertUnavailable(LocationCoordinateConverter converter) {
         assertThatThrownBy(() -> converter.convert(new BigDecimal("116.3971234"), new BigDecimal("39.9081234")))
@@ -66,5 +125,6 @@ class LocationCoordinateConverterTest {
             });
     }
     private LocationCoordinateConverter service(String key, AmapTransport transport) { return new LocationCoordinateConverter(new LocationCheckInConfiguration(key), transport, json); }
+    private static AmapTransport.Response success() { return response("{\"status\":\"1\",\"locations\":\"116.4031234,39.9101234\"}"); }
     private static AmapTransport.Response response(String body) { return new AmapTransport.Response(200,"application/json;charset=UTF-8",body.getBytes(StandardCharsets.UTF_8)); }
 }

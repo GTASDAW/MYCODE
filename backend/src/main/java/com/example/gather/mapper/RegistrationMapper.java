@@ -4,6 +4,7 @@ import com.example.gather.domain.RegistrationRow;
 import com.example.gather.domain.MyRegistrationRow;
 import com.example.gather.domain.MyRegistrationTotals;
 import com.example.gather.domain.RegistrationCheckInRow;
+import com.example.gather.domain.LocationCheckInPreflightRow;
 import org.apache.ibatis.annotations.*;
 import java.util.List;
 
@@ -23,6 +24,11 @@ public interface RegistrationMapper {
 
     @Select("SELECT id, activity_id, user_id, status, checked_in_at, check_in_method, check_in_version FROM registrations WHERE id=#{id} AND user_id=#{userId}")
     RegistrationCheckInRow findMineCheckIn(@Param("id") long id, @Param("userId") long userId);
+
+    @Select("SELECT r.id, r.activity_id, r.user_id, r.status, r.checked_in_at, r.check_in_version, "
+        + "a.cancelled_at, a.ends_at, a.location_longitude, a.location_latitude "
+        + "FROM registrations r JOIN activities a ON a.id=r.activity_id WHERE r.id=#{id} AND r.user_id=#{userId}")
+    LocationCheckInPreflightRow findLocationCheckInPreflight(@Param("id") long id, @Param("userId") long userId);
 
     @Select("SELECT " + MY_VIEW_COLUMNS + " FROM registrations r JOIN activities a ON a.id=r.activity_id WHERE r.id=#{id} AND r.user_id=#{userId}")
     MyRegistrationRow findMineById(@Param("id") long id, @Param("userId") long userId);
