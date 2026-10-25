@@ -217,6 +217,7 @@ export type ActivityCategory = "UNCATEGORIZED" | "TECHNOLOGY" | "SPORTS" | "CULT
 export type ActivityCategoryFilter = "ALL" | ActivityCategory;
 export type RegistrationFilter = "ALL" | "ACTIVE" | "WAITING" | "CANCELLED";
 export type CheckInFilter = "ALL" | "CHECKED_IN" | "NOT_CHECKED_IN";
+export type CheckInMethodFilter = "ALL" | Exclude<CheckInMethod, null>;
 
 export interface AdminActivityQuery {
   page: number;
@@ -242,6 +243,7 @@ export interface AdminRegistrationQuery {
   pageSize: number;
   status: RegistrationFilter;
   checkInStatus: CheckInFilter;
+  checkInMethod?: CheckInMethodFilter;
   keyword: string;
 }
 

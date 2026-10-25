@@ -43,6 +43,7 @@ public interface AdminMapper {
         <if test="status != 'ALL'">AND r.status = #{status}</if>
         <if test="checkInStatus == 'CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NOT NULL</if>
         <if test="checkInStatus == 'NOT_CHECKED_IN'">AND r.status = 'ACTIVE' AND r.checked_in_at IS NULL</if>
+        <if test="checkInMethod != 'ALL'">AND r.check_in_method = #{checkInMethod}</if>
         """;
 
     String ROSTER_SELECT = """
@@ -55,11 +56,13 @@ public interface AdminMapper {
     @Select("<script>" + ROSTER_SELECT + ROSTER_FILTER + " ORDER BY r.updated_at DESC, r.id DESC LIMIT #{limit} OFFSET #{offset}</script>")
     List<RosterRow> roster(@Param("activityId") long activityId, @Param("status") String status,
                           @Param("checkInStatus") String checkInStatus, @Param("keyword") String keyword,
+                          @Param("checkInMethod") String checkInMethod,
                           @Param("limit") int limit, @Param("offset") long offset);
 
     @Select("<script>SELECT COUNT(*) FROM registrations r JOIN users u ON u.id=r.user_id " + ROSTER_FILTER + "</script>")
     long countRoster(@Param("activityId") long activityId, @Param("status") String status,
-                     @Param("checkInStatus") String checkInStatus, @Param("keyword") String keyword);
+                     @Param("checkInStatus") String checkInStatus, @Param("keyword") String keyword,
+                     @Param("checkInMethod") String checkInMethod);
 
     @Select("""
         SELECT COUNT(*) AS active_registrations,

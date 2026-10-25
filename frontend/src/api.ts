@@ -452,6 +452,7 @@ export const api = {
           pageSize: String(query.pageSize),
           status: query.status,
           checkInStatus: query.checkInStatus,
+          ...(query.checkInMethod !== undefined && query.checkInMethod !== "ALL" ? { checkInMethod: query.checkInMethod } : {}),
           keyword: query.keyword ?? "",
         },
       )}`,
@@ -473,12 +474,13 @@ export const api = {
     }),
   exportAdminRegistrations: (
     id: string,
-    query: Pick<AdminRegistrationQuery, "status" | "checkInStatus"> & { keyword?: string },
+    query: Pick<AdminRegistrationQuery, "status" | "checkInStatus" | "checkInMethod"> & { keyword?: string },
     signal?: AbortSignal,
   ) => request<Blob>(
     `/admin/activities/${encodeURIComponent(id)}/registrations/export?${new URLSearchParams({
       status: query.status,
       checkInStatus: query.checkInStatus,
+      ...(query.checkInMethod !== undefined && query.checkInMethod !== "ALL" ? { checkInMethod: query.checkInMethod } : {}),
       keyword: query.keyword ?? "",
     })}`,
     { signal }, true, "csv",

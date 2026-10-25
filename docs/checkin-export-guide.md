@@ -44,11 +44,13 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认，空体兼容或可选 expectedVersion，返回当前名单行 | ADMIN，需 CSRF |
 | `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填状态、原因及版本的补签/撤销，返回当前名单行 | ADMIN，需 CSRF |
 | `POST /api/me/registrations/{registrationId}/check-in` | 本人定位签到，返回本人记录 | 已登录且本人，需 CSRF |
-| `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词及两类状态筛选的 CSV | ADMIN |
+| `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词、报名状态、签到状态及方式的 CSV | ADMIN |
 
-名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，新增 `checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。
+名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，`checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。
 
-名单与导出均接受可选 `keyword`，默认空，最多200个Java字符；省略或空值保持原接口行为，超长返回400 `VALIDATION_ERROR`。关键词按账号或当前昵称字面包含匹配，与两类状态按AND组合；使用绑定参数的LOCATE，百分号、下划线、引号和反斜线不作为通配符或SQL。直接API保留原始关键词，页面提交时去除首尾空白；匹配沿用数据库既有字符排序规则，不搜索签到管理员昵称。
+名单及CSV另接受 `checkInMethod`：省略为 `ALL`，只接受精确 `ALL|SELF_LOCATION|ADMIN`，显式空串、大小写错误或其他值返回400 `VALIDATION_ERROR`。界面分别显示“全部方式”“本人定位”“管理员确认”。`ADMIN` 包括正常管理员确认、人工补签及V15已回填ADMIN的历史签到；`ALL`保留未签到等方式为空的记录。该条件与关键词和两类状态共同按AND筛选 `items`、`total` 及CSV全集，例如“未签到＋本人定位”为空，不自动改变其他条件。原Service重载省略方式时仍委托ALL，不改变旧响应或CSV11列。
+
+名单与导出均接受可选 `keyword`，默认空，最多200个Java字符；省略或空值保持原接口行为，超长返回400 `VALIDATION_ERROR`。关键词按账号或当前昵称字面包含匹配，与两类状态及签到方式按AND组合；使用绑定参数的LOCATE，百分号、下划线、引号和反斜线不作为通配符或SQL。直接API保留原始关键词，页面提交时去除首尾空白；匹配沿用数据库既有字符排序规则，不搜索签到管理员昵称。
 
 分页响应保留 `{activity,items,total,page,pageSize}` 并增加：
 
@@ -62,11 +64,11 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 }
 ```
 
-这三个数表示整场活动全部 `ACTIVE`，不受页码、关键词或两类状态筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留 `checkedInAt`（UTC或null）、`checkedInBy`、`checkedInByDisplayName`，并新增 `checkInMethod`（`ADMIN|SELF_LOCATION|null`）、`checkInVersion`。后两个管理员字段仅表示管理员签到，定位签到为空；候补和已取消在页面与CSV显示“不适用”。统计仍按ACTIVE及当前非空签到时间，不按方式另算，也不增SQL次数。
+这三个数表示整场活动全部 `ACTIVE`，不受页码、关键词、两类状态或签到方式筛选影响，上述数字只是合同示例。`total` 仍是本次筛选后的总数。名单行保留 `checkedInAt`（UTC或null）、`checkedInBy`、`checkedInByDisplayName`，并新增 `checkInMethod`（`ADMIN|SELF_LOCATION|null`）、`checkInVersion`。后两个管理员字段仅表示管理员签到，定位签到为空；候补和已取消在页面与CSV显示“不适用”。统计仍按ACTIVE及当前非空签到时间，不按方式另算，也不增SQL次数。
 
 活动、整场统计、筛选总数与当前页在 `AdminService` 的只读 `REPEATABLE_READ` 事务内共享一致性快照，按 `updated_at DESC, id DESC` 排序。签到不更新 `updated_at`，因此不会让签到者跳到名单顶部或干扰候补 FIFO。并发签到提交后，本次读取仍使用原快照，下一次刷新才反映新结果；只读查询不增加活动写锁。
 
-关键词计数与列表/CSV共用 `AdminMapper.ROSTER_FILTER`，计数联表users读取相同的当前昵称；昵称在两次读取之间提交变化时，本次查询仍按原快照返回，下次刷新才改变匹配集合。分页保持活动、整场统计、匹配计数、当前页四次业务SELECT；导出为活动、匹配计数、全集三次，认证凭据版本查询另计。当前门禁为V15，不新增索引或依赖。
+关键词、两类状态及签到方式的计数与列表/CSV共用 `AdminMapper.ROSTER_FILTER`，计数联表users读取相同的当前昵称；昵称或签到方式在两次读取之间提交变化时，本次查询仍按原快照返回，下次刷新才改变匹配集合。分页保持活动、整场统计、匹配计数、当前页四次业务SELECT；导出为活动、匹配计数、全集三次，认证凭据版本查询另计。当前门禁为V15，不新增索引或依赖。
 
 常见错误沿用 JSON `{code,message}` 与服务端 `X-Request-Id`：
 
@@ -88,7 +90,7 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 
 ## 文件合同与 Excel 查看
 
-导出读取 `status`、`checkInStatus` 和 `keyword`，默认分别为 `ALL`、`ALL`、空。分页参数不能把导出缩成当前页；服务端在同一只读快照内计数并读取完整匹配集合，最多 20,000 条，超限返回明确 JSON 错误，不截断冒充完整文件。空集合可以成功下载，内容只有表头。
+导出读取 `status`、`checkInStatus`、`checkInMethod` 和 `keyword`，默认分别为 `ALL`、`ALL`、`ALL`、空。分页参数不能把导出缩成当前页；服务端在同一只读快照内计数并读取完整匹配集合，最多 20,000 条，超限返回明确 JSON 错误，不截断冒充完整文件。空集合可以成功下载，内容只有表头。
 
 响应为 `text/csv;charset=UTF-8`、`Content-Disposition: attachment; filename="activity-{id}-registrations.csv"`，并设置 `Cache-Control: no-store`。文件以 UTF-8 BOM 开头，记录使用 CRLF，各字段包在双引号内，内部双引号加倍；昵称中的逗号、引号或换行仍属于同一字段。字段顺序如下：
 
@@ -108,7 +110,7 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 
 名单上方显示整场有效报名、已签到、未签到三项真实统计，加载与失败为 `—`。账号/昵称关键词与报名和签到筛选可共同使用，提交搜索、改变状态筛选或每页数量回到第一页；签到成功后重新读取当前已提交条件，未签到末页记录减少导致越界时replace到最后合法页，最少第一页。
 
-已提交的keyword、status、checkInStatus、page、pageSize存于 `/admin/activities/{id}/registrations` URL，输入草稿独立，未提交的文字不改变名单或CSV。查询与Enter提交，同条件仍重新读取；重置清空关键词与状态、回第一页并保留每页数量，手动刷新使用已提交条件。非法URL状态和数字归默认，超长关键词清空并提示、其他合法条件保留；无关参数规范化移除。刷新、浏览器历史和登录返回保留条件，不因筛选/hash重挂页面和Providers。名单进入同活动详情携带规范来源，只有当前管理员且活动编号一致可“返回报名名单”，外部路径、其他活动或非管理员不能扩展原公开来源白名单。
+已提交条件按keyword、status、checkInStatus、checkInMethod、page、pageSize顺序存于 `/admin/activities/{id}/registrations` URL，省略默认值；输入草稿独立，未提交的文字不改变名单或CSV。查询与Enter提交，同条件仍重新读取；切换状态、方式或每页数量回第一页，保留已提交关键词且不隐式提交草稿。重置清空关键词、状态及方式、回第一页并保留每页数量，手动刷新使用已提交条件。非法URL方式归ALL，其他有效条件保留；非法状态和数字归默认，超长关键词清空并提示，无关参数规范化移除。刷新、浏览器历史和登录返回保留条件，不因筛选/hash重挂页面和Providers。名单进入同活动详情携带规范来源，只有当前管理员且活动编号一致可“返回报名名单”，外部路径、其他活动或非管理员不能扩展原公开来源白名单。
 
 未开始时提示到开始时间后操作，页面在开始边界更新按钮，没有轮询。对有效未签到者点击“确认签到”后，弹窗展示账号、昵称；另用“更正签到”选择补签或撤销并填写原因，提交带所选行版本，过程中禁止重复提交。版本冲突关闭旧选择并刷新核对，非有效报名者显示“不适用”。表格内部横向滚动，操作列固定在右侧，桌面与手机共用现有蓝白后台布局。
 
@@ -117,7 +119,7 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 - CSV 非成功响应按 JSON 错误解析，保留业务 code 与合法请求编号，不把错误正文保存成文件。成功文件只接受 `text/csv`；GET 不自动获取 CSRF 或重试。
 - 签到写入继续只对明确 403 `CSRF_INVALID` 刷新 Token 并重试一次，普通拒绝、未知错误和第二次 CSRF 失败可见。
 - 读取、签到与下载同时核对可信账号请求票据的认证代次、取消信号与页面状态。页面进一步核对活动、筛选、页码和刷新版本；同一账号重新登录也使旧票据失效。
-- 页面离开或已提交条件变化时取消旧请求，作用域包含关键词、URL条件及认证代次；迟到成功不能更新新名单、提示旧成功或下载，迟到401不能退出新会话，旧finally不能清除新操作状态。导出使用点击时已提交的关键词及两类状态，不携带草稿、客户端身份或分页。
+- 页面离开或已提交条件变化时取消旧请求，作用域包含关键词、签到方式等URL条件及认证代次；迟到成功不能更新新名单、提示旧成功或下载，迟到401不能退出新会话，旧finally不能清除新操作状态。导出使用点击时已提交的关键词、两类状态及签到方式，不携带草稿、客户端身份或分页。
 - 浏览器下载只在当前请求仍有效时创建临时链接，点击前再次检查，结束时移除链接并释放对象 URL。签到提交结果未知时提示刷新核对，不自动重提；再次使用旧版本将明确冲突。
 
 ## 阅读、验证与业务演示

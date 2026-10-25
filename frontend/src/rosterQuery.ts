@@ -1,10 +1,11 @@
-import type { AdminRegistrationQuery, CheckInFilter, RegistrationFilter } from "./types";
+import type { AdminRegistrationQuery, CheckInFilter, CheckInMethodFilter, RegistrationFilter } from "./types";
 
 export const defaultRosterQuery: AdminRegistrationQuery = {
-  page: 1, pageSize: 10, status: "ALL", checkInStatus: "ALL", keyword: "",
+  page: 1, pageSize: 10, status: "ALL", checkInStatus: "ALL", checkInMethod: "ALL", keyword: "",
 };
 const statuses: RegistrationFilter[] = ["ALL", "ACTIVE", "WAITING", "CANCELLED"];
 const checkInStatuses: CheckInFilter[] = ["ALL", "CHECKED_IN", "NOT_CHECKED_IN"];
+const checkInMethods: CheckInMethodFilter[] = ["ALL", "SELF_LOCATION", "ADMIN"];
 
 function positiveInteger(value: string | null, fallback: number, maximum: number): number {
   if (value === null || !/^\d+$/.test(value)) return fallback;
@@ -17,11 +18,13 @@ export function parseRosterQuery(search: string): { query: AdminRegistrationQuer
   const keyword = params.get("keyword") ?? "";
   const status = params.get("status");
   const checkInStatus = params.get("checkInStatus");
+  const checkInMethod = params.get("checkInMethod");
   return {
     query: {
       keyword: keyword.length <= 200 ? keyword.trim() : "",
       status: statuses.includes(status as RegistrationFilter) ? status as RegistrationFilter : "ALL",
       checkInStatus: checkInStatuses.includes(checkInStatus as CheckInFilter) ? checkInStatus as CheckInFilter : "ALL",
+      checkInMethod: checkInMethods.includes(checkInMethod as CheckInMethodFilter) ? checkInMethod as CheckInMethodFilter : "ALL",
       page: positiveInteger(params.get("page"), 1, 2_147_483_647),
       pageSize: positiveInteger(params.get("pageSize"), 10, 100),
     },
@@ -34,6 +37,7 @@ export function serializeRosterQuery(query: AdminRegistrationQuery): string {
   if (query.keyword !== "") params.set("keyword", query.keyword);
   if (query.status !== "ALL") params.set("status", query.status);
   if (query.checkInStatus !== "ALL") params.set("checkInStatus", query.checkInStatus);
+  if (query.checkInMethod !== undefined && query.checkInMethod !== "ALL") params.set("checkInMethod", query.checkInMethod);
   if (query.page !== 1) params.set("page", String(query.page));
   if (query.pageSize !== 10) params.set("pageSize", String(query.pageSize));
   return params.size ? `?${params}` : "";

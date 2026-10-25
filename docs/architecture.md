@@ -68,7 +68,7 @@ flowchart LR
 | `GET /api/admin/audit-logs` | 动作/活动筛选分页，只返回记录元数据 | 管理员 |
 | `GET /api/admin/audit-logs/{id}` | 操作快照与完整字段前后值 | 管理员 |
 | `GET /api/admin/activities` | 搜索、筛选并分页查看活动 | 管理员 |
-| `GET /api/admin/activities/{id}/registrations` | 两类状态筛选分页与整场签到统计 | 管理员 |
+| `GET /api/admin/activities/{id}/registrations` | 关键词、两类状态及签到方式筛选分页，统计整场签到 | 管理员 |
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认；空体兼容，可选expectedVersion | 管理员，需 CSRF |
 | `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填checkedIn/reason/expectedVersion的补签或撤销 | 管理员，需 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 全筛选范围 CSV，最多 20,000 条 | 管理员 |
@@ -197,6 +197,8 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 已取消活动返回 `cancelled=true`、原因、时间及 `closed=true`。有效的重复组织者取消保留首次结果，越过原开始时间仍幂等；报名、用户取消和编辑返回 409 `ACTIVITY_CANCELLED`。未取消活动开始后拒绝首次编辑或组织者取消，检查时间发生在取得锁后。V3 的外键和 CHECK 保证取消元数据完整与人数为 0，跨表状态不变量还依赖事务。详细 API、迁移、页面认证代次保护和真实验证路径见 [活动生命周期](activity-lifecycle.md)。
 
 ## 管理员签到与 CSV
+
+名单与CSV共用 `checkInMethod=ALL|SELF_LOCATION|ADMIN`，省略为ALL、显式空或未知值400；方式与关键词及报名/签到状态AND筛选，但整场三项统计不变。默认ALL保留空方式记录，SELF_LOCATION/ADMIN只匹配对应已签记录。名单四次、导出三次业务SELECT及RR快照保持；页面URL、详情/登录返回和下载作用域都包含方式，具体合同见 [签到与导出指南](checkin-export-guide.md)。
 
 `AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务，锁活动主键后普通读报名并核对归属、未取消、已开始与ACTIVE。旧POST空体兼容，可选版本；新UI始终带版本。PATCH必填boxed checkedIn、1–500字单行原因和expectedVersion，结束后仍可补签/撤销。版本冲突409，目标状态未变不写入；真实变化版本+1并同事务追加CHECK_IN/CHECK_IN_REVOKE，撤销清当前时间/管理员/方式且保留历史。报名状态、人数、updated_at、候补及通知不变。
 

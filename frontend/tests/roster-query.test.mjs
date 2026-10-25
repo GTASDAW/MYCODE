@@ -6,18 +6,30 @@ import { safeActivityListPath } from '../src/activityDiscovery.ts';
 import { safeReturnPath } from '../src/pages/authNavigation.ts';
 import { AuthRequestGuard, readAccountResource } from '../src/authRequestGuard.ts';
 
-test('roster URLs combine literal trimmed keywords and both filters with stable pagination and no client identity', () => {
+test('roster URLs combine literal trimmed keywords and all filters with stable pagination and no client identity', () => {
   assert.deepEqual(parseRosterQuery(''), { query: defaultRosterQuery, notice: null });
   assert.equal(serializeRosterQuery(defaultRosterQuery), '');
-  for (const status of ['ALL', 'ACTIVE', 'WAITING', 'CANCELLED']) for (const checkInStatus of ['ALL', 'CHECKED_IN', 'NOT_CHECKED_IN']) {
-    const query = { keyword: '中文 %_! +&?', status, checkInStatus, page: 3, pageSize: 7 };
+  for (const status of ['ALL', 'ACTIVE', 'WAITING', 'CANCELLED']) for (const checkInStatus of ['ALL', 'CHECKED_IN', 'NOT_CHECKED_IN']) for (const checkInMethod of ['ALL', 'SELF_LOCATION', 'ADMIN']) {
+    const query = { keyword: '中文 %_! +&?', status, checkInStatus, checkInMethod, page: 3, pageSize: 7 };
     const search = serializeRosterQuery(query);
     assert.deepEqual(parseRosterQuery(search), { query, notice: null });
     assert.equal(rosterListPath(42, query), `/admin/activities/42/registrations${search}`);
   }
   const parsed = parseRosterQuery('?keyword=++%25_+%2B%26++&status=ACTIVE&checkInStatus=NOT_CHECKED_IN&page=0002&pageSize=020&userId=99&actorId=77');
-  assert.deepEqual(parsed, { query: { keyword: '%_ +&', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', page: 2, pageSize: 20 }, notice: null });
+  assert.deepEqual(parsed, { query: { keyword: '%_ +&', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', checkInMethod: 'ALL', page: 2, pageSize: 20 }, notice: null });
   assert.equal(serializeRosterQuery(parsed.query), '?keyword=%25_+%2B%26&status=ACTIVE&checkInStatus=NOT_CHECKED_IN&page=2&pageSize=20');
+});
+
+test('roster method URLs retain canonical order and older callers do not emit an undefined method', () => {
+  const legacy = { keyword: '中文', status: 'ACTIVE', checkInStatus: 'CHECKED_IN', page: 2, pageSize: 20 };
+  const search = '?keyword=%E4%B8%AD%E6%96%87&status=ACTIVE&checkInStatus=CHECKED_IN&page=2&pageSize=20';
+  assert.equal(serializeRosterQuery(legacy), search);
+  assert.equal(serializeRosterQuery({ ...legacy, checkInMethod: undefined }), search);
+  assert.equal(serializeRosterQuery({ ...legacy, checkInMethod: 'ALL' }), search);
+  assert.deepEqual(parseRosterQuery(search).query, { ...legacy, checkInMethod: 'ALL' });
+  const filtered = serializeRosterQuery({ ...legacy, checkInMethod: 'SELF_LOCATION' });
+  assert.equal(filtered, '?keyword=%E4%B8%AD%E6%96%87&status=ACTIVE&checkInStatus=CHECKED_IN&checkInMethod=SELF_LOCATION&page=2&pageSize=20');
+  assert.deepEqual([...new URLSearchParams(filtered).keys()], ['keyword', 'status', 'checkInStatus', 'checkInMethod', 'page', 'pageSize']);
 });
 
 test('invalid roster integers and enumerations use defaults while valid custom values survive', () => {
@@ -34,9 +46,19 @@ test('invalid roster integers and enumerations use defaults while valid custom v
     { ...defaultRosterQuery, page: 2147483647, pageSize: 100, status: 'WAITING', checkInStatus: 'CHECKED_IN' });
 });
 
+test('invalid roster methods normalize to ALL while retaining all other valid submitted conditions', () => {
+  const expected = { keyword: '中文 %_', status: 'ACTIVE', checkInStatus: 'CHECKED_IN', checkInMethod: 'ALL', page: 3, pageSize: 7 };
+  for (const checkInMethod of ['', 'admin', 'SELF_LOCATION ', 'CHECKED_IN', 'UNKNOWN', 'null']) {
+    const parsed = parseRosterQuery(`?${new URLSearchParams({ keyword: ' 中文 %_ ', status: 'ACTIVE',
+      checkInStatus: 'CHECKED_IN', checkInMethod, page: '3', pageSize: '7' })}`);
+    assert.deepEqual(parsed, { query: expected, notice: null });
+    assert.equal(new URLSearchParams(serializeRosterQuery(parsed.query)).has('checkInMethod'), false);
+  }
+});
+
 test('overlong roster URL keywords clear explicitly without losing filters, pagination, or supported Unicode', () => {
-  const parsed = parseRosterQuery(`?${new URLSearchParams({ keyword: 'a'.repeat(201), status: 'WAITING', checkInStatus: 'NOT_CHECKED_IN', page: '2', pageSize: '7' })}`);
-  assert.deepEqual(parsed.query, { keyword: '', status: 'WAITING', checkInStatus: 'NOT_CHECKED_IN', page: 2, pageSize: 7 });
+  const parsed = parseRosterQuery(`?${new URLSearchParams({ keyword: 'a'.repeat(201), status: 'WAITING', checkInStatus: 'NOT_CHECKED_IN', checkInMethod: 'ADMIN', page: '2', pageSize: '7' })}`);
+  assert.deepEqual(parsed.query, { keyword: '', status: 'WAITING', checkInStatus: 'NOT_CHECKED_IN', checkInMethod: 'ADMIN', page: 2, pageSize: 7 });
   assert.match(parsed.notice, /超过 200/);
   assert.equal(parseRosterQuery(serializeRosterQuery(parsed.query)).notice, null);
   assert.equal(parseRosterQuery(`?${new URLSearchParams({ keyword: '😀'.repeat(100) })}`).query.keyword, '😀'.repeat(100));
@@ -44,7 +66,7 @@ test('overlong roster URL keywords clear explicitly without losing filters, pagi
 });
 
 test('only an explicitly authorized matching activity may return from detail to its canonical roster', () => {
-  const query = { keyword: '中文 %_! +&?', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', page: 2, pageSize: 7 };
+  const query = { keyword: '中文 %_! +&?', status: 'ACTIVE', checkInStatus: 'NOT_CHECKED_IN', checkInMethod: 'SELF_LOCATION', page: 2, pageSize: 7 };
   const path = rosterListPath(42, query);
   assert.equal(safeActivityDetailReturn(path, 42), path);
   assert.equal(safeActivityDetailReturn('/admin/activities/42/registrations?keyword=++%25_++&page=0002&userId=99', 42),
@@ -57,6 +79,10 @@ test('only an explicitly authorized matching activity may return from detail to 
   assert.equal(new URLSearchParams(detail.split('?')[1]).get('from'), path);
   assert.equal(safeReturnPath(detail), detail);
   assert.equal(safeReturnPath(path), path);
+  assert.equal(safeActivityDetailReturn('/admin/activities/42/registrations?checkInMethod=ADMIN&checkInStatus=CHECKED_IN&page=2', 42),
+    '/admin/activities/42/registrations?checkInStatus=CHECKED_IN&checkInMethod=ADMIN&page=2');
+  assert.equal(safeActivityDetailReturn('/admin/activities/42/registrations?checkInMethod=unknown&status=ACTIVE&page=2', 42),
+    '/admin/activities/42/registrations?status=ACTIVE&page=2');
   for (const activityId of [0, -1, 42.5, Number.MAX_SAFE_INTEGER + 1, NaN])
     assert.equal(safeActivityDetailReturn(path, activityId), '/activities');
   for (const unsafe of ['https://example.com/admin/activities/42/registrations', '//example.com/admin/activities/42/registrations',
@@ -68,7 +94,7 @@ test('only an explicitly authorized matching activity may return from detail to 
 });
 
 test('obsolete roster results and 401s cannot publish or queue correction after a keyword change, refresh or reauthentication', async () => {
-  for (const change of ['keyword', 'check-in-filter', 'page-size', 'refresh', 'same-account-login', 'different-account-login']) for (const failed of [false, true]) {
+  for (const change of ['keyword', 'check-in-filter', 'check-in-method', 'page-size', 'refresh', 'same-account-login', 'different-account-login']) for (const failed of [false, true]) {
     const auth = new AuthRequestGuard(), ticket = auth.beginAccountRequest(1);
     let userId = 1, revision = 0, query = { ...defaultRosterQuery, keyword: '旧关键词', page: 5 };
     const scope = () => `42:${serializeRosterQuery(query)}:${revision}`;
@@ -79,6 +105,7 @@ test('obsolete roster results and 401s cannot publish or queue correction after 
       () => scope() === started && auth.isSameAccount(ticket, userId), () => expired++).then(() => published++);
     if (change === 'keyword') query = { ...query, keyword: '新关键词' };
     if (change === 'check-in-filter') query = { ...query, checkInStatus: 'NOT_CHECKED_IN' };
+    if (change === 'check-in-method') query = { ...query, checkInMethod: 'SELF_LOCATION' };
     if (change === 'page-size') query = { ...query, pageSize: 20 };
     if (change === 'refresh') revision++;
     if (change.includes('login')) { auth.beginAuthentication(); if (change === 'different-account-login') userId = 2; }

@@ -460,21 +460,61 @@ test('roster reads combine a literal keyword and both filters while CSV exports 
   assert.equal(calls[1].options.headers.get('Accept'), 'text/csv, application/json');
 });
 
-test('old roster and CSV callers omit keyword safely and retain their cancellation signals', async () => {
+test('roster and CSV reads forward the same explicit method with all other filters and cancellation signals', async () => {
+  const { api } = await freshApi();
+  const controller = new AbortController(), calls = [];
+  const page = { items: [], total: 0, summary: { activeRegistrations: 7, checkedInRegistrations: 4, notCheckedInRegistrations: 3 } };
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return url.includes('/export?') ? new Response('header\r\n', { headers: { 'Content-Type': 'text/csv' } }) : response(200, page);
+  };
+  for (const checkInMethod of ['SELF_LOCATION', 'ADMIN']) {
+    const query = { page: 3, pageSize: 7, status: 'ACTIVE', checkInStatus: 'CHECKED_IN', checkInMethod, keyword: '中文 %_ +&?', userId: 99 };
+    assert.deepEqual(await api.adminRegistrations('25', query, controller.signal), page);
+    assert.ok(await api.exportAdminRegistrations('25', query, controller.signal) instanceof Blob);
+    const [listed, exported] = calls.slice(-2);
+    assert.deepEqual(Object.fromEntries(new URL(listed.url, 'http://localhost').searchParams),
+      { page: '3', pageSize: '7', status: 'ACTIVE', checkInStatus: 'CHECKED_IN', checkInMethod, keyword: query.keyword });
+    assert.deepEqual(Object.fromEntries(new URL(exported.url, 'http://localhost').searchParams),
+      { status: 'ACTIVE', checkInStatus: 'CHECKED_IN', checkInMethod, keyword: query.keyword });
+    for (const { options } of [listed, exported]) {
+      assert.equal(options.signal, controller.signal);
+      assert.equal(options.credentials, 'same-origin');
+      assert.equal(options.body, undefined);
+    }
+  }
+});
+
+test('old roster and CSV callers omit keyword and default method safely and retain their cancellation signals', async () => {
   const { api } = await freshApi();
   const controller = new AbortController(), calls = [];
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
     return url.includes('/export?') ? new Response('header\r\n', { headers: { 'Content-Type': 'text/csv' } }) : response(200, { items: [] });
   };
-  await api.adminRegistrations('25', { page: 1, pageSize: 10, status: 'ALL', checkInStatus: 'ALL' }, controller.signal);
-  await api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL', actorId: 77, page: 3, pageSize: 99 }, controller.signal);
-  assert.deepEqual(Object.fromEntries(new URL(calls[0].url, 'http://localhost').searchParams),
-    { page: '1', pageSize: '10', status: 'ALL', checkInStatus: 'ALL', keyword: '' });
-  assert.deepEqual(Object.fromEntries(new URL(calls[1].url, 'http://localhost').searchParams),
-    { status: 'ALL', checkInStatus: 'ALL', keyword: '' });
-  assert.equal(calls[0].options.signal, controller.signal);
-  assert.equal(calls[1].options.signal, controller.signal);
+  for (const method of [{}, { checkInMethod: undefined }, { checkInMethod: 'ALL' }]) {
+    await api.adminRegistrations('25', { page: 1, pageSize: 10, status: 'ALL', checkInStatus: 'ALL', ...method }, controller.signal);
+    await api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL', ...method, actorId: 77, page: 3, pageSize: 99 }, controller.signal);
+    const [listed, exported] = calls.slice(-2);
+    assert.equal(listed.url, '/api/admin/activities/25/registrations?page=1&pageSize=10&status=ALL&checkInStatus=ALL&keyword=');
+    assert.equal(exported.url, '/api/admin/activities/25/registrations/export?status=ALL&checkInStatus=ALL&keyword=');
+    assert.equal(listed.options.signal, controller.signal);
+    assert.equal(exported.options.signal, controller.signal);
+  }
+});
+
+test('explicit invalid roster methods reach server validation and surface a single 400 without retry', async () => {
+  const { api } = await freshApi();
+  const calls = [];
+  globalThis.fetch = async url => { calls.push(url); return response(400, { code: 'VALIDATION_ERROR', message: '签到方式不正确' }); };
+  for (const checkInMethod of ['', 'UNKNOWN']) {
+    const query = { page: 1, pageSize: 10, status: 'ALL', checkInStatus: 'ALL', checkInMethod };
+    const before = calls.length;
+    await assert.rejects(api.adminRegistrations('25', query), error => error.status === 400 && error.code === 'VALIDATION_ERROR');
+    await assert.rejects(api.exportAdminRegistrations('25', query), error => error.status === 400 && error.code === 'VALIDATION_ERROR');
+    assert.equal(calls.length, before + 2);
+    for (const url of calls.slice(-2)) assert.equal(new URL(url, 'http://localhost').searchParams.get('checkInMethod'), checkInMethod);
+  }
 });
 
 test('CSV JSON errors retain their code and request ID and GET never refreshes CSRF or replays', async () => {

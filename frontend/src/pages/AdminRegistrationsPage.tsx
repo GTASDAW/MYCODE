@@ -20,6 +20,7 @@ import type {
   AdminRegistration,
   AdminRegistrationQuery,
   CheckInFilter,
+  CheckInMethodFilter,
   RegistrationFilter,
 } from "../types";
 import { useResource } from "../useResource";
@@ -151,7 +152,7 @@ function AdminRegistrationsPage() {
 
   function exportCsv() {
     if (!activity || !current()) return;
-    const filters = { status: query.status, checkInStatus: query.checkInStatus, keyword: query.keyword };
+    const filters = { status: query.status, checkInStatus: query.checkInStatus, checkInMethod: query.checkInMethod, keyword: query.keyword };
     const filename = `activity-${activity.id}-registrations.csv`;
     void actions.run("export", (signal) => api.exportAdminRegistrations(id, filters, signal), (blob, isCurrent) => {
       downloadCsv(blob, filename, isCurrent);
@@ -270,6 +271,16 @@ function AdminRegistrationsPage() {
                 { value: "ALL", label: "全部签到状态" },
                 { value: "CHECKED_IN", label: "已签到" },
                 { value: "NOT_CHECKED_IN", label: "未签到" },
+              ]} />
+          </div>
+          <div className="filter-field filter-select">
+            <label htmlFor="registration-check-in-method">签到方式</label>
+            <Select<CheckInMethodFilter> id="registration-check-in-method" aria-label="签到方式" value={query.checkInMethod ?? "ALL"}
+              onChange={(checkInMethod) => changeQuery({ ...query, page: 1, checkInMethod })}
+              options={[
+                { value: "ALL", label: "全部方式" },
+                { value: "SELF_LOCATION", label: "本人定位" },
+                { value: "ADMIN", label: "管理员确认" },
               ]} />
           </div>
           <div className="filter-actions roster-actions">

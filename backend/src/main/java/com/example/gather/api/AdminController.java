@@ -55,8 +55,10 @@ public class AdminController {
                           @RequestParam(defaultValue = "ALL") String status,
                           @RequestParam(defaultValue = "ALL") String checkInStatus,
                           @RequestParam(defaultValue = "") String keyword,
+                          @RequestParam(required = false) String checkInMethod,
                           @AuthenticationPrincipal AppUserDetails principal) {
-        return admin.roster(id, page, pageSize, status, checkInStatus, keyword, principal.id());
+        return admin.roster(id, page, pageSize, status, checkInStatus, keyword,
+            checkInMethod == null ? "ALL" : checkInMethod, principal.id());
     }
 
     @PostMapping("/activities/{id}/registrations/{registrationId}/check-in")
@@ -78,11 +80,13 @@ public class AdminController {
                                   @RequestParam(defaultValue = "ALL") String status,
                                   @RequestParam(defaultValue = "ALL") String checkInStatus,
                                   @RequestParam(defaultValue = "") String keyword,
+                                  @RequestParam(required = false) String checkInMethod,
                                   @AuthenticationPrincipal AppUserDetails principal) {
         return ResponseEntity.ok().contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
             .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"activity-" + id + "-registrations.csv\"")
             .header(HttpHeaders.CACHE_CONTROL, "no-store")
-            .body(admin.exportRoster(id, status, checkInStatus, keyword, principal.id()));
+            .body(admin.exportRoster(id, status, checkInStatus, keyword,
+                checkInMethod == null ? "ALL" : checkInMethod, principal.id()));
     }
 
     @PostMapping("/activities")
