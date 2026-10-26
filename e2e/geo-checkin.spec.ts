@@ -435,6 +435,69 @@ test('真实更正版本冲突刷新名单，筛选清空理由且普通用户�
   } finally { await logoutApi(page.request); await logoutApi(request); }
 });
 
+test('定位及接口契约替身：原生权限弹窗无回调时前端10秒超时恢复，旧回调不影响手动重试', async ({ page, request }, info) => {
+  await nativeContract(page);
+  let contract: Awaited<ReturnType<typeof selfInterfaceContract>> | undefined;
+  try {
+    await loginApi(request);
+    const fixture = await fixtures(request, info), row = ownedRow(fixture);
+    contract = await selfInterfaceContract(page, fixture);
+    await login(page, fixture.accounts[0]); await openMine(page, row);
+    const browserTime = Date.now();
+    await page.clock.install({ time: browserTime });
+    await page.clock.pauseAt(browserTime + 1000);
+    const action = myRow(page, row.id).locator('.location-checkin-action');
+    const old = await beginNative(page, row);
+    await page.clock.fastForward(9_999);
+    await expect(myButton(page, row.id)).toContainText('正在定位');
+    await expect(myButton(page, row.id)).toBeDisabled();
+    expect(await nativeCount(page)).toBe(old + 1); expect(contract.writes).toHaveLength(0);
+    await page.clock.fastForward(1);
+    await expect(action.getByRole('alert')).toContainText('定位超时');
+    await expect(myButton(page, row.id)).toBeEnabled();
+    expect(await nativeCount(page)).toBe(old + 1); expect(contract.writes).toHaveLength(0);
+    const fresh = await beginNative(page, row);
+    await succeed(page, old); await nativeFail(page, old, 1); await page.clock.fastForward(32);
+    expect(contract.writes).toHaveLength(0);
+    await expect(myButton(page, row.id)).toContainText('正在定位');
+    await expect(myButton(page, row.id)).toBeDisabled();
+    await expect(action.getByRole('alert')).toHaveCount(0);
+    await succeed(page, fresh);
+    await expect(myRow(page, row.id)).toContainText('本人定位');
+    await mineStatistics(page, 1); expect(contract.writes).toHaveLength(1);
+    await assertDatabaseUnsigned(request, fixture);
+  } finally { contract?.releaseAll(); await page.unrouteAll({ behavior: 'wait' }); await logoutApi(page.request); await logoutApi(request); }
+});
+
+test('定位及接口契约替身：拒绝权限后按钮旁指导网站信息恢复，持续拒绝不假定再次弹窗且可手动成功', async ({ page, request }, info) => {
+  await nativeContract(page);
+  let contract: Awaited<ReturnType<typeof selfInterfaceContract>> | undefined;
+  try {
+    await loginApi(request);
+    const fixture = await fixtures(request, info), row = ownedRow(fixture);
+    contract = await selfInterfaceContract(page, fixture);
+    await login(page, fixture.accounts[0]); await openMine(page, row);
+    const action = myRow(page, row.id).locator('.location-checkin-action');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const index = await beginNative(page, row); await nativeFail(page, index, 1);
+      const feedback = action.getByRole('alert');
+      await expect(feedback).toContainText('定位权限未开启');
+      await expect(feedback).toContainText('网站信息');
+      await expect(feedback).toContainText('权限');
+      await expect(feedback).toContainText('允许定位后');
+      await expect(feedback).toContainText('重试');
+      await expect(myButton(page, row.id)).toBeEnabled();
+      expect(await nativeCount(page)).toBe(attempt + 1); expect(contract.writes).toHaveLength(0);
+    }
+    // The contract supplies the next permission outcome; it does not model a real browser prompt.
+    const recovered = await beginNative(page, row); await succeed(page, recovered);
+    await expect(myRow(page, row.id)).toContainText('本人定位');
+    await mineStatistics(page, 1); expect(contract.writes).toHaveLength(1);
+    expect(await nativeCount(page)).toBe(3);
+    await assertDatabaseUnsigned(request, fixture);
+  } finally { contract?.releaseAll(); await page.unrouteAll({ behavior: 'wait' }); await logoutApi(page.request); await logoutApi(request); }
+});
+
 test('定位及接口契约替身：权限精度超时可手动重试，成功刷新方式统计但真实数据库仍未签到', async ({ page, request }, info) => {
   await nativeContract(page);
   let contract: Awaited<ReturnType<typeof selfInterfaceContract>> | undefined;

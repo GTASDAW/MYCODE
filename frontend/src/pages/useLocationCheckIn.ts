@@ -10,13 +10,13 @@ export function useLocationCheckIn(scope: string, isCurrentPage: () => boolean, 
   const ownedScope = useRef<string | null>(scope);
   ownedScope.current = scope;
   const pending = useRef<AbortController | null>(null);
-  const [state, setState] = useState<{ scope: string; registrationId: number | null; locating: boolean; error: string | null }>({
-    scope, registrationId: null, locating: false, error: null,
+  const [state, setState] = useState<{ scope: string; registrationId: number | null; locating: boolean; error: string | null; errorRegistrationId: number | null }>({
+    scope, registrationId: null, locating: false, error: null, errorRegistrationId: null,
   });
   useLayoutEffect(() => {
     ownedScope.current = scope;
     // Revisiting a URL scope starts idle after its previous request was aborted.
-    setState({ scope, registrationId: null, locating: false, error: null });
+    setState({ scope, registrationId: null, locating: false, error: null, errorRegistrationId: null });
     const unsubscribe = auth.subscribeAuthentication(() => pending.current?.abort());
     return () => {
       if (ownedScope.current === scope) ownedScope.current = null;
@@ -37,14 +37,14 @@ export function useLocationCheckIn(scope: string, isCurrentPage: () => boolean, 
     const current = () => pending.current === controller && !controller.signal.aborted &&
       ownedScope.current === scope && isCurrentPage() && auth.isCurrentAccountRequest(account) &&
       auth.isCurrentAuthenticationRequest(auth.userGeneration);
-    setState({ scope, registrationId: registration.id, locating: true, error: null });
+    setState({ scope, registrationId: registration.id, locating: true, error: null, errorRegistrationId: null });
     let submitted = false;
     try {
       const location = await requestNativeLocation({ signal: controller.signal, isCurrent: current });
       if (!current()) return;
       const unavailable = locationCheckInUnavailableReason(registration, enabled);
       if (unavailable) throw new Error(unavailable);
-      setState({ scope, registrationId: registration.id, locating: false, error: null });
+      setState({ scope, registrationId: registration.id, locating: false, error: null, errorRegistrationId: null });
       submitted = true;
       await api.locationCheckIn(registration.id, { ...location, expectedVersion: registration.checkInVersion }, controller.signal);
       if (current()) reload();
@@ -55,7 +55,7 @@ export function useLocationCheckIn(scope: string, isCurrentPage: () => boolean, 
         const message = submitted && (!(error instanceof ApiError) || error.code === "NETWORK_ERROR" || error.code === "INVALID_RESPONSE")
           ? "签到结果未确认，请刷新查看后再决定是否重试。"
           : errorMessage(error);
-        setState({ scope, registrationId: registration.id, locating: false, error: message });
+        setState({ scope, registrationId: registration.id, locating: false, error: message, errorRegistrationId: registration.id });
         if (submitted) reload();
       }
     } finally {
@@ -69,5 +69,6 @@ export function useLocationCheckIn(scope: string, isCurrentPage: () => boolean, 
 
   const visible = state.scope === scope ? state : null;
   return { run, busyRegistrationId: visible?.registrationId ?? null,
-    locating: visible?.locating ?? false, error: visible?.error ?? null };
+    locating: visible?.locating ?? false, error: visible?.error ?? null,
+    errorRegistrationId: visible?.errorRegistrationId ?? null };
 }

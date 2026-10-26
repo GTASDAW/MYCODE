@@ -1543,3 +1543,4 @@ main:focus {
 .activity-map-place { height: auto; white-space: normal; text-align: left; padding: 0; }
 .activity-map-candidate label { display: block; margin-bottom: 8px; }
 .activity-map-actions { margin-top: 8px; }
+.location-checkin-error { margin-top: 8px; color: #cf1322; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }

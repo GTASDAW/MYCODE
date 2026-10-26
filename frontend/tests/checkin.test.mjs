@@ -177,6 +177,25 @@ test('native permission, timeout and position failures have manual recovery mess
   }
 });
 
+test('native silence after a dismissed permission prompt has its own ten-second deadline and can be retried', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const request = nativeRequest();
+  let state = 'pending';
+  const result = request.promise.then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+  context.mock.timers.tick(9999); await Promise.resolve();
+  assert.equal(state, 'pending'); assert.equal(request.calls(), 1);
+  context.mock.timers.tick(1); await Promise.resolve();
+  assert.equal(state, 'rejected');
+  await assert.rejects(request.promise, /定位超时/); await result;
+  request.success(nativePosition()); request.failure({ code: 1 });
+  assert.equal(state, 'rejected'); assert.equal(request.calls(), 1);
+  const fresh = nativeRequest();
+  fresh.success(nativePosition());
+  assert.deepEqual(await fresh.promise, { longitude: 116.397, latitude: 39.908, accuracyMeters: 20 });
+  context.mock.timers.tick(20000); await Promise.resolve();
+  assert.equal(fresh.calls(), 1);
+});
+
 test('invalid precision and coordinates never become a check-in submission', async () => {
   for (const accuracy of [0, -1, 100.0001, NaN, Infinity]) {
     const request = nativeRequest();

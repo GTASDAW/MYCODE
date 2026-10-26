@@ -16,10 +16,12 @@ interface NativeLocationOptions {
 export function requestNativeLocation(options: NativeLocationOptions): Promise<NativeLocation> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     const cancelled = () => new DOMException("Location request cancelled", "AbortError");
     const finish = (error?: Error, location?: NativeLocation) => {
       if (settled) return;
       settled = true;
+      if (deadline !== undefined) clearTimeout(deadline);
       options.signal.removeEventListener("abort", abort);
       if (error) reject(error);
       else resolve(location!);
@@ -34,6 +36,11 @@ export function requestNativeLocation(options: NativeLocationOptions): Promise<N
     const geolocation = options.geolocation ?? globalThis.navigator?.geolocation;
     if (!geolocation) { finish(new Error("当前浏览器不支持定位，请更换浏览器或联系管理员确认到场。")); return; }
     options.signal.addEventListener("abort", abort, { once: true });
+    // Some browsers leave a dismissed permission prompt without either native callback.
+    deadline = setTimeout(() => {
+      if (!current()) { abort(); return; }
+      finish(new Error("定位超时。若刚关闭授权窗口，请在浏览器的网站信息/权限中允许定位后手动重试，或联系管理员确认到场。"));
+    }, 10_000);
     try {
       geolocation.getCurrentPosition(position => {
         if (!current()) { abort(); return; }
@@ -51,7 +58,7 @@ export function requestNativeLocation(options: NativeLocationOptions): Promise<N
       }, error => {
         if (!current()) { abort(); return; }
         finish(new Error(error.code === 1
-          ? "定位权限未开启，请在浏览器中允许定位后手动重试，或联系管理员确认到场。"
+          ? "定位权限未开启。请检查手机系统是否允许浏览器使用位置，再到浏览器的网站信息/权限中允许定位后手动重试；也可联系管理员确认到场。"
           : error.code === 3
             ? "定位超时，请手动重试或联系管理员确认到场。"
             : "暂时无法获取位置，请手动重试或联系管理员确认到场。"));

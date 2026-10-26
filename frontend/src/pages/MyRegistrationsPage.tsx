@@ -139,7 +139,8 @@ export function MyRegistrationsPage() {
       </div>
       {normalizationNotice && <Alert className="discovery-notice" type="warning" showIcon closable
         title={normalizationNotice} onClose={() => setNormalizationNotice(null)} />}
-      {checkIn.error && <Alert className="form-alert" type="error" showIcon title={checkIn.error} />}
+      {checkIn.error && !records.some(record => record.id === checkIn.errorRegistrationId) &&
+        <Alert className="form-alert" type="error" showIcon title={checkIn.error} />}
       <Card className="myregistrations-controls">
         <form className="filter-form" onSubmit={event => {
           event.preventDefault();
@@ -218,6 +219,7 @@ export function MyRegistrationsPage() {
                     {!activity.cancelled && <ActivityStatus activity={activity} personal={false} />}
                     <LocationCheckInButton registration={record} enabled={resource.data?.locationCheckInEnabled === true}
                       now={now} busy={checkIn.busyRegistrationId} locating={checkIn.locating}
+                      error={checkIn.errorRegistrationId === id ? checkIn.error : null}
                       onCheckIn={() => { void checkIn.run(record, resource.data?.locationCheckInEnabled === true); }} />
                     <Link to={detailPath}>查看活动</Link>
                   </div>
