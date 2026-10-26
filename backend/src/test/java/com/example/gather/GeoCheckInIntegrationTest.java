@@ -6,7 +6,10 @@ import com.example.gather.api.ApiModels.CancelActivityRequest;
 import com.example.gather.domain.NewActivity;
 import com.example.gather.mapper.ActivityMapper;
 import com.example.gather.mapper.UserMapper;
+import com.example.gather.mapper.RegistrationMapper;
 import com.example.gather.maps.AmapTransport;
+import com.example.gather.maps.LocationCoordinateConverter;
+import com.example.gather.maps.LocationCheckInConfiguration;
 import com.example.gather.security.AppUserDetails;
 import com.example.gather.service.*;
 import com.example.gather.support.OwnedIntegrationFixtures;
@@ -95,13 +98,22 @@ class GeoCheckInIntegrationTest {
     static class GeoQueries implements Interceptor {
         final AtomicBoolean failAudit = new AtomicBoolean();
         final ThreadLocal<List<Query>> captured = new ThreadLocal<>();
+        final AtomicReference<Runnable> afterPreflight = new AtomicReference<>();
+        final AtomicReference<Runnable> beforeActivityLock = new AtomicReference<>();
         @Override public Object intercept(Invocation invocation) throws Throwable {
             var statement = (MappedStatement) invocation.getArgs()[0];
             if (statement.getId().endsWith("AuditLogMapper.insert") && failAudit.getAndSet(false))
                 throw new DataAccessResourceFailureException("Injected geo attendance audit failure");
             if (captured.get()!=null) captured.get().add(new Query(statement.getId(),statement.getBoundSql(invocation.getArgs()[1]).getSql(),
                 TransactionSynchronizationManager.isCurrentTransactionReadOnly(),TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()));
-            return invocation.proceed();
+            if(statement.getId().endsWith("ActivityMapper.lockById")){
+                var hook=beforeActivityLock.get();if(hook!=null)hook.run();
+            }
+            var result=invocation.proceed();
+            if(statement.getId().endsWith("RegistrationMapper.findLocationCheckInPreflight")){
+                var hook=afterPreflight.getAndSet(null);if(hook!=null)hook.run();
+            }
+            return result;
         }
     }
     @DynamicPropertySource static void database(DynamicPropertyRegistry properties) {
@@ -122,6 +134,9 @@ class GeoCheckInIntegrationTest {
     @Autowired ActivityMapper activities;
     @Autowired ActivityService activityService;
     @Autowired LocationCheckInService location;
+    @Autowired RegistrationMapper registrationMapper;
+    @Autowired LocationCoordinateConverter converter;
+    @Autowired LocationCheckInWriter writer;
     @Autowired CheckInService checkIns;
     @Autowired RegistrationService registrations;
     @Autowired AdminService admin;
@@ -140,7 +155,8 @@ class GeoCheckInIntegrationTest {
     }
     @AfterEach void cleanup() {
         transport.hook.set(null); transport.fail.set(false); transport.converted.set("116.4,39.9"); transport.calls.set(0);
-        queries.failAudit.set(false); queries.captured.remove(); clock.time.set(NOW); clock.calls.set(0);
+        queries.failAudit.set(false); queries.captured.remove(); queries.afterPreflight.set(null); queries.beforeActivityLock.set(null);
+        clock.time.set(NOW); clock.calls.set(0);
         fixtureActivities.forEach((id,title)->assertThat(jdbc.queryForObject("SELECT title FROM activities WHERE id=?",String.class,id)).isEqualTo(title));
         fixtureUsers.forEach((id,username)->assertThat(users.findById(id).username()).isEqualTo(username));
         OwnedIntegrationFixtures.remove(jdbc,fixtureActivities.keySet(),fixtureUsers.keySet());
@@ -432,10 +448,11 @@ class GeoCheckInIntegrationTest {
         var observed=new ArrayList<Query>(); queries.captured.set(observed); clock.calls.set(0);
         var page=registrations.searchMine(owner,1,10,"ALL"); queries.captured.remove();
         assertThat(observed).hasSize(2).allSatisfy(query->{assertThat(query.readOnly()).isTrue();assertThat(query.isolation()).isEqualTo(TransactionDefinition.ISOLATION_REPEATABLE_READ);assertThat(query.sql()).doesNotContain("checked_in_by");});
-        assertThat(clock.calls).hasValue(1); assertThat(page.locationCheckInEnabled()).isTrue(); assertThat(page.items().getFirst().checkInVersion()).isEqualTo(1);
+        assertThat(clock.calls).hasValue(1); assertThat(page.locationCheckInEnabled()).isTrue(); assertThat(page.locationCheckInGcj02Supported()).isTrue();
+        assertThat(page.items().getFirst().checkInVersion()).isEqualTo(1);
         assertThat(page.summary().checkedInRegistrations()).isEqualTo(1);
         String old=mvc.perform(get("/api/me/registrations").with(user(principal(owner)))).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-        assertThat(old).doesNotContain("checkedInAt","checkedInBy","checkInMethod","checkInVersion","locationCheckInEnabled");
+        assertThat(old).doesNotContain("checkedInAt","checkedInBy","checkInMethod","checkInVersion","locationCheckInEnabled","locationCheckInGcj02Supported");
         String csv=new String(admin.exportRoster(activity,"ALL","ALL",adminId()),StandardCharsets.UTF_8);
         assertThat(csv).contains("\"签到管理员昵称\",\"签到方式\"","\"定位签到\"");
         assertThat(admin.roster(activity,1,10,"ALL",adminId()).items().getFirst().checkedInBy()).isNull();
@@ -448,6 +465,155 @@ class GeoCheckInIntegrationTest {
         assertThat(response).doesNotContain(RAW_LONGITUDE,RAW_LATITUDE,WEB_KEY,"Sensitive upstream URI");
         assertThat(output.getAll()).doesNotContain(RAW_LONGITUDE,RAW_LATITUDE,WEB_KEY,"Sensitive upstream URI");
         assertThat(state(id).get("check_in_version")).isEqualTo(0L); assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+    }
+    @Test void gcj02RouteRequiresSessionCsrfOwnershipVersionAndAccuracy() throws Exception {
+        long activity=compatibilityActivity(), owner=account(), other=account(), id=registration(activity,owner,"ACTIVE");
+        String body=json.writeValueAsString(request(0,33));
+        mvc.perform(post(gcj02Path(id)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isUnauthorized());
+        mvc.perform(post(gcj02Path(id)).with(user(principal(owner))).contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("CSRF_INVALID"));
+        for(long target:List.of(id,Long.MAX_VALUE))mvc.perform(post(gcj02Path(target)).with(user(principal(other))).with(csrf())
+            .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("REGISTRATION_NOT_FOUND"));
+        for(String invalid:List.of("{}",json.writeValueAsString(request(0,100.001)),json.writeValueAsString(request(0,0)),
+            "{\"longitude\":181,\"latitude\":0,\"accuracyMeters\":33,\"expectedVersion\":0}",
+            "{\"longitude\":0,\"latitude\":91,\"accuracyMeters\":33,\"expectedVersion\":0}",
+            "{\"longitude\":0,\"latitude\":0,\"accuracyMeters\":33}"))
+            mvc.perform(post(gcj02Path(id)).with(user(principal(owner))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(invalid))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        mvc.perform(post(gcj02Path(id)).with(user(principal(owner))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request(1,33))))
+            .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("CHECK_IN_VERSION_CONFLICT"));
+        assertThat(transport.calls).hasValue(0);assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+    }
+    @Test void explicitGcj02UsesOnlyRawPointWhileLegacyAlwaysConvertsTheSameSyntheticInput() throws Exception {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        jdbc.update("UPDATE activities SET location_longitude=116.3971235,location_latitude=39.9082943 WHERE id=?",activity);
+        transport.converted.set("116.4043485,39.9082943");
+        assertThat(LocationDistance.meters(Double.parseDouble(RAW_LONGITUDE),Double.parseDouble(RAW_LATITUDE),116.3971235,39.9082943)).isBetween(18.0,20.0);
+        assertThat(LocationDistance.meters(116.4043485,39.9082943,116.3971235,39.9082943)).isBetween(615.0,617.0);
+        var before=untouched(activity);
+        // Extra client fields cannot change the fixed WGS84 meaning of the original route.
+        String body=json.writeValueAsString(request(0,33));
+        String attemptedOverride=body.substring(0,body.length()-1)+",\"coordinateSystem\":\"GCJ02\"}";
+        mvc.perform(post(selfPath(id)).with(user(principal(owner))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(attemptedOverride))
+            .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("LOCATION_OUT_OF_RANGE"));
+        assertThat(transport.calls).hasValue(1);assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+        String response=mvc.perform(post(gcj02Path(id)).with(user(principal(owner))).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.checkInMethod").value("SELF_LOCATION")).andExpect(jsonPath("$.checkInVersion").value(1))
+            .andReturn().getResponse().getContentAsString();
+        assertThat(transport.calls).hasValue(1);assertThat(untouched(activity)).isEqualTo(before);
+        assertThat(response).doesNotContain("checkedInBy","checkInReason","coordinateSystem",WEB_KEY,RAW_LONGITUDE,RAW_LATITUDE);
+        var event=audit.detail(audit.search(1,10,"CHECK_IN",activity).items().getFirst().id());
+        assertThat(event.actorUserId()).isEqualTo(owner);
+        assertThat(json.writeValueAsString(event)).doesNotContain("GCJ02","WGS84","coordinateSystem",RAW_LONGITUDE,RAW_LATITUDE,WEB_KEY);
+    }
+    @Test void gcj02DoesNotTryConversionWhenTheDeclaredRawPointIsOutsideTheRadius() {
+        long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        assertThat(LocationDistance.meters(Double.parseDouble(RAW_LONGITUDE),Double.parseDouble(RAW_LATITUDE),116.4,39.9)).isGreaterThan(300);
+        // The configured contract conversion would land exactly at the target; compatibility must still reject the raw point.
+        expectCode(()->location.checkInGcj02(id,owner,request(0,33)),"LOCATION_OUT_OF_RANGE");
+        assertThat(transport.calls).hasValue(0);assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+        assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+        assertThat(location.checkIn(id,owner,request(0,33)).checkInVersion()).isEqualTo(1);
+        assertThat(transport.calls).hasValue(1);
+    }
+    @Test void gcj02KeepsTimeDistanceAccuracyAndPrerequisiteBoundariesWithoutExternalCalls() {
+        transport.fail.set(true);
+        var atTarget=new LocationCheckInRequest(BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.valueOf(100),0L);
+        for(int boundary=0;boundary<6;boundary++){
+            long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+            jdbc.update("UPDATE activities SET location_longitude=0,location_latitude=0 WHERE id=?",activity);
+            if(boundary==0)jdbc.update("UPDATE activities SET starts_at=? WHERE id=?",utc(NOW),activity);
+            if(boundary==1)jdbc.update("UPDATE activities SET starts_at=? WHERE id=?",utc(NOW.plusNanos(1000)),activity);
+            if(boundary==2)jdbc.update("UPDATE activities SET ends_at=? WHERE id=?",utc(NOW),activity);
+            if(boundary==3)jdbc.update("UPDATE activities SET ends_at=? WHERE id=?",utc(NOW.plusNanos(1000)),activity);
+            if(boundary==4)jdbc.update("UPDATE activities SET ends_at=NULL WHERE id=?",activity);
+            if(boundary==5)jdbc.update("UPDATE activities SET location_longitude=NULL,location_latitude=NULL WHERE id=?",activity);
+            clock.calls.set(0);
+            if(boundary==0||boundary==3)assertThat(location.checkInGcj02(id,owner,atTarget).checkedInAt()).isEqualTo(NOW);
+            else expectCode(()->location.checkInGcj02(id,owner,atTarget),boundary>=4?"LOCATION_CHECK_IN_UNAVAILABLE":"LOCATION_CHECK_IN_CLOSED");
+            assertThat(clock.calls).hasValue(boundary>=4?0:1);
+        }
+        for(String longitude:List.of("0.002697960","0.002697962")){
+            long activity=activity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+            jdbc.update("UPDATE activities SET location_longitude=0,location_latitude=0 WHERE id=?",activity);
+            var nearBoundary=new LocationCheckInRequest(new BigDecimal(longitude),BigDecimal.ZERO,BigDecimal.valueOf(100),0L);
+            if(longitude.equals("0.002697960"))assertThat(location.checkInGcj02(id,owner,nearBoundary).checkInVersion()).isEqualTo(1);
+            else expectCode(()->location.checkInGcj02(id,owner,nearBoundary),"LOCATION_OUT_OF_RANGE");
+        }
+        assertThat(transport.calls).hasValue(0);
+    }
+    @Test void bothUnsignedEncodingsRequireReadinessButSignedRepeatsKeepTheOriginalWriterPath() {
+        long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        var disabled=new LocationCheckInService(registrationMapper,converter,writer,new LocationCheckInConfiguration(""));
+        for(Runnable action:List.<Runnable>of(()->disabled.checkIn(id,owner,request(0,33)),()->disabled.checkInGcj02(id,owner,request(0,33)))){
+            var observed=new ArrayList<Query>();queries.captured.set(observed);clock.calls.set(0);
+            try{assertThatThrownBy(action::run).isInstanceOfSatisfying(ApiException.class,error->{
+                assertThat(error.status().value()).isEqualTo(503);assertThat(error.code()).isEqualTo("LOCATION_CHECK_IN_UNAVAILABLE");});}
+            finally{queries.captured.remove();}
+            assertThat(observed).hasSize(1);assertThat(observed.getFirst().id()).endsWith("RegistrationMapper.findLocationCheckInPreflight");
+            assertThat(clock.calls).hasValue(0);assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+        }
+        var signed=checkIns.checkIn(activity,id,adminId(),0L);
+        assertThat(disabled.checkIn(id,owner,request(1,33)).checkedInAt()).isEqualTo(signed.checkedInAt());
+        assertThat(disabled.checkInGcj02(id,owner,request(1,33)).checkedInAt()).isEqualTo(signed.checkedInAt());
+        assertThat(transport.calls).hasValue(0);assertThat(state(id).get("check_in_version")).isEqualTo(1L);
+    }
+    @Test void gcj02AuditFailureRollsBackVersionAndDoesNotPersistInputEncodingOrCoordinates() {
+        long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        var before=state(id);var business=untouched(activity);queries.failAudit.set(true);
+        assertThatThrownBy(()->location.checkInGcj02(id,owner,request(0,33))).isInstanceOf(DataAccessException.class);
+        assertThat(state(id)).isEqualTo(before);assertThat(untouched(activity)).isEqualTo(business);assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+        assertThat(location.checkInGcj02(id,owner,request(0,33)).checkInVersion()).isEqualTo(1);
+        assertThat(location.checkInGcj02(id,owner,request(1,33)).checkInVersion()).isEqualTo(1);
+        assertThat(transport.calls).hasValue(0);assertThat(audit.search(1,10,"ALL",activity).total()).isEqualTo(1);
+        assertThat(state(id).keySet()).doesNotContain("coordinate_system","location_longitude","location_latitude");
+    }
+    @Test void gcj02StandardAndAdministratorCompeteForOneVersionThenRevokeAndResignNormally() throws Exception {
+        long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE"), actor=adminId();
+        transport.converted.set(RAW_LONGITUDE+","+RAW_LATITUDE);
+        var barrier=new CyclicBarrier(3);
+        queries.beforeActivityLock.set(()->{try{barrier.await(10,TimeUnit.SECONDS);}catch(Exception error){throw new IllegalStateException(error);}});
+        var pool=Executors.newFixedThreadPool(3);
+        try{
+            var compatible=pool.submit(()->outcome(()->location.checkInGcj02(id,owner,request(0,33))));
+            var standard=pool.submit(()->outcome(()->location.checkIn(id,owner,request(0,33))));
+            var administrator=pool.submit(()->outcome(()->checkIns.checkIn(activity,id,actor,0L)));
+            var outcomes=List.of(compatible.get(20,TimeUnit.SECONDS),standard.get(20,TimeUnit.SECONDS),administrator.get(20,TimeUnit.SECONDS));
+            assertThat(outcomes).filteredOn("OK"::equals).hasSize(1);
+            assertThat(outcomes).filteredOn("CHECK_IN_VERSION_CONFLICT"::equals).hasSize(2);
+        }finally{queries.beforeActivityLock.set(null);pool.shutdownNow();assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue();}
+        assertThat(transport.calls).hasValue(1);assertThat(state(id).get("check_in_version")).isEqualTo(1L);
+        assertThat(audit.search(1,10,"CHECK_IN",activity).total()).isEqualTo(1);
+        checkIns.correct(activity,id,actor,new CorrectCheckInRequest(false,"兼容方式并发后撤销",1L));
+        expectCode(()->location.checkInGcj02(id,owner,request(0,33)),"CHECK_IN_VERSION_CONFLICT");
+        assertThat(location.checkInGcj02(id,owner,request(2,33)).checkInVersion()).isEqualTo(3);
+        assertThat(audit.search(1,10,"CHECK_IN_REVOKE",activity).total()).isEqualTo(1);
+    }
+    @Test void lateGcj02RequestCannotReviveAnAdministratorRevocation() throws Exception {
+        long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE"), actor=adminId();
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        queries.afterPreflight.set(()->{entered.countDown();try{if(!release.await(10,TimeUnit.SECONDS))throw new IllegalStateException("Timed out waiting for preflight release");}
+            catch(InterruptedException error){Thread.currentThread().interrupt();throw new IllegalStateException(error);}});
+        var pool=Executors.newSingleThreadExecutor();
+        try{
+            var pending=pool.submit(()->outcome(()->location.checkInGcj02(id,owner,request(0,33))));
+            assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+            checkIns.checkIn(activity,id,actor,0L);checkIns.correct(activity,id,actor,new CorrectCheckInRequest(false,"拒绝迟到兼容签到",1L));
+            release.countDown();assertThat(pending.get(20,TimeUnit.SECONDS)).isEqualTo("CHECK_IN_VERSION_CONFLICT");
+        }finally{release.countDown();queries.afterPreflight.set(null);pool.shutdownNow();assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue();}
+        assertThat(state(id).get("checked_in_at")).isNull();assertThat(state(id).get("check_in_version")).isEqualTo(2L);
+        assertThat(location.checkInGcj02(id,owner,request(2,33)).checkInVersion()).isEqualTo(3);
+        assertThat(transport.calls).hasValue(0);
+    }
+    @Test void gcj02StillRechecksTargetAfterPreflightAndDoesNotCallAnyConverter() {
+        long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE");
+        queries.afterPreflight.set(()->jdbc.update("UPDATE activities SET ends_at=NULL WHERE id=?",activity));
+        clock.calls.set(0);expectCode(()->location.checkInGcj02(id,owner,request(0,33)),"LOCATION_CHECK_IN_UNAVAILABLE");
+        assertThat(clock.calls).hasValue(1);assertThat(transport.calls).hasValue(0);assertThat(state(id).get("check_in_version")).isEqualTo(0L);
+        assertThat(audit.search(1,10,"ALL",activity).total()).isZero();
+    }
+    private long compatibilityActivity(){
+        long id=activity();jdbc.update("UPDATE activities SET location_longitude=?,location_latitude=? WHERE id=?",new BigDecimal(RAW_LONGITUDE),new BigDecimal(RAW_LATITUDE),id);return id;
     }
     private long activity() {
         String title="geo_"+UUID.randomUUID();
@@ -475,6 +641,7 @@ class GeoCheckInIntegrationTest {
     private static LocalDateTime utc(Instant instant) { return LocalDateTime.ofInstant(instant,ZoneOffset.UTC); }
     private static LocationCheckInRequest request(long version,double accuracy) { return new LocationCheckInRequest(new BigDecimal(RAW_LONGITUDE),new BigDecimal(RAW_LATITUDE),BigDecimal.valueOf(accuracy),version); }
     private static String selfPath(long id) { return "/api/me/registrations/"+id+"/check-in"; }
+    private static String gcj02Path(long id) { return selfPath(id)+"/gcj02"; }
     private static String adminPath(long activity,long id) { return "/api/admin/activities/"+activity+"/registrations/"+id+"/check-in"; }
     private static void expectCode(Runnable action,String code) { assertThatThrownBy(action::run).isInstanceOfSatisfying(ApiException.class,error->assertThat(error.code()).isEqualTo(code)); }
     private static String outcome(Runnable action) { try {action.run();return "OK";}catch(ApiException error){return error.code();} }

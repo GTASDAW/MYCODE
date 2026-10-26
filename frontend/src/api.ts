@@ -393,6 +393,12 @@ export const api = {
       body: JSON.stringify({ longitude: location.longitude, latitude: location.latitude,
         accuracyMeters: location.accuracyMeters, expectedVersion: location.expectedVersion }),
     }),
+  locationCheckInGcj02: (registrationId: number, location: LocationCheckIn, signal?: AbortSignal) =>
+    request<MyRegistration>(`/me/registrations/${registrationId}/check-in/gcj02`, {
+      method: "POST", signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ longitude: location.longitude, latitude: location.latitude,
+        accuracyMeters: location.accuracyMeters, expectedVersion: location.expectedVersion }),
+    }),
   notifications: (query: NotificationQuery, signal?: AbortSignal) =>
     request<NotificationPage>(
       `/me/notifications?${new URLSearchParams({

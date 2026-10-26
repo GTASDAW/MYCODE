@@ -198,6 +198,8 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 
 ## 管理员签到与 CSV
 
+本人定位保留原WGS84 `/check-in`，并以独立 `/check-in/gcj02` 支持用户主动选择的已现场对照设备兼容输入。新分页能力`locationCheckInGcj02Supported`防旧服务忽略请求含义；它与配置enabled是两个门禁，旧响应缺能力时禁止兼容请求。后端两入口共享校验与writer，标准只转换一次、兼容不转换，不自动识别品牌/择近或回退；坐标模式只保留页面内，刷新/离页/重登恢复标准，不增加SQL/持久字段，合同见 [本人定位签到](checkin-export-guide.md#本人到场定位签到)。
+
 名单与CSV共用 `checkInMethod=ALL|SELF_LOCATION|ADMIN`，省略为ALL、显式空或未知值400；方式与关键词及报名/签到状态AND筛选，但整场三项统计不变。默认ALL保留空方式记录，SELF_LOCATION/ADMIN只匹配对应已签记录。名单四次、导出三次业务SELECT及RR快照保持；页面URL、详情/登录返回和下载作用域都包含方式，具体合同见 [签到与导出指南](checkin-export-guide.md)。
 
 `AdminController → CheckInService → ActivityMapper/AdminMapper` 使用独立 `READ_COMMITTED` 写事务，锁活动主键后普通读报名并核对归属、未取消、已开始与ACTIVE。旧POST空体兼容，可选版本；新UI始终带版本。PATCH必填boxed checkedIn、1–500字单行原因和expectedVersion，结束后仍可补签/撤销。版本冲突409，目标状态未变不写入；真实变化版本+1并同事务追加CHECK_IN/CHECK_IN_REVOKE，撤销清当前时间/管理员/方式且保留历史。报名状态、人数、updated_at、候补及通知不变。

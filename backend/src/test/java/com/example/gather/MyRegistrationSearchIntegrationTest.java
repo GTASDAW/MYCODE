@@ -220,7 +220,7 @@ class MyRegistrationSearchIntegrationTest {
         assertThat(cancelled.activity().registeredCount()).isZero();
         assertThat(cancelled.activity().waitingCount()).isZero();
         assertThat(cancelled.activity().closed() && cancelled.activity().cancelled()).isTrue();
-        assertThat(old).doesNotContain("checkedInAt", "checkedInBy", "displayName");
+        assertThat(old).doesNotContain("checkedInAt", "checkedInBy", "displayName", "locationCheckInGcj02Supported");
     }
 
     @Test
@@ -285,6 +285,8 @@ class MyRegistrationSearchIntegrationTest {
         var response = mvc.perform(get(PATH).with(user(principal(owner))).param("pageSize", "100"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.summary.checkedInRegistrations").value(2)).andReturn().getResponse().getContentAsString();
         var tree = json.readTree(response);
+        assertThat(tree.size()).isEqualTo(7);
+        assertThat(tree.get("locationCheckInGcj02Supported").asBoolean()).isTrue();
         for (var item : tree.get("items")) {
             assertThat(item.size()).isEqualTo(6);
             assertThat(item.has("id") && item.has("status") && item.has("activity") && item.has("checkedInAt")

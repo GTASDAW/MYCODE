@@ -17,7 +17,7 @@ import {
 import { formatActivityEnd, formatDate, formatRegistrationDeadline, formatTime } from "../date";
 import { useActivityClock } from "../useActivityClock";
 import { useResource } from "../useResource";
-import { checkInLabel, checkInMethodLabel } from "../registrationCheckIn";
+import { checkInLabel, checkInMethodLabel, locationCoordinateModeUnavailableReason } from "../registrationCheckIn";
 import { myRegistrationDetailsPath } from "../activityDetailNavigation";
 import {
   myRegistrationListPath,
@@ -25,7 +25,7 @@ import {
   readMyRegistrationQuery,
   serializeMyRegistrationQuery,
 } from "../myRegistrationQuery";
-import type { MyRegistrationQuery, RegistrationFilter } from "../types";
+import type { LocationCoordinateMode, MyRegistrationQuery, RegistrationFilter } from "../types";
 import { WaitingPositionNotice } from "../components/WaitingPositionNotice";
 import { useLocationCheckIn } from "./useLocationCheckIn";
 import { LocationCheckInButton } from "./LocationCheckInButton";
@@ -52,6 +52,10 @@ export function MyRegistrationsPage() {
     auth.captureAuthenticationRequest, auth.captureAuthenticationRequest);
   const account = auth.userGeneration === generation ? auth.captureAccountRequest() : null;
   const accountKey = account ? `${account.userId}:${account.generation}` : null;
+  const modeOwner = `${accountKey}:${generation}`;
+  const [modeSelection, setModeSelection] = useState<{ owner: string; mode: LocationCoordinateMode }>({ owner: modeOwner, mode: "WGS84" });
+  const coordinateMode = modeSelection.owner === modeOwner ? modeSelection.mode : "WGS84";
+  useLayoutEffect(() => { setModeSelection({ owner: modeOwner, mode: "WGS84" }); }, [modeOwner]);
   const scope = `${accountKey}:${generation}:${canonicalSearch}:${revision}`;
   const currentScope = useRef<string | null>(scope);
   const pendingNavigation = useRef<string | null>(null);
@@ -73,7 +77,9 @@ export function MyRegistrationsPage() {
       if (error instanceof ApiError && error.status === 401) auth.expire();
     },
   ), [scope]);
-  const checkIn = useLocationCheckIn(scope, current, resource.retry);
+  const gcj02Supported = resource.data?.locationCheckInGcj02Supported === true;
+  const checkIn = useLocationCheckIn(`${scope}:${coordinateMode}`, current, resource.retry, coordinateMode, gcj02Supported);
+  const modeUnavailable = locationCoordinateModeUnavailableReason(coordinateMode, gcj02Supported);
   const loading = resource.loading || pendingNavigation.current !== null;
   const records = resource.data?.items ?? [];
   const now = useActivityClock(records.map(record => record.activity));
@@ -178,6 +184,22 @@ export function MyRegistrationsPage() {
         {keywordError && <p id="myregistration-keyword-error" role="alert">{keywordError}</p>}
         <p className="metadata">统计覆盖全部记录，不受当前关键词、状态筛选和分页影响。</p>
       </Card>
+      <details className="location-coordinate-settings">
+        <summary>定位兼容设置</summary>
+        <div className="filter-field filter-select">
+          <label htmlFor="location-coordinate-mode">定位坐标模式</label>
+          <Select<LocationCoordinateMode> id="location-coordinate-mode" aria-label="定位坐标模式" value={coordinateMode}
+            disabled={checkIn.busyRegistrationId !== null && !checkIn.locating}
+            options={[{ value: "WGS84", label: "标准定位（默认）" }, { value: "GCJ02", label: "高德坐标兼容（已校准设备）" }]}
+            onChange={mode => {
+              if (mode !== coordinateMode && checkIn.cancelForModeChange()) setModeSelection({ owner: modeOwner, mode });
+            }} />
+        </div>
+        <p className="metadata">仅在现场对照确认设备输出高德坐标时使用；不会自动识别或选更近结果，其他设备保持标准，范围和精度要求不变。</p>
+        <p className="metadata">选择模式仅声明本次设备坐标编码，不代表真实到场证明；切换后需再次手动点击到场签到。</p>
+        <p className="metadata">仅当前页面有效，浏览器刷新、离页或重新登录后恢复默认；不会保存模式偏好。</p>
+        {modeUnavailable && <p role="status">{modeUnavailable}</p>}
+      </details>
       {loading || correctingPage ? (
         <LoadingState />
       ) : resource.error ? (
@@ -218,6 +240,7 @@ export function MyRegistrationsPage() {
                     </Tag>
                     {!activity.cancelled && <ActivityStatus activity={activity} personal={false} />}
                     <LocationCheckInButton registration={record} enabled={resource.data?.locationCheckInEnabled === true}
+                      mode={coordinateMode} gcj02Supported={gcj02Supported}
                       now={now} busy={checkIn.busyRegistrationId} locating={checkIn.locating}
                       error={checkIn.errorRegistrationId === id ? checkIn.error : null}
                       onCheckIn={() => { void checkIn.run(record, resource.data?.locationCheckInEnabled === true); }} />

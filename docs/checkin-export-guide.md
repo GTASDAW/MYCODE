@@ -18,13 +18,17 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 
 ## 本人到场定位签到
 
-`POST /api/me/registrations/{registrationId}/check-in` 要求登录、CSRF及本人报名；非本人和不存在均返回404 `REGISTRATION_NOT_FOUND`。JSON 必填 `longitude`、`latitude`、`accuracyMeters`、`expectedVersion`，不读取客户端用户ID、角色、半径、距离或时间。经纬度固定来自浏览器原生定位的 WGS84，范围分别为±180/±90，精度必须 `0 < accuracyMeters <= 100` 米；版本为非负整数。
+`POST /api/me/registrations/{registrationId}/check-in` 要求登录、CSRF及本人报名；非本人和不存在均返回404 `REGISTRATION_NOT_FOUND`。JSON 必填 `longitude`、`latitude`、`accuracyMeters`、`expectedVersion`，不读取客户端用户ID、角色、半径、距离或时间。原路径固定按WGS84编码处理，范围分别为±180/±90，精度必须 `0 < accuracyMeters <= 100` 米；版本为非负整数，不由额外JSON字段切换编码。
+
+现场对照确认设备输出已是高德GCJ-02时，用户可在“我的报名 → 定位兼容设置”主动选择“高德坐标兼容（已校准设备）”。新路径`POST /api/me/registrations/{registrationId}/check-in/gcj02`只按GCJ-02解释同样四字段，直接封装唯一比较点，不调用坐标转换；标准模式仍调用一次官方GPS转换。两个入口共享归属、CSRF、版本、精度、静态预检及原锁后全部检查，不根据浏览器品牌或距离大小猜编码、不双算择近、不回退另一条路径，不放宽300米或100米要求。该选择只是用户声明输入编码，不证明位置真实性，也不保证所有同品牌设备都兼容。
+
+新分页顶层`locationCheckInGcj02Supported: true`只表示协议支持，配置就绪仍由原`locationCheckInEnabled`决定；两者须同时为true才可提交兼容请求。缺少能力字段的旧服务禁用兼容签到，选中模式保持并提示，不自动切回标准；新路径在旧实例404时也不重放旧路径，真实报名/活动不存在仍显示原业务错误。模式仅页面内保存，浏览器刷新、离页、身份变化或同账号重登恢复标准默认；筛选切换可保留模式。切模式取消旧定位、丢弃旧坐标，须再次主动点击，POST写入时禁切；模式纳入动作scope，旧成功/错误/finally不影响新请求。旧数组与DTO构造保持，未新增业务SELECT、数据库字段或持久模式关联。
 
 服务首次本人查询轻量联表预读活动取消状态、结束时间及坐标，先检查归属、版本和ACTIVE。未签到时，已取消或缺少结束时间/坐标直接返回业务409，不调用高德；已签到重复请求仍走原锁后读取路径且不转换。预检不增加SELECT或时钟读取，不提前拒绝尚未开始的请求；时间窗口仍按取得锁后的单次UTC微秒时刻判断，转换期间的活动或签到状态变化由锁后重核处理。
 
 单点转换仍在活动写事务和行锁之外，仅使用后端独立 Web服务 Key、固定高德 HTTPS 端点，禁止重定向，沿用包含正文的5秒时限及2MiB响应上限。每个Java实例最多16个转换同时在途，包含传输及响应解析；满额不排队、不调用上游，立即503 `LOCATION_CHECK_IN_UNAVAILABLE`，调用结束或失败均释放名额。它是本实例资源保护，不是多实例共享限流。缺Key不调用，网络或响应失败同样503，不伪造成功、自动重试或以客户端点直接比较；配置及申请见 [地点指南](activity-location-guide.md#申请与本机配置)。
 
-转换成功后由独立 Spring 事务 `LocationCheckInWriter` 以 `READ_COMMITTED` 锁原活动主键，普通重读报名及单独的活动结束时间/坐标，不扩报名热锁列；重核本人、版本、ACTIVE、未取消及锁后单次UTC微秒时刻。必须同时有活动坐标和结束时间，且 `startsAt <= now < endsAt`；以服务端 Haversine 计算转换后点与活动点距离，要求 `distance <= 300` 米，精度合格与距离合格是独立条件，不把100米加进半径。成功写 `SELF_LOCATION`、时间、空管理员并使版本加1，追加可信本人为 actor 的 `CHECK_IN`。
+标准转换成功或显式GCJ-02取到单一比较点后，由独立 Spring 事务 `LocationCheckInWriter` 以 `READ_COMMITTED` 锁原活动主键，普通重读报名及单独的活动结束时间/坐标，不扩报名热锁列；重核本人、版本、ACTIVE、未取消及锁后单次UTC微秒时刻。必须同时有活动坐标和结束时间，且 `startsAt <= now < endsAt`；以服务端 Haversine 计算GCJ-02点与活动点距离，要求 `distance <= 300` 米，精度合格与距离合格是独立条件，不把100米加进半径。两种模式均成功写 `SELF_LOCATION`、时间、空管理员并使版本加1，追加可信本人为 actor 的 `CHECK_IN`，不持久存储坐标编码或原位置。
 
 响应为本人 `MyRegistrationView`，包括 `checkedInAt`、`checkInMethod`、`checkInVersion`，不含管理员身份或更正原因。原始用户GPS不存数据库、审计、日志、浏览器地址栏URL或浏览器持久存储；后端转换请求需把该单点交给提供商，不能声称完全没有对外发送位置。页面只在主动点击时定位，不轮询；权限拒绝、无位置、精度不足或超时有中文反馈且需手动重试。坐标与精度由终端提供，距离校验不等于防伪定位或真实到场证明。真实手机需要可信HTTPS及定位权限，不能把视口模拟当作设备GPS或提供商真实转换，详见 [手机限制](activity-location-guide.md#设备定位与手机限制)。
 
@@ -46,6 +50,7 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认，空体兼容或可选 expectedVersion，返回当前名单行 | ADMIN，需 CSRF |
 | `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填状态、原因及版本的补签/撤销，返回当前名单行 | ADMIN，需 CSRF |
 | `POST /api/me/registrations/{registrationId}/check-in` | 本人定位签到，返回本人记录 | 已登录且本人，需 CSRF |
+| `POST /api/me/registrations/{registrationId}/check-in/gcj02` | 显式高德坐标兼容签到，不额外偏移 | 已登录且本人，需 CSRF |
 | `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词、报名状态、签到状态及方式的 CSV | ADMIN |
 
 名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，`checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。

@@ -2,6 +2,7 @@ package com.example.gather.api;
 
 import com.example.gather.api.ApiModels.ActivityView;
 import com.example.gather.domain.MyRegistrationRow;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -19,5 +20,8 @@ public final class MyRegistrationModels {
     public record MyRegistrationSummary(long activeRegistrations, long waitingRegistrations,
                                         long cancelledRegistrations, long checkedInRegistrations) {}
     public record MyRegistrationPageView(List<MyRegistrationView> items, long total, int page, int pageSize,
-                                         MyRegistrationSummary summary, boolean locationCheckInEnabled) {}
+                                         MyRegistrationSummary summary, boolean locationCheckInEnabled) {
+        @JsonProperty("locationCheckInGcj02Supported")
+        public boolean locationCheckInGcj02Supported() { return true; }
+    }
 }

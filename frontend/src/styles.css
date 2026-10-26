@@ -1544,3 +1544,6 @@ main:focus {
 .activity-map-candidate label { display: block; margin-bottom: 8px; }
 .activity-map-actions { margin-top: 8px; }
 .location-checkin-error { margin-top: 8px; color: #cf1322; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.location-coordinate-settings { margin: 16px 0; padding: 12px 16px; border: 1px solid #e6f4ff; border-radius: 6px; background: #fafcff; }
+.location-coordinate-settings summary { cursor: pointer; color: #595959; }
+.location-coordinate-settings .filter-field { margin-top: 12px; width: min(100%, 320px); }

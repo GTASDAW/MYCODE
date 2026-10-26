@@ -18,4 +18,10 @@ public class LocationCheckInController {
                                @AuthenticationPrincipal AppUserDetails principal) {
         return checkIns.checkIn(registrationId, principal.id(), request);
     }
+
+    @PostMapping("/{registrationId}/check-in/gcj02")
+    MyRegistrationView checkInGcj02(@PathVariable long registrationId, @Valid @RequestBody LocationCheckInRequest request,
+                                    @AuthenticationPrincipal AppUserDetails principal) {
+        return checkIns.checkInGcj02(registrationId, principal.id(), request);
+    }
 }

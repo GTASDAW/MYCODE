@@ -5,6 +5,7 @@ import com.example.gather.api.CheckInModels.LocationCheckInRequest;
 import com.example.gather.api.MyRegistrationModels.MyRegistrationView;
 import com.example.gather.mapper.RegistrationMapper;
 import com.example.gather.maps.LocationCoordinateConverter;
+import com.example.gather.maps.LocationCheckInConfiguration;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
@@ -15,10 +16,20 @@ public class LocationCheckInService {
     private final RegistrationMapper registrations;
     private final LocationCoordinateConverter converter;
     private final LocationCheckInWriter writer;
-    public LocationCheckInService(RegistrationMapper registrations, LocationCoordinateConverter converter, LocationCheckInWriter writer) {
-        this.registrations = registrations; this.converter = converter; this.writer = writer;
+    private final LocationCheckInConfiguration configuration;
+    private enum InputCoordinates { WGS84, GCJ02 }
+
+    public LocationCheckInService(RegistrationMapper registrations, LocationCoordinateConverter converter,
+                                 LocationCheckInWriter writer, LocationCheckInConfiguration configuration) {
+        this.registrations = registrations; this.converter = converter; this.writer = writer; this.configuration = configuration;
     }
     public MyRegistrationView checkIn(long registrationId, long userId, LocationCheckInRequest request) {
+        return checkIn(registrationId, userId, request, InputCoordinates.WGS84);
+    }
+    public MyRegistrationView checkInGcj02(long registrationId, long userId, LocationCheckInRequest request) {
+        return checkIn(registrationId, userId, request, InputCoordinates.GCJ02);
+    }
+    private MyRegistrationView checkIn(long registrationId, long userId, LocationCheckInRequest request, InputCoordinates coordinates) {
         validate(request);
         var existing = registrations.findLocationCheckInPreflight(registrationId, userId);
         if (existing == null) throw new ApiException(HttpStatus.NOT_FOUND, "REGISTRATION_NOT_FOUND", "报名记录不存在");
@@ -31,8 +42,13 @@ public class LocationCheckInService {
                 throw new ApiException(HttpStatus.CONFLICT, "ACTIVITY_CANCELLED", "活动已取消，不能签到");
             if (existing.endsAt() == null || existing.locationLongitude() == null || existing.locationLatitude() == null)
                 throw new ApiException(HttpStatus.CONFLICT, "LOCATION_CHECK_IN_UNAVAILABLE", "此活动未配置地点坐标或结束时间，请联系管理员签到");
+            if (!configuration.enabled())
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "LOCATION_CHECK_IN_UNAVAILABLE", "定位签到服务暂时不可用，请稍后重试或联系管理员签到");
             // Do not decide the time window here: conversion or parent-lock waits may cross the start boundary.
-            point = converter.convert(request.longitude(), request.latitude());
+            // The route declares one encoding. Never infer it from a browser or compare both interpretations.
+            point = coordinates == InputCoordinates.GCJ02
+                ? new LocationCoordinateConverter.Point(request.longitude(), request.latitude())
+                : converter.convert(request.longitude(), request.latitude());
         }
         return writer.checkIn(existing.activityId(), registrationId, userId, request.expectedVersion(), point);
     }

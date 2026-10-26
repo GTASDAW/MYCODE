@@ -169,6 +169,7 @@ Redis 模式共享会话和登录/注册/改密限流计数，报名、候补、
 | `GET /api/me/registrations` | 保留原报名数组、字段和排序 | 登录，普通用户与管理员均仅查询本人 |
 | `GET /api/me/registrations/search` | 本人活动关键词/状态筛选、分页、全量统计及签到方式/版本 | 登录，身份只取可信 Session |
 | `POST /api/me/registrations/{registrationId}/check-in` | 本人有效报名在活动期间、300 米范围内定位签到 | 登录且需要 CSRF，身份只取可信 Session |
+| `POST /api/me/registrations/{registrationId}/check-in/gcj02` | 已现场校准设备主动选择的高德坐标兼容签到，保持相同资格和范围 | 登录且需要 CSRF，身份只取可信 Session |
 | `GET /api/me/favorites` | 本人收藏分页，默认 10 条、最多 100 条 | 登录 |
 | `GET /api/me/favorites/{activityId}` | 本人收藏状态与首次时间，不存在活动 404 | 登录 |
 | `POST /api/me/favorites/{activityId}` | 收藏活动，重复保留首次时间 | 登录，需 CSRF |

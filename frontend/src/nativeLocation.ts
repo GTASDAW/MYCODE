@@ -13,6 +13,7 @@ interface NativeLocationOptions {
 
 // A native request cannot be stopped. Abort settles our promise and every late
 // callback checks ownership before exposing coordinates to its caller.
+// Values stay unchanged; an explicit page setting declares the endpoint encoding.
 export function requestNativeLocation(options: NativeLocationOptions): Promise<NativeLocation> {
   return new Promise((resolve, reject) => {
     let settled = false;
