@@ -244,6 +244,8 @@ V14 在活动行增加可空成对 DECIMAL 经纬度，固定 GCJ-02、七位 HA
 
 发布后通过编辑页的独立封面卡片保存，原 JSON 创建/编辑接口保持兼容。`ActivityCoverImages` 在活动事务之前校验 2 MiB、扩展名、声明及真实格式、宽高与像素，并解码后以白底 RGB 缩放至最长 1600、重编码 JPEG；不保存原文件名或元数据，不执行 SVG，也不接受外部图片 URL。实现参考 [OWASP 上传校验说明](https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html)，不将重编码宣称为所有恶意内容检测。
 
+封面编辑支持本地文件及“封面图片链接”手动导入。共享`remoteImage`和`useRemoteImageImport`在浏览器读取公开HTTPS直链、核PNG/JPEG/2MiB及解码尺寸，再生成File和Blob预览；只有确认上传才调用原multipart接口，后端不新增URL抓取。跨域、登录保护或重定向等导致无法读取时提示下载本地；读取不带Cookie/Referer、不缓存、不重定向，正文流累计限量及取消/10秒时限有效，解码另限10秒。URL草稿不入持久存储或业务请求，失败保旧选择，成功保存后清草稿；页面、活动或身份变化及本地/链接切换均隔离旧结果。头像复用同一导入流程，完整限制见 [本人头像](account-guide.md#本人头像)。
+
 V10 在活动行新增成对的 `cover_image` 与 `cover_hash`；数据量受上限控制，沿用数据库持久化/回滚与双实例共享。列表和个人联表只投影摘要，生成 `/api/activities/{id}/cover?v={hash}`，不读取图片正文或增加逐条查询。匿名图片接口返回 JPEG、`nosniff`、`no-cache` 和 ETag，活动取消或开始后仍可查看既有封面。`ActivityCoverService.replace` 使用原活动锁和 READ_COMMITTED，真实 hash 变化才写入及追加 `coverHash` 的 EDIT 审计；重复替换/删除不追加，审计失败整体回滚，原报名热锁投影不变。
 
 前端文件提交复用统一 CSRF 客户端与活动 mutation 的认证代次、取消及所有权保护，成功只更新封面预览，不覆盖文本草稿。临时预览 URL 在更换、成功和离页时释放；图片展示仅接受当前活动的规范同源地址，加载失败展示可手动重试的占位。两份 Nginx 给 multipart 留出 3 MiB 请求空间，并将超大代理请求映射为同类中文 JSON 413；应用仍执行 2 MiB 文件限制。没有增加新表、文件服务、依赖或定时清理任务。

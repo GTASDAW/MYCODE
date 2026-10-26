@@ -455,6 +455,9 @@ main:focus {
 .cover-editor .activity-cover { max-width: 560px; }
 .cover-file { display: block; width: 100%; max-width: 100%; margin: 12px 0; }
 .cover-actions { margin-top: 16px; }
+.remote-image-import { display: grid; gap: 8px; margin: 16px 0; }
+.remote-image-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-image-controls .ant-input { flex: 1 1 220px; min-width: 0; }
 .date-badge {
   flex-shrink: 0;
   width: 56px;

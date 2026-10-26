@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Alert, Button, Card, Space } from "antd";
+import { Alert, Button, Card, Input, Space } from "antd";
 import { useAuth } from "../auth";
 import { errorMessage } from "../api";
 import { validateAvatar } from "../accountAvatar";
 import { AccountAvatar } from "../PersonalAvatar";
+import { useRemoteImageImport } from "../useRemoteImageImport";
 import "./avatar.css";
 
 export function AvatarEditor() {
@@ -19,6 +20,7 @@ export function AvatarEditor() {
   const previewLease = useRef<string | null>(null);
   const account = auth.captureAccountRequest();
   const accountKey = `${account?.userId}:${account?.generation}`;
+  const imported = useRemoteImageImport(`avatar:${accountKey}`, !busy);
 
   function clearSelection() {
     setFile(null);
@@ -48,7 +50,7 @@ export function AvatarEditor() {
   }, [accountKey, auth.subscribeAuthentication]);
 
   async function save(remove = false) {
-    if (submission.current || !remove && !file) return;
+    if (submission.current || imported.isPending() || !remove && !file) return;
     const ticket = auth.captureAccountRequest();
     if (!ticket) return;
     const controller = new AbortController();
@@ -60,6 +62,7 @@ export function AvatarEditor() {
       await auth.updateAvatar(remove ? null : file!, controller.signal);
       if (!current()) return;
       clearSelection();
+      imported.cancel(true);
       setNotice(remove ? "头像已移除" : "头像已更新");
     } catch (err) {
       if (current() && !(err instanceof DOMException && err.name === "AbortError")) setError(errorMessage(err));
@@ -82,6 +85,7 @@ export function AvatarEditor() {
     <label htmlFor="avatar-file">选择头像</label>
     <input ref={input} id="avatar-file" type="file" className="avatar-file" accept="image/png,image/jpeg,.png,.jpg,.jpeg"
       disabled={busy} onChange={event => {
+        imported.cancel(true);
         const selected = event.target.files?.[0];
         clearSelection(); setNotice(null);
         if (!selected) { setError(null); return; }
@@ -92,14 +96,35 @@ export function AvatarEditor() {
         previewLease.current = url;
         setFile(selected); setPreview(url);
       }} />
+    <div className="remote-image-import">
+      <label htmlFor="avatar-image-url">头像图片链接</label>
+      <div className="remote-image-controls">
+        <Input id="avatar-image-url" aria-label="头像图片链接" type="url" autoComplete="off" spellCheck={false}
+          value={imported.url} disabled={busy} placeholder="粘贴公开 HTTPS 图片链接"
+          onChange={event => { imported.setUrl(event.target.value); setNotice(null); setError(null); }} />
+        <Button aria-label="从链接导入头像" loading={imported.pending} disabled={busy || imported.pending || !imported.url.trim()}
+          onClick={() => {
+            setError(null); setNotice(null);
+            void imported.importFile(validateAvatar, selected => {
+              const url = URL.createObjectURL(selected);
+              clearSelection(); previewLease.current = url;
+              setFile(selected); setPreview(url); setNotice("图片已导入，请点击上传保存。");
+            });
+          }}>{imported.pending ? "正在导入头像" : "从链接导入头像"}</Button>
+      </div>
+      <p className="metadata">仅支持公开 HTTPS 的 PNG、JPEG 图片；点击导入后才访问链接，无法直接读取时请先下载到本地。</p>
+    </div>
     {error && <Alert type="error" showIcon title={error} />}
+    {imported.error && <Alert type="error" showIcon title={imported.error} />}
     {notice && <p role="status">{notice}</p>}
     <Space wrap className="avatar-actions">
-      <Button type="primary" aria-label="上传头像" loading={busy} disabled={busy || !file} onClick={() => void save()}>
+      <Button type="primary" aria-label="上传头像" loading={busy} disabled={busy || imported.pending || !file} onClick={() => void save()}>
         {auth.user?.avatarUrl ? "更换头像" : "上传头像"}
       </Button>
-      <Button aria-label="取消头像选择" disabled={busy || !file} onClick={() => { clearSelection(); setError(null); }}>取消选择</Button>
-      <Button danger aria-label="移除头像" disabled={busy || !auth.user?.avatarUrl} onClick={() => void save(true)}>移除头像</Button>
+      <Button aria-label="取消头像选择" disabled={busy || !file && !imported.url && !imported.pending}
+        onClick={() => { imported.cancel(true); clearSelection(); setError(null); setNotice(null); }}>取消选择</Button>
+      <Button danger aria-label="移除头像" disabled={busy || imported.pending || !auth.user?.avatarUrl} onClick={() => void save(true)}>移除头像</Button>
     </Space>
+    <p className="metadata">先选择文件或导入图片，再点击上传保存。{!file && !imported.pending && "尚未选择待上传图片。"}</p>
   </Card>;
 }
