@@ -611,6 +611,27 @@ test('versioned confirmation and correction send only the selected row version a
   }
 });
 
+test('personal page capability metadata never changes the ordinary check-in endpoint or payload', async () => {
+  for (const capability of [undefined, false, true]) {
+    const { api } = await freshApi();
+    const calls = [];
+    const page = { items: [], total: 0, locationCheckInEnabled: true,
+      ...(capability === undefined ? {} : { locationCheckInGcj02Supported: capability }) };
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      return response(200, url.endsWith('/csrf') ? { token: 'valid', headerName: 'X-CSRF-TOKEN' } :
+        url.includes('/registrations/search?') ? page : { id: 123, checkInVersion: 1 });
+    };
+    assert.deepEqual(await api.searchRegistrations({ page: 1, pageSize: 10, status: 'ALL' }), page);
+    await api.locationCheckIn(123, { longitude: 116.397, latitude: 39.908, accuracyMeters: 20, expectedVersion: 0 });
+    const writes = calls.filter(call => call.options.method === 'POST');
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].url, '/api/me/registrations/123/check-in');
+    assert.deepEqual(JSON.parse(writes[0].options.body),
+      { longitude: 116.397, latitude: 39.908, accuracyMeters: 20, expectedVersion: 0 });
+  }
+});
+
 test('self location check-in sends native coordinates, accuracy and version without client identity or inferred distance', async () => {
   const { api } = await freshApi();
   const calls = [], controller = new AbortController();
@@ -620,46 +641,15 @@ test('self location check-in sends native coordinates, accuracy and version with
     return response(200, url.endsWith('/csrf') ? { token: 'valid', headerName: 'X-CSRF-TOKEN' } : result);
   };
   assert.deepEqual(await api.locationCheckIn(123, { longitude: 116.397, latitude: 39.908,
-    accuracyMeters: 12.5, expectedVersion: 0, userId: 99, checkedInBy: 1, distanceMeters: 1, checkInMethod: 'ADMIN' }, controller.signal), result);
+    accuracyMeters: 12.5, expectedVersion: 0, userId: 99, checkedInBy: 1, distanceMeters: 1, checkInMethod: 'ADMIN', coordinateMode: 'GCJ02' }, controller.signal), result);
   assert.equal(calls[1].url, '/api/me/registrations/123/check-in');
   assert.equal(calls[1].options.method, 'POST');
   assert.equal(calls[1].options.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[1].options.body), { longitude: 116.397, latitude: 39.908, accuracyMeters: 12.5, expectedVersion: 0 });
 });
 
-test('explicit GCJ02 check-in has its own endpoint and keeps only the original four payload fields', async () => {
-  const { api } = await freshApi();
-  const calls = [], controller = new AbortController();
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options });
-    return response(200, url.endsWith('/csrf') ? { token: 'valid', headerName: 'X-CSRF-TOKEN' } : { id: 123, checkInVersion: 1 });
-  };
-  await api.locationCheckInGcj02(123, { longitude: 114.039034, latitude: 22.73969, accuracyMeters: 33,
-    expectedVersion: 0, coordinateMode: 'WGS84', userId: 99, distanceMeters: 1 }, controller.signal);
-  const write = calls.find(call => call.options.method === 'POST');
-  assert.equal(write.url, '/api/me/registrations/123/check-in/gcj02');
-  assert.equal(write.options.signal, controller.signal);
-  assert.equal(write.options.credentials, 'same-origin');
-  assert.equal(write.options.headers.get('X-CSRF-TOKEN'), 'valid');
-  assert.deepEqual(JSON.parse(write.options.body), { longitude: 114.039034, latitude: 22.73969, accuracyMeters: 33, expectedVersion: 0 });
-});
-
-test('an unavailable GCJ02 endpoint never falls back to the standard endpoint or replays its write', async () => {
-  const { api } = await freshApi();
-  const calls = [];
-  globalThis.fetch = async (url, options) => {
-    calls.push({ url, options });
-    return url.endsWith('/csrf') ? response(200, { token: 'valid', headerName: 'X-CSRF-TOKEN' }) :
-      response(404, { code: 'NOT_FOUND', message: '当前实例不支持' });
-  };
-  await assert.rejects(api.locationCheckInGcj02(123, { longitude: 114, latitude: 22, accuracyMeters: 20, expectedVersion: 0 }),
-    error => error.status === 404 && error.code === 'NOT_FOUND');
-  assert.deepEqual(calls.filter(call => call.options.method === 'POST').map(call => call.url), ['/api/me/registrations/123/check-in/gcj02']);
-  assert.equal(calls.length, 2);
-});
-
 test('self and correction writes only replay explicit CSRF invalidation once and retain immutable bodies', async () => {
-  for (const kind of ['self', 'self-gcj02', 'correct']) {
+  for (const kind of ['self', 'correct']) {
     const { api } = await freshApi();
     let attempts = 0, csrfCalls = 0;
     const bodies = [];
@@ -669,7 +659,6 @@ test('self and correction writes only replay explicit CSRF invalidation once and
       return ++attempts === 1 ? response(403, { code: 'CSRF_INVALID' }) : response(200, { checkInVersion: 2 });
     };
     if (kind === 'self') await api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 });
-    else if (kind === 'self-gcj02') await api.locationCheckInGcj02(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 });
     else await api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 1 });
     assert.equal(attempts, 2);
     assert.equal(csrfCalls, 2);
@@ -678,7 +667,7 @@ test('self and correction writes only replay explicit CSRF invalidation once and
 });
 
 test('self and correction version, distance, permission and unavailable errors never replay or auto-refresh CSRF', async () => {
-  for (const kind of ['self', 'self-gcj02', 'correct']) for (const [status, code] of [
+  for (const kind of ['self', 'correct']) for (const [status, code] of [
     [401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [409, 'CHECK_IN_VERSION_CONFLICT'], [409, 'LOCATION_OUT_OF_RANGE'],
     [429, 'AUTH_RATE_LIMITED'], [503, 'LOCATION_CHECK_IN_UNAVAILABLE'],
   ]) {
@@ -689,10 +678,9 @@ test('self and correction version, distance, permission and unavailable errors n
       writes++;
       return response(status, { code, message: '请核对签到状态' });
     };
-    const pending = kind === 'correct'
-      ? api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 1 })
-      : (kind === 'self' ? api.locationCheckIn : api.locationCheckInGcj02)(123,
-        { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 });
+    const pending = kind === 'self'
+      ? api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 1 })
+      : api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 1 });
     await assert.rejects(pending, error => error.status === status && error.code === code);
     assert.equal(writes, 1);
     assert.equal(csrfCalls, 1);
@@ -708,7 +696,6 @@ test('cancelled CSV reads and check-in writes preserve AbortError without starti
   await assert.rejects(api.exportAdminRegistrations('25', { status: 'ALL', checkInStatus: 'ALL' }, controller.signal), error => error.name === 'AbortError');
   await assert.rejects(api.checkInRegistration('25', 123, controller.signal), error => error.name === 'AbortError');
   await assert.rejects(api.locationCheckIn(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 0 }, controller.signal), error => error.name === 'AbortError');
-  await assert.rejects(api.locationCheckInGcj02(123, { longitude: 116, latitude: 39, accuracyMeters: 10, expectedVersion: 0 }, controller.signal), error => error.name === 'AbortError');
   await assert.rejects(api.correctRegistrationCheckIn('25', 123, { checkedIn: true, reason: '补签', expectedVersion: 0 }, controller.signal), error => error.name === 'AbortError');
   assert.equal(calls, 0);
   globalThis.fetch = async () => ({

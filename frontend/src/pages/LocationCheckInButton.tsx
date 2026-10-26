@@ -1,12 +1,10 @@
 import { Button } from "antd";
 import { locationCheckInUnavailableReason } from "../registrationCheckIn";
-import type { LocationCoordinateMode, MyRegistration } from "../types";
+import type { MyRegistration } from "../types";
 
-export function LocationCheckInButton({ registration, enabled, mode, gcj02Supported, now, busy, locating, error, onCheckIn }: {
+export function LocationCheckInButton({ registration, enabled, now, busy, locating, error, onCheckIn }: {
   registration: MyRegistration;
   enabled: boolean;
-  mode: LocationCoordinateMode;
-  gcj02Supported: boolean;
   now: number;
   busy: number | null;
   locating: boolean;
@@ -15,7 +13,7 @@ export function LocationCheckInButton({ registration, enabled, mode, gcj02Suppor
 }) {
   const eligible = registration.status === "ACTIVE" && !registration.checkedInAt && !registration.activity.cancelled;
   if (!eligible && !error) return null;
-  const reason = locationCheckInUnavailableReason(registration, enabled, now, mode, gcj02Supported);
+  const reason = locationCheckInUnavailableReason(registration, enabled, now);
   const pending = busy === registration.id;
   const errorId = `location-checkin-error-${registration.id}`;
   return <div className="location-checkin-action">

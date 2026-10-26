@@ -121,7 +121,7 @@ public class RegistrationService {
         return new MyRegistrationPageView(items, totals.total(), page, pageSize,
             new MyRegistrationSummary(totals.activeRegistrations(), totals.waitingRegistrations(),
                 totals.cancelledRegistrations(), totals.checkedInRegistrations()),
-            locationCheckInConfiguration.enabled());
+            locationCheckInConfiguration.enabled(), locationCheckInConfiguration.gcj02DiagnosticEnabled());
     }
 
     private ActivityLockRow lockOpenActivity(long activityId, boolean registering) {

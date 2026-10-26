@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { canCheckInRegistration, canCorrectCheckInRegistration, checkInLabel, checkInMethodLabel,
-  locationCheckInUnavailableReason, locationCoordinateModeUnavailableReason, gcj02UnavailableMessage,
-  checkInCorrectionReasonError } from '../src/registrationCheckIn.ts';
+  locationCheckInUnavailableReason, checkInCorrectionReasonError } from '../src/registrationCheckIn.ts';
 import { requestNativeLocation } from '../src/nativeLocation.ts';
 import { downloadCsv } from '../src/fileDownload.ts';
 import { AuthRequestGuard } from '../src/authRequestGuard.ts';
@@ -127,40 +126,6 @@ test('administrator corrections support signed records after the end but preserv
   assert.equal(checkInMethodLabel(null), '—');
 });
 
-test('coordinate compatibility requires an exact protocol capability and never infers or falls back from another mode', () => {
-  for (const capability of [undefined, false, null, 0, 1, 'true']) {
-    assert.equal(locationCoordinateModeUnavailableReason('WGS84', capability), null);
-    assert.equal(locationCoordinateModeUnavailableReason('GCJ02', capability), gcj02UnavailableMessage);
-  }
-  assert.equal(locationCoordinateModeUnavailableReason('GCJ02', true), null);
-  for (const mode of ['', 'gcj02', 'GCJ-02', 'AUTO', undefined, null])
-    assert.match(locationCoordinateModeUnavailableReason(mode, true), /模式无效/);
-  assert.match(gcj02UnavailableMessage, /刷新页面/);
-  assert.match(gcj02UnavailableMessage, /不会自动切换标准/);
-});
-
-test('both coordinate modes retain readiness, ownership eligibility, location and exact activity-window checks', () => {
-  const start = Date.parse('2030-01-01T00:00:00Z');
-  const registration = { status: 'ACTIVE', checkedInAt: null, activity: {
-    startsAt: '2030-01-01T00:00:00Z', endsAt: '2030-01-01T01:00:00Z',
-    locationPoint: { longitude: 114.039034, latitude: 22.73969 }, cancelled: false,
-  } };
-  const reason = (record = registration, enabled = true, now = start, mode = 'WGS84', supported = true) =>
-    locationCheckInUnavailableReason(record, enabled, now, mode, supported);
-  for (const mode of ['WGS84', 'GCJ02']) {
-    assert.equal(reason(registration, true, start, mode), null);
-    assert.match(reason(registration, false, start, mode), /暂不可用/);
-    assert.match(reason(registration, true, start - 1, mode), /开始后/);
-    assert.match(reason(registration, true, start + 3600000, mode), /已结束/);
-    assert.match(reason({ ...registration, activity: { ...registration.activity, locationPoint: null } }, true, start, mode), /管理员/);
-    assert.match(reason({ ...registration, activity: { ...registration.activity, endsAt: null } }, true, start, mode), /管理员/);
-    for (const status of ['WAITING', 'CANCELLED']) assert.ok(reason({ ...registration, status }, true, start, mode));
-    assert.ok(reason({ ...registration, checkedInAt: '2030-01-01T00:00:01Z' }, true, start, mode));
-    assert.ok(reason({ ...registration, activity: { ...registration.activity, cancelled: true } }, true, start, mode));
-  }
-  assert.equal(reason(registration, true, start, 'GCJ02', false), gcj02UnavailableMessage);
-});
-
 test('correction reasons are mandatory single line text with a 500 character maximum', () => {
   assert.equal(checkInCorrectionReasonError('  管理员核对现场记录  '), null);
   assert.equal(checkInCorrectionReasonError('补'.repeat(500)), null);
@@ -245,14 +210,13 @@ test('invalid precision and coordinates never become a check-in submission', asy
 });
 
 test('aborted or superseded native callbacks cannot start a write including after same-account reauthentication', async () => {
-  for (const change of ['abort', 'page', 'coordinate-mode', 'same-account-login']) {
+  for (const change of ['abort', 'page', 'same-account-login']) {
     const auth = new AuthRequestGuard(), ticket = auth.beginAccountRequest(1);
-    let page = 'old', mode = 'WGS84', writes = 0;
-    const request = nativeRequest({ isCurrent: () => page === 'old' && mode === 'WGS84' && auth.isSameAccount(ticket, 1) });
+    let page = 'old', writes = 0;
+    const request = nativeRequest({ isCurrent: () => page === 'old' && auth.isSameAccount(ticket, 1) });
     const submit = request.promise.then(() => writes++);
     if (change === 'abort') request.controller.abort();
     if (change === 'page') page = 'new';
-    if (change === 'coordinate-mode') mode = 'GCJ02';
     if (change === 'same-account-login') auth.beginAuthentication();
     request.success(nativePosition());
     request.failure({ code: 1 });

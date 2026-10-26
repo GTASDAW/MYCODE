@@ -1,4 +1,4 @@
-import type { Activity, AdminRegistration, MyRegistration, CheckInMethod, LocationCoordinateMode } from "./types";
+import type { Activity, AdminRegistration, MyRegistration, CheckInMethod } from "./types";
 import { instantMicroseconds } from "./date.ts";
 
 export function canCheckInRegistration(
@@ -28,25 +28,13 @@ export function canCorrectCheckInRegistration(
   return canCheckInRegistration(activity, { ...registration, checkedInAt: null }, now);
 }
 
-export const gcj02UnavailableMessage = "当前服务暂不支持高德坐标兼容签到，请刷新页面后重试；不会自动切换标准定位。";
-
-export function locationCoordinateModeUnavailableReason(mode: unknown, gcj02Supported: unknown): string | null {
-  if (mode === "WGS84") return null;
-  if (mode === "GCJ02") return gcj02Supported === true ? null : gcj02UnavailableMessage;
-  return "定位坐标模式无效，请重新选择标准定位或高德坐标兼容。";
-}
-
 export function locationCheckInUnavailableReason(
   registration: Pick<MyRegistration, "activity" | "status" | "checkedInAt">,
   enabled: boolean,
   now = Date.now(),
-  mode: LocationCoordinateMode = "WGS84",
-  gcj02Supported = false,
 ): string | null {
   const { activity, status, checkedInAt } = registration;
   if (activity.cancelled || status !== "ACTIVE" || checkedInAt) return "当前记录不能到场签到。";
-  const modeError = locationCoordinateModeUnavailableReason(mode, gcj02Supported);
-  if (modeError) return modeError;
   if (!enabled) return "到场定位签到暂不可用，请联系管理员确认到场。";
   if (!activity.locationPoint || !activity.endsAt) return "本活动由管理员确认到场。";
   const start = instantMicroseconds(activity.startsAt);

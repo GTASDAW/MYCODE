@@ -198,7 +198,7 @@ RegistrationService只在报名路径于活动主键锁后读取一次UTC微秒�
 
 ## 管理员签到与 CSV
 
-本人定位保留原WGS84 `/check-in`，并以独立 `/check-in/gcj02` 支持用户主动选择的已现场对照设备兼容输入。新分页能力`locationCheckInGcj02Supported`防旧服务忽略请求含义；它与配置enabled是两个门禁，旧响应缺能力时禁止兼容请求。后端两入口共享校验与writer，标准只转换一次、兼容不转换，不自动识别品牌/择近或回退；坐标模式只保留页面内，刷新/离页/重登恢复标准，不增加SQL/持久字段，合同见 [本人定位签到](checkin-export-guide.md#本人到场定位签到)。
+普通本人定位仅使用WGS84 `/check-in`，只显示“到场签到”；`/check-in/gcj02`收为本地开发诊断，新增服务端默认false开关，关闭时在任何业务查询/上游/写入前503，客户端参数不能开启。分页兼容字段`locationCheckInGcj02Supported`取真实开关、默认false；普通页面忽略它，前端没有兼容提交方法或模式状态。显式诊断开启时仍走同一writer门禁，但不作为通用定位适配；标准只转换一次、不依赖诊断开关，不自动识别品牌/择近或回退，不增加SQL/持久字段，合同见 [本人定位签到](checkin-export-guide.md#本人到场定位签到)。
 
 名单与CSV共用 `checkInMethod=ALL|SELF_LOCATION|ADMIN`，省略为ALL、显式空或未知值400；方式与关键词及报名/签到状态AND筛选，但整场三项统计不变。默认ALL保留空方式记录，SELF_LOCATION/ADMIN只匹配对应已签记录。名单四次、导出三次业务SELECT及RR快照保持；页面URL、详情/登录返回和下载作用域都包含方式，具体合同见 [签到与导出指南](checkin-export-guide.md)。
 

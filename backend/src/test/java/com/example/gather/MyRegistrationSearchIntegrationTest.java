@@ -286,7 +286,7 @@ class MyRegistrationSearchIntegrationTest {
             .andExpect(status().isOk()).andExpect(jsonPath("$.summary.checkedInRegistrations").value(2)).andReturn().getResponse().getContentAsString();
         var tree = json.readTree(response);
         assertThat(tree.size()).isEqualTo(7);
-        assertThat(tree.get("locationCheckInGcj02Supported").asBoolean()).isTrue();
+        assertThat(tree.get("locationCheckInGcj02Supported").asBoolean()).isFalse();
         for (var item : tree.get("items")) {
             assertThat(item.size()).isEqualTo(6);
             assertThat(item.has("id") && item.has("status") && item.has("activity") && item.has("checkedInAt")

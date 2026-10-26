@@ -62,18 +62,52 @@ class LocationCheckInServiceTest {
             error->assertThat(error.code()).isEqualTo("VALIDATION_ERROR"));
         verifyNoInteractions(registrations,converter,writer);
     }
-    @Test void protocolCapabilityIsIndependentOfReadinessAndKeepsTheLegacyRecordConstructors(){
+    @Test void diagnosticCapabilityDefaultsOffAndUsesTheSuppliedServerFlagWithoutChangingJsonShape(){
         var json=new ObjectMapper();
         var page=new MyRegistrationPageView(List.of(),0,1,10,new MyRegistrationSummary(0,0,0,0),false);
         var body=json.readTree(json.writeValueAsString(page));
         assertThat(body.size()).isEqualTo(7);
         assertThat(body.path("locationCheckInEnabled").asBoolean()).isFalse();
-        assertThat(body.path("locationCheckInGcj02Supported").asBoolean()).isTrue();
+        assertThat(body.path("locationCheckInGcj02Supported").asBoolean()).isFalse();
+        var explicit=new MyRegistrationPageView(List.of(),0,1,10,page.summary(),false,true);
+        var explicitBody=json.readTree(json.writeValueAsString(explicit));
+        assertThat(explicitBody.size()).isEqualTo(7);
+        assertThat(explicitBody.path("locationCheckInEnabled").asBoolean()).isFalse();
+        assertThat(explicitBody.path("locationCheckInGcj02Supported").asBoolean()).isTrue();
         var requestBody=json.readTree(json.writeValueAsString(request));
         assertThat(requestBody.size()).isEqualTo(4);assertThat(requestBody.has("coordinateSystem")).isFalse();
     }
+    @Test void oldConfigurationConstructorDisablesDiagnosticsEvenWithAReadyKeyAndRejectsBeforeAnyWork(){
+        var configuration=new LocationCheckInConfiguration("offline_compat_key_123456");
+        assertThat(configuration.enabled()).isTrue();assertThat(configuration.gcj02DiagnosticEnabled()).isFalse();
+        var service=new LocationCheckInService(registrations,converter,writer,configuration);
+        for(LocationCheckInRequest input:java.util.Arrays.asList(request,null))
+            assertThatThrownBy(()->service.checkInGcj02(1,2,input)).isInstanceOfSatisfying(ApiException.class,error->{
+                assertThat(error.status().value()).isEqualTo(503);assertThat(error.code()).isEqualTo("LOCATION_DIAGNOSTIC_DISABLED");
+                assertThat(error.getMessage()).isEqualTo("定位兼容诊断未启用，请使用正常签到或联系管理员现场确认。");
+            });
+        verifyNoInteractions(registrations,converter,writer);
+    }
+    @Test void diagnosticOffDoesNotChangeNormalUnsignedOrSignedCheckInBehavior(){
+        var configuration=new LocationCheckInConfiguration("offline_compat_key_123456");
+        var service=new LocationCheckInService(registrations,converter,writer,configuration);
+        when(registrations.findLocationCheckInPreflight(1,2)).thenReturn(row(false));
+        var point=new LocationCoordinateConverter.Point(BigDecimal.valueOf(3),BigDecimal.valueOf(4));
+        when(converter.convert(request.longitude(),request.latitude())).thenReturn(point);
+        when(writer.checkIn(9,1,2,0,point)).thenReturn(result);
+        assertThat(service.checkIn(1,2,request)).isSameAs(result);
+        verify(converter).convert(request.longitude(),request.latitude());
+        clearInvocations(registrations,converter,writer);
+        when(registrations.findLocationCheckInPreflight(1,2)).thenReturn(row(true));
+        when(writer.checkIn(9,1,2,0,null)).thenReturn(result);
+        assertThat(service.checkIn(1,2,request)).isSameAs(result);
+        assertThatThrownBy(()->service.checkInGcj02(1,2,request)).isInstanceOfSatisfying(ApiException.class,
+            error->assertThat(error.code()).isEqualTo("LOCATION_DIAGNOSTIC_DISABLED"));
+        verifyNoInteractions(converter);verify(writer).checkIn(9,1,2,0,null);
+        verify(registrations).findLocationCheckInPreflight(1,2);
+    }
     private LocationCheckInService service(boolean enabled){
-        return new LocationCheckInService(registrations,converter,writer,new LocationCheckInConfiguration(enabled?"offline_compat_key_123456":""));
+        return new LocationCheckInService(registrations,converter,writer,new LocationCheckInConfiguration(enabled?"offline_compat_key_123456":"",true));
     }
     private static LocationCheckInPreflightRow row(boolean signed){
         return new LocationCheckInPreflightRow(1,9,2,"ACTIVE",signed?LocalDateTime.ofInstant(NOW,ZoneOffset.UTC):null,0,

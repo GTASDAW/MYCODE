@@ -27,6 +27,8 @@ public class LocationCheckInService {
         return checkIn(registrationId, userId, request, InputCoordinates.WGS84);
     }
     public MyRegistrationView checkInGcj02(long registrationId, long userId, LocationCheckInRequest request) {
+        if (!configuration.gcj02DiagnosticEnabled())
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "LOCATION_DIAGNOSTIC_DISABLED", "定位兼容诊断未启用，请使用正常签到或联系管理员现场确认。");
         return checkIn(registrationId, userId, request, InputCoordinates.GCJ02);
     }
     private MyRegistrationView checkIn(long registrationId, long userId, LocationCheckInRequest request, InputCoordinates coordinates) {

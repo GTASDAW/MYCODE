@@ -52,7 +52,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Real MySQL V15 lock/transaction tests. The upstream transport is an explicit contract substitute, not live AMap. */
-@SpringBootTest(properties = "app.maps.web-service-key=offline_geo_web_key_1234567890")
+@SpringBootTest(properties = {"app.maps.web-service-key=offline_geo_web_key_1234567890", "app.maps.gcj02-diagnostic-enabled=true"})
 @AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 @Import(GeoCheckInIntegrationTest.Configuration.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -544,7 +544,7 @@ class GeoCheckInIntegrationTest {
     }
     @Test void bothUnsignedEncodingsRequireReadinessButSignedRepeatsKeepTheOriginalWriterPath() {
         long activity=compatibilityActivity(), owner=account(), id=registration(activity,owner,"ACTIVE");
-        var disabled=new LocationCheckInService(registrationMapper,converter,writer,new LocationCheckInConfiguration(""));
+        var disabled=new LocationCheckInService(registrationMapper,converter,writer,new LocationCheckInConfiguration("",true));
         for(Runnable action:List.<Runnable>of(()->disabled.checkIn(id,owner,request(0,33)),()->disabled.checkInGcj02(id,owner,request(0,33)))){
             var observed=new ArrayList<Query>();queries.captured.set(observed);clock.calls.set(0);
             try{assertThatThrownBy(action::run).isInstanceOfSatisfying(ApiException.class,error->{

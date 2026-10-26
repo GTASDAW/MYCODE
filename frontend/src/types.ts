@@ -53,9 +53,8 @@ export interface MyRegistration extends Registration {
 }
 
 export type CheckInMethod = "ADMIN" | "SELF_LOCATION" | null;
-export type LocationCoordinateMode = "WGS84" | "GCJ02";
 export interface LocationCheckIn {
-  /** Browser-supplied coordinates; the explicit endpoint declares their encoding. */
+  /** Browser-supplied coordinates; the standard endpoint interprets these as WGS84. */
   longitude: number;
   latitude: number;
   accuracyMeters: number;

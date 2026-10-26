@@ -20,9 +20,11 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 
 `POST /api/me/registrations/{registrationId}/check-in` 要求登录、CSRF及本人报名；非本人和不存在均返回404 `REGISTRATION_NOT_FOUND`。JSON 必填 `longitude`、`latitude`、`accuracyMeters`、`expectedVersion`，不读取客户端用户ID、角色、半径、距离或时间。原路径固定按WGS84编码处理，范围分别为±180/±90，精度必须 `0 < accuracyMeters <= 100` 米；版本为非负整数，不由额外JSON字段切换编码。
 
-现场对照确认设备输出已是高德GCJ-02时，用户可在“我的报名 → 定位兼容设置”主动选择“高德坐标兼容（已校准设备）”。新路径`POST /api/me/registrations/{registrationId}/check-in/gcj02`只按GCJ-02解释同样四字段，直接封装唯一比较点，不调用坐标转换；标准模式仍调用一次官方GPS转换。两个入口共享归属、CSRF、版本、精度、静态预检及原锁后全部检查，不根据浏览器品牌或距离大小猜编码、不双算择近、不回退另一条路径，不放宽300米或100米要求。该选择只是用户声明输入编码，不证明位置真实性，也不保证所有同品牌设备都兼容。
+普通“我的报名”只提供“到场签到”，固定使用标准WGS84接口，不展示坐标模式，不读取能力字段来切换算法；权限、超时及距离错误仍显示在对应按钮旁。定位结果持续异常时检查浏览器/系统的精确位置权限、重新定位或联系管理员现场确认。提高系统精度不等于保证输出坐标系改变，不按浏览器品牌、IP或距离大小猜编码，不双算择近或放宽300米/100米要求。
 
-新分页顶层`locationCheckInGcj02Supported: true`只表示协议支持，配置就绪仍由原`locationCheckInEnabled`决定；两者须同时为true才可提交兼容请求。缺少能力字段的旧服务禁用兼容签到，选中模式保持并提示，不自动切回标准；新路径在旧实例404时也不重放旧路径，真实报名/活动不存在仍显示原业务错误。模式仅页面内保存，浏览器刷新、离页、身份变化或同账号重登恢复标准默认；筛选切换可保留模式。切模式取消旧定位、丢弃旧坐标，须再次主动点击，POST写入时禁切；模式纳入动作scope，旧成功/错误/finally不影响新请求。旧数组与DTO构造保持，未新增业务SELECT、数据库字段或持久模式关联。
+仅供本地开发排障的`POST /api/me/registrations/{registrationId}/check-in/gcj02`保留，后端`app.maps.gcj02-diagnostic-enabled`（环境变量`AMAP_GCJ02_DIAGNOSTIC_ENABLED`）默认false，正常部署和本机演示保持关闭；普通客户端不提供此方法或可自行开启的入口。关闭时合法认证/CSRF及合法正文请求在任何业务SELECT、Clock、上游或writer前返回503 `LOCATION_DIAGNOSTIC_DISABLED`，已签重复也不能绕过；伪造JSON、query或header无法开启。分页保留`locationCheckInGcj02Supported`兼容字段，但取真实配置、默认false，原六参Java构造也默认false；普通页面忽略该字段，旧数组与SQL次数保持。
+
+开发者仅在独立本地/隔离环境显式开关为true时，诊断路径按GCJ-02解释原四字段、直接封装唯一比较点，不做转换，并保留配置就绪、归属、版本、精度、活动预检及锁后全部检查。该诊断不是通用定位适配或位置真实性证明，标准路径始终只转换一次且不受诊断开关影响；没有普通界面的切换、UA猜测、择近或自动回退。既有成功签到历史保留，模式或原位置不持久存储。
 
 服务首次本人查询轻量联表预读活动取消状态、结束时间及坐标，先检查归属、版本和ACTIVE。未签到时，已取消或缺少结束时间/坐标直接返回业务409，不调用高德；已签到重复请求仍走原锁后读取路径且不转换。预检不增加SELECT或时钟读取，不提前拒绝尚未开始的请求；时间窗口仍按取得锁后的单次UTC微秒时刻判断，转换期间的活动或签到状态变化由锁后重核处理。
 
@@ -50,7 +52,7 @@ V5 的签到时间和管理员外键保留。V15 仅新增可空 ASCII 精确匹
 | `POST /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 正常确认，空体兼容或可选 expectedVersion，返回当前名单行 | ADMIN，需 CSRF |
 | `PATCH /api/admin/activities/{id}/registrations/{registrationId}/check-in` | 必填状态、原因及版本的补签/撤销，返回当前名单行 | ADMIN，需 CSRF |
 | `POST /api/me/registrations/{registrationId}/check-in` | 本人定位签到，返回本人记录 | 已登录且本人，需 CSRF |
-| `POST /api/me/registrations/{registrationId}/check-in/gcj02` | 显式高德坐标兼容签到，不额外偏移 | 已登录且本人，需 CSRF |
+| `POST /api/me/registrations/{registrationId}/check-in/gcj02` | 仅开发者显式开启的本地坐标诊断，默认503拒绝 | 已登录且本人，需 CSRF；另需服务端诊断开关 |
 | `GET /api/admin/activities/{id}/registrations/export` | 下载全部符合关键词、报名状态、签到状态及方式的 CSV | ADMIN |
 
 名单仍默认 `page=1`、`pageSize=10`，每页 1–100 条。`status` 为 `ALL|ACTIVE|WAITING|CANCELLED`，`checkInStatus` 为 `ALL|CHECKED_IN|NOT_CHECKED_IN`，两者默认 `ALL`、区分大小写、按 AND 组合。已签到和未签到都只匹配有效报名者；例如 `WAITING` 与 `NOT_CHECKED_IN` 组合为空，而非把候补也算作未到场。
