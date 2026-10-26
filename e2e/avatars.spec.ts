@@ -255,7 +255,8 @@ test('退出网络失败保留真实Session时恢复资料和头像，可继续�
     await test.step('站内离页再返回资料，不以整页刷新重置认证状态', async () => {
       await page.getByRole('link', { name: '集会 Gather 首页', exact: true }).click();
       const mobileNavigation = page.getByRole('button', { name: '打开导航', exact: true });
-      if (await mobileNavigation.isVisible()) await mobileNavigation.click();
+      // Keyboard activation avoids hovering the transient logout notice over this fixed header button.
+      if (await mobileNavigation.isVisible()) await mobileNavigation.press('Enter');
       await page.getByRole('navigation', { name: '主导航', exact: true })
         .getByRole('link', { name: '个人中心', exact: true }).click();
       await expect(page.getByTestId('avatar-editor')).toBeVisible();
