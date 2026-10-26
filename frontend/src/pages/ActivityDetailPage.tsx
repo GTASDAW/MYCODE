@@ -209,7 +209,8 @@ function ActivityDetailPage() {
           <Descriptions
             column={1}
             items={[
-              { key: "category", label: "活动分类", children: <span data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</span> },
+              { key: "category", label: "活动分类", children: <Tag className="activity-category" data-category={activity.category}
+                data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</Tag> },
               {
                 key: "time",
                 label: "开始时间",
@@ -235,6 +236,7 @@ function ActivityDetailPage() {
           </section>
           <p className="metadata">{!activity.endsAt && "活动未提供结束时间，可在个人日历中自行设置；"}添加日历不代表报名成功。日历文件为下载时快照，后续修改或取消不会自动同步。</p>
           <Alert
+            className="activity-registration-notice"
             type="info"
             showIcon
             icon={<SafetyCertificateOutlined aria-hidden="true" />}

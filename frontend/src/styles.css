@@ -447,10 +447,29 @@ main:focus {
 }
 .activity-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .activity-cover-placeholder {
-  height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; color: #1668b8; background: linear-gradient(135deg, #e6f4ff, #f0f5ff);
+  position: relative;
+  height: 100%;
+  color: #1668b8;
+  background: #edf5ff;
 }
-.activity-cover-placeholder button { border: 0; background: transparent; color: #0958d9; text-decoration: underline; cursor: pointer; }
+.activity-cover-placeholder .activity-cover-default-art { object-fit: cover; }
+.activity-cover-fallback-status {
+  position: absolute;
+  inset: auto 12px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  padding: 8px 12px;
+  border: 1px solid #d6e6fa;
+  border-radius: 8px;
+  background: #fffffff2;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.activity-cover-placeholder button { border: 0; padding: 2px 0; background: transparent; color: #0958d9; text-decoration: underline; cursor: pointer; }
 .cover-editor { margin-bottom: 24px; }
 .cover-editor .activity-cover { max-width: 560px; }
 .cover-file { display: block; width: 100%; max-width: 100%; margin: 12px 0; }
@@ -510,6 +529,27 @@ main:focus {
 .activity-card h3 > a:hover {
   color: #1677ff;
 }
+.activity-category.ant-tag {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  margin: 0;
+  padding: 2px 9px;
+  border: 1px solid #d6e6fa;
+  border-radius: 6px;
+  background: #f0f6ff;
+  color: #285e9b;
+  font-size: 12px;
+  line-height: 18px;
+}
+.activity-category[data-category="UNCATEGORIZED"] { border-color: #e5e7eb; background: #f8fafc; color: #64748b; }
+.activity-category[data-category="SPORTS"] { border-color: #cce9df; background: #f0faf5; color: #28745a; }
+.activity-category[data-category="CULTURE"] { border-color: #e3dcf5; background: #f7f4fd; color: #69509c; }
+.activity-category[data-category="OTHER"] { border-color: #f0e1c2; background: #fff9ec; color: #8b6525; }
+.activity-card > .activity-category { margin-bottom: 12px; }
 .card-description {
   font-size: 14px;
   line-height: 1.8;
@@ -643,6 +683,7 @@ main:focus {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.detail-content .activity-registration-notice { margin-top: 24px; }
 .registration-panel h2 {
   font-size: 18px;
   font-weight: 500;

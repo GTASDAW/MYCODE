@@ -213,7 +213,9 @@ export function ActivityCard({ activity, from, detailsTo }: { activity: Activity
       <h3>
         <Link to={detailsPath}>{activity.title}</Link>
       </h3>
-      <Tag data-testid={`activity-category-${activity.id}`}>{activityCategoryLabel(activity.category)}</Tag>
+      <Tag className="activity-category" data-category={activity.category} data-testid={`activity-category-${activity.id}`}>
+        {activityCategoryLabel(activity.category)}
+      </Tag>
       <p className="card-description">{activity.description}</p>
       {activity.cancelled && <div className="card-cancellation"><ActivityCancellationNotice activity={activity} /></div>}
       <div className="card-meta">
