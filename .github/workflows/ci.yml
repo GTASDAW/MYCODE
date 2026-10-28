@@ -185,8 +185,8 @@ jobs:
     name: Compose, restart and browser verification
     needs: [scope, frontend, backend, container-images]
     runs-on: ubuntu-24.04
-    # Full browser, loading, auth recovery, diagnostics and cleanup share this budget.
-    timeout-minutes: 45
+    # 502 serial browser cases can take 40m; retain time for loading, auth and cleanup.
+    timeout-minutes: 60
     env:
       CI_BACKEND_IMAGE: gather-ci-backend:${{ github.sha }}
       CI_WEB_IMAGE: gather-ci-web:${{ github.sha }}
