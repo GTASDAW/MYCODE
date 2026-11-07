@@ -33,15 +33,17 @@ React + TypeScript + Vite + Ant Design + React Router；Java 21 + Spring Boot 4.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\demo.ps1
 ```
 
 打开 [http://127.0.0.1:5173](http://127.0.0.1:5173)。前端开发服务器把 `/api` 代理到 Java 服务的 8080 端口；本地 MySQL 使用 3307 端口，只监听回环地址。
 
+统一入口存在手机私有配置时同时启动HTTPS，输出手机地址及状态；没有配置时正常启动电脑。查看状态用`demo.ps1 -Action Status`，同代码已打包时可加`-SkipBuild`；手机IP、证书和单设备访问配置见[电脑与手机启动指南](docs/local-demo.md)。原`start-dev.ps1`仍保留为仅电脑的入口。
+
 停止本项目启动的进程：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\stop-dev.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\demo.ps1 -Action Stop
 ```
 
 脚本不会删除数据库。启动时 Flyway 补齐尚未执行的增量迁移：V4 增加通知表，V5 增加报名签到时间和操作人，V6 增加管理员操作记录，V7 增加用户凭据版本，V8 增加活动分类，V9 增加本人收藏表，V10 增加活动封面及内容摘要，V11 增加可空结束时间，V12 增加可空报名截止时间，V13 增加默认空的用户头像及成对摘要，V14 增加默认空的活动地图坐标，V15 增加签到方式、并发版本及撤销审计约束；历史签到保留原时间和管理员，不补造历史事件或重置已有数据。缺少版本的旧登录需要重新登录。默认模式的后端 Session 保存在内存中，重启 Java 服务后需要重新登录；这组本机脚本不需要 Redis，数据库中的通知、首次已读时间、签到与操作记录仍保留。

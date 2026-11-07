@@ -1,0 +1,9 @@
+{
+  "bindAddress": "192.168.1.10",
+  "phoneAddress": "192.168.1.20",
+  "httpsPort": 8443,
+  "certificatePort": 8444,
+  "certificateFile": ".runtime/mobile-https/server.pem",
+  "privateKeyFile": ".runtime/mobile-https/server-key.pem",
+  "caFile": ".runtime/mobile-https/gather-dev-ca.crt"
+}
